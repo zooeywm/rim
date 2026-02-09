@@ -1,0 +1,16 @@
+[package]
+name = "rim"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ratatui = "0.30"
+crossterm = "0.29"
+compio = { version = "0.18", features = ["fs", "macros"] }
+flume = "0.12"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "time"] }
+tracing-appender = "0.2"
+time = { version = "0.3", features = ["formatting", "macros"] }
+slotmap = "1.0"
+unicode-width = "0.2"
