@@ -7,6 +7,8 @@
 - `NORMAL`
 - `INSERT`
 - `COMMAND`
+- `VISUAL`
+- `VISUAL LINE`
 
 ## Normal Mode Keys
 
@@ -14,11 +16,13 @@
 - `0` / `$`: move to line start / end
 - `i`: enter insert mode at cursor
 - `a`: move right then enter insert mode
+- `o`: open a new line below and enter insert mode
+- `O`: open a new line above and enter insert mode
 - `x`: cut current character into the single slot
 - `p`: paste slot content after cursor
 - `H` / `V`: split window horizontally / vertically
 - `Ctrl+h` `Ctrl+j` `Ctrl+k` `Ctrl+l`: focus window
-- `Ctrl+w`: close active window
+- `W`: close active window
 - `t`: new tab
 - `X`: close current tab
 - `[` / `]`: switch tab prev / next
@@ -48,3 +52,14 @@ Implemented commands:
 - `:wa`
 - `:w <path>`
 - `:wq <path>`
+
+## Visual Mode Keys
+
+- `v` (from normal): enter visual-char mode
+- `v` (inside visual): switch to visual-line mode
+- `Esc`: leave visual mode
+- `h` `j` `k` `l`: move cursor / selection
+- `0` / `$`: move to line start / end
+- `d`: delete selection to slot
+- `y`: yank selection to slot
+- `p`: replace selection with slot content

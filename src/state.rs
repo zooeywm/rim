@@ -68,6 +68,8 @@ pub enum EditorMode {
     Normal,
     Insert,
     Command,
+    VisualChar,
+    VisualLine,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +83,7 @@ pub struct AppState {
     pub title: String,
     pub active_tab: TabId,
     pub mode: EditorMode,
+    pub visual_anchor: Option<CursorState>,
     pub command_line: String,
     pub quit_after_save: bool,
     pub pending_save_path: Option<(BufferId, PathBuf)>,
@@ -113,6 +116,7 @@ impl AppState {
             title: "Rim".to_string(),
             active_tab: tab_id,
             mode: EditorMode::Normal,
+            visual_anchor: None,
             command_line: String::new(),
             quit_after_save: false,
             pending_save_path: None,
@@ -873,25 +877,62 @@ impl AppState {
         self.mode == EditorMode::Command
     }
 
+    pub fn is_visual_mode(&self) -> bool {
+        matches!(self.mode, EditorMode::VisualChar | EditorMode::VisualLine)
+    }
+
+    pub fn is_visual_line_mode(&self) -> bool {
+        self.mode == EditorMode::VisualLine
+    }
+
     pub fn enter_insert_mode(&mut self) {
         self.mode = EditorMode::Insert;
+        self.visual_anchor = None;
         self.status_bar.mode = "INSERT".to_string();
     }
 
     pub fn exit_insert_mode(&mut self) {
         self.mode = EditorMode::Normal;
+        self.visual_anchor = None;
         self.status_bar.mode = "NORMAL".to_string();
     }
 
     pub fn enter_command_mode(&mut self) {
         self.mode = EditorMode::Command;
+        self.visual_anchor = None;
         self.command_line.clear();
         self.status_bar.mode = "COMMAND".to_string();
     }
 
     pub fn exit_command_mode(&mut self) {
         self.mode = EditorMode::Normal;
+        self.visual_anchor = None;
         self.command_line.clear();
+        self.status_bar.mode = "NORMAL".to_string();
+    }
+
+    pub fn enter_visual_mode(&mut self) {
+        self.mode = EditorMode::VisualChar;
+        self.visual_anchor = Some(self.active_cursor());
+        self.status_bar.mode = "VISUAL".to_string();
+    }
+
+    pub fn enter_visual_line_mode(&mut self) {
+        let anchor_row = self
+            .visual_anchor
+            .map(|cursor| cursor.row)
+            .unwrap_or_else(|| self.active_cursor().row);
+        self.mode = EditorMode::VisualLine;
+        self.visual_anchor = Some(CursorState {
+            row: anchor_row,
+            col: 1,
+        });
+        self.status_bar.mode = "VISUAL LINE".to_string();
+    }
+
+    pub fn exit_visual_mode(&mut self) {
+        self.mode = EditorMode::Normal;
+        self.visual_anchor = None;
         self.status_bar.mode = "NORMAL".to_string();
     }
 
@@ -1020,6 +1061,41 @@ impl AppState {
         self.align_active_window_scroll_to_cursor();
     }
 
+    pub fn open_line_below_at_cursor(&mut self) {
+        let Some(buffer) = self.active_buffer_mut() else {
+            return;
+        };
+        let row_idx = buffer.cursor.row.saturating_sub(1) as usize;
+        let mut lines = split_lines_owned(&buffer.text);
+
+        if row_idx >= lines.len() {
+            lines.resize(row_idx.saturating_add(1), String::new());
+        }
+
+        lines.insert(row_idx.saturating_add(1), String::new());
+        buffer.cursor.row = buffer.cursor.row.saturating_add(1);
+        buffer.cursor.col = 1;
+        buffer.text = lines.join("\n");
+        self.align_active_window_scroll_to_cursor();
+    }
+
+    pub fn open_line_above_at_cursor(&mut self) {
+        let Some(buffer) = self.active_buffer_mut() else {
+            return;
+        };
+        let row_idx = buffer.cursor.row.saturating_sub(1) as usize;
+        let mut lines = split_lines_owned(&buffer.text);
+
+        if row_idx >= lines.len() {
+            lines.resize(row_idx.saturating_add(1), String::new());
+        }
+
+        lines.insert(row_idx, String::new());
+        buffer.cursor.col = 1;
+        buffer.text = lines.join("\n");
+        self.align_active_window_scroll_to_cursor();
+    }
+
     pub fn backspace_at_cursor(&mut self) {
         let Some(buffer) = self.active_buffer_mut() else {
             return;
@@ -1114,6 +1190,240 @@ impl AppState {
         buffer.text = lines.join("\n");
         self.align_active_window_scroll_to_cursor();
         self.status_bar.message = "pasted".to_string();
+    }
+
+    pub fn delete_visual_selection_to_slot(&mut self) {
+        let line_wise = self.is_visual_line_mode();
+        let Some((start, end)) = self.normalized_visual_bounds() else {
+            self.status_bar.message = "visual delete failed: no anchor".to_string();
+            self.exit_visual_mode();
+            return;
+        };
+
+        let Some(buffer) = self.active_buffer_mut() else {
+            self.status_bar.message = "visual delete failed: no active buffer".to_string();
+            self.exit_visual_mode();
+            return;
+        };
+
+        let mut lines = split_lines_owned(&buffer.text);
+        let start_row = start.row.saturating_sub(1) as usize;
+        let end_row = end.row.saturating_sub(1) as usize;
+        if start_row >= lines.len() || end_row >= lines.len() {
+            self.status_bar.message = "visual delete failed: out of range".to_string();
+            self.exit_visual_mode();
+            return;
+        }
+
+        if line_wise {
+            let deleted = lines[start_row..=end_row].join("\n");
+            lines.drain(start_row..=end_row);
+            if lines.is_empty() {
+                lines.push(String::new());
+            }
+            buffer.text = lines.join("\n");
+            let new_row = start_row.min(lines.len().saturating_sub(1)).saturating_add(1) as u16;
+            buffer.cursor.row = new_row;
+            buffer.cursor.col = 1;
+            self.line_slot = Some(deleted);
+            self.align_active_window_scroll_to_cursor();
+            self.exit_visual_mode();
+            self.status_bar.message = "selection deleted".to_string();
+            return;
+        }
+
+        let start_line_len = lines[start_row].chars().count() as u16;
+        let end_line_len = lines[end_row].chars().count() as u16;
+        if start_line_len == 0 && end_line_len == 0 {
+            self.status_bar.message = "visual delete failed: empty".to_string();
+            self.exit_visual_mode();
+            return;
+        }
+
+        let start_col = start.col.max(1).min(start_line_len.max(1));
+        let end_col = end.col.max(1).min(end_line_len.max(1));
+
+        let deleted_text = if start_row == end_row {
+            let line = &mut lines[start_row];
+            let start_byte = char_to_byte_idx(line, start_col.saturating_sub(1) as usize);
+            let end_byte = char_to_byte_idx(line, end_col as usize);
+            let deleted = line[start_byte..end_byte].to_string();
+            line.drain(start_byte..end_byte);
+            deleted
+        } else {
+            let start_line = lines[start_row].clone();
+            let end_line = lines[end_row].clone();
+            let start_keep_byte =
+                char_to_byte_idx(&start_line, start_col.saturating_sub(1) as usize);
+            let end_del_byte = char_to_byte_idx(&end_line, end_col as usize);
+
+            let mut deleted_parts = Vec::new();
+            deleted_parts.push(start_line[start_keep_byte..].to_string());
+            for line in lines.iter().take(end_row).skip(start_row.saturating_add(1)) {
+                deleted_parts.push(line.clone());
+            }
+            deleted_parts.push(end_line[..end_del_byte].to_string());
+
+            let merged_line = format!("{}{}", &start_line[..start_keep_byte], &end_line[end_del_byte..]);
+            lines[start_row] = merged_line;
+            for _ in start_row.saturating_add(1)..=end_row {
+                lines.remove(start_row.saturating_add(1));
+            }
+
+            deleted_parts.join("\n")
+        };
+
+        buffer.text = lines.join("\n");
+        buffer.cursor.row = start_row.saturating_add(1) as u16;
+        let line_len = lines[start_row].chars().count() as u16;
+        buffer.cursor.col = start_col.min(line_len.saturating_add(1));
+        self.line_slot = Some(deleted_text);
+        self.align_active_window_scroll_to_cursor();
+        self.exit_visual_mode();
+        self.status_bar.message = "selection deleted".to_string();
+    }
+
+    pub fn yank_visual_selection_to_slot(&mut self) {
+        let Some((start, end)) = self.normalized_visual_bounds() else {
+            self.status_bar.message = "visual yank failed: no anchor".to_string();
+            self.exit_visual_mode();
+            return;
+        };
+
+        let Some(text) = self.active_buffer_text() else {
+            self.status_bar.message = "visual yank failed: no active buffer".to_string();
+            self.exit_visual_mode();
+            return;
+        };
+        let lines = split_lines_owned(text);
+        let start_row = start.row.saturating_sub(1) as usize;
+        let end_row = end.row.saturating_sub(1) as usize;
+        if start_row >= lines.len() || end_row >= lines.len() {
+            self.status_bar.message = "visual yank failed: out of range".to_string();
+            self.exit_visual_mode();
+            return;
+        }
+
+        let start_line = &lines[start_row];
+        let end_line = &lines[end_row];
+        let start_line_len = start_line.chars().count() as u16;
+        let end_line_len = end_line.chars().count() as u16;
+        let start_col = start.col.max(1).min(start_line_len.max(1));
+        let end_col = end.col.max(1).min(end_line_len.max(1));
+
+        let yanked = if start_row == end_row {
+            let start_byte = char_to_byte_idx(start_line, start_col.saturating_sub(1) as usize);
+            let end_byte = char_to_byte_idx(start_line, end_col as usize);
+            start_line[start_byte..end_byte].to_string()
+        } else {
+            let mut parts = Vec::new();
+            let start_keep_byte =
+                char_to_byte_idx(start_line, start_col.saturating_sub(1) as usize);
+            parts.push(start_line[start_keep_byte..].to_string());
+            for line in lines.iter().take(end_row).skip(start_row.saturating_add(1)) {
+                parts.push(line.clone());
+            }
+            let end_del_byte = char_to_byte_idx(end_line, end_col as usize);
+            parts.push(end_line[..end_del_byte].to_string());
+            parts.join("\n")
+        };
+
+        self.line_slot = Some(yanked);
+        self.exit_visual_mode();
+        self.status_bar.message = "selection yanked".to_string();
+    }
+
+    pub fn replace_visual_selection_with_slot(&mut self) {
+        let line_wise = self.is_visual_line_mode();
+        let Some(slot_text) = self.line_slot.clone() else {
+            self.status_bar.message = "paste failed: slot is empty".to_string();
+            self.exit_visual_mode();
+            return;
+        };
+        let Some((start, end)) = self.normalized_visual_bounds() else {
+            self.status_bar.message = "visual paste failed: no anchor".to_string();
+            self.exit_visual_mode();
+            return;
+        };
+
+        let Some(buffer) = self.active_buffer_mut() else {
+            self.status_bar.message = "visual paste failed: no active buffer".to_string();
+            self.exit_visual_mode();
+            return;
+        };
+
+        let mut lines = split_lines_owned(&buffer.text);
+        let start_row = start.row.saturating_sub(1) as usize;
+        let end_row = end.row.saturating_sub(1) as usize;
+        if start_row >= lines.len() || end_row >= lines.len() {
+            self.status_bar.message = "visual paste failed: out of range".to_string();
+            self.exit_visual_mode();
+            return;
+        }
+
+        if line_wise {
+            let replacement = split_lines_owned(&slot_text);
+            lines.splice(start_row..=end_row, replacement);
+            if lines.is_empty() {
+                lines.push(String::new());
+            }
+            buffer.text = lines.join("\n");
+            buffer.cursor.row = start_row.saturating_add(1) as u16;
+            buffer.cursor.col = 1;
+            self.align_active_window_scroll_to_cursor();
+            self.exit_visual_mode();
+            self.status_bar.message = "selection replaced".to_string();
+            return;
+        }
+
+        let start_line = lines[start_row].clone();
+        let end_line = lines[end_row].clone();
+        let start_line_len = start_line.chars().count() as u16;
+        let end_line_len = end_line.chars().count() as u16;
+        let start_col = start.col.max(1).min(start_line_len.max(1));
+        let end_col = end.col.max(1).min(end_line_len.max(1));
+
+        let prefix_end = char_to_byte_idx(&start_line, start_col.saturating_sub(1) as usize);
+        let suffix_start = char_to_byte_idx(&end_line, end_col as usize);
+        let prefix = start_line[..prefix_end].to_string();
+        let suffix = end_line[suffix_start..].to_string();
+
+        let slot_lines = split_lines_owned(&slot_text);
+        let mut replacement = Vec::new();
+        if slot_lines.len() == 1 {
+            replacement.push(format!("{}{}{}", prefix, slot_lines[0], suffix));
+        } else {
+            replacement.push(format!("{}{}", prefix, slot_lines[0]));
+            for line in slot_lines.iter().skip(1).take(slot_lines.len().saturating_sub(2)) {
+                replacement.push(line.clone());
+            }
+            let last = slot_lines.last().cloned().unwrap_or_default();
+            replacement.push(format!("{}{}", last, suffix));
+        }
+
+        lines.splice(start_row..=end_row, replacement);
+        buffer.text = lines.join("\n");
+        buffer.cursor.row = start_row.saturating_add(1) as u16;
+        buffer.cursor.col = start_col;
+        self.align_active_window_scroll_to_cursor();
+        self.exit_visual_mode();
+        self.status_bar.message = "selection replaced".to_string();
+    }
+
+    fn normalized_visual_bounds(&self) -> Option<(CursorState, CursorState)> {
+        let anchor = self.visual_anchor?;
+        let cursor = self.active_cursor();
+        let (mut start, mut end) = if (anchor.row, anchor.col) <= (cursor.row, cursor.col) {
+            (anchor, cursor)
+        } else {
+            (cursor, anchor)
+        };
+
+        if self.is_visual_line_mode() {
+            start.col = 1;
+            end.col = self.max_col_for_row(end.row).saturating_sub(1).max(1);
+        }
+        Some((start, end))
     }
 
     fn active_window_visible_rows(&self) -> u16 {
@@ -1415,7 +1725,7 @@ enum HorizontalMoveDirection {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppState, BufferSwitchDirection, FocusDirection, SplitAxis, TabId};
+    use super::{AppState, BufferSwitchDirection, CursorState, FocusDirection, SplitAxis, TabId};
     use std::path::PathBuf;
 
     fn test_state() -> AppState {
@@ -1983,6 +2293,147 @@ mod tests {
     }
 
     #[test]
+    fn visual_mode_should_set_anchor_and_status_mode() {
+        let mut state = test_state();
+        state.move_cursor_right();
+        state.move_cursor_down();
+        let cursor = state.active_cursor();
+        state.enter_visual_mode();
+
+        assert!(state.is_visual_mode());
+        assert_eq!(state.visual_anchor, Some(cursor));
+        assert_eq!(state.status_bar.mode, "VISUAL");
+    }
+
+    #[test]
+    fn visual_mode_exit_should_clear_anchor_and_restore_normal_mode() {
+        let mut state = test_state();
+        state.enter_visual_mode();
+        state.exit_visual_mode();
+
+        assert!(!state.is_visual_mode());
+        assert_eq!(state.visual_anchor, None);
+        assert_eq!(state.status_bar.mode, "NORMAL");
+    }
+
+    #[test]
+    fn visual_line_mode_should_set_line_anchor_and_status_mode() {
+        let mut state = test_state();
+        state.move_cursor_right();
+        state.enter_visual_mode();
+        state.enter_visual_line_mode();
+
+        assert!(state.is_visual_line_mode());
+        assert_eq!(state.visual_anchor, Some(CursorState { row: 1, col: 1 }));
+        assert_eq!(state.status_bar.mode, "VISUAL LINE");
+    }
+
+    #[test]
+    fn visual_delete_should_remove_selected_chars_in_single_line() {
+        let mut state = test_state();
+        set_active_buffer_text(&mut state, "abcdef");
+        state.move_cursor_right();
+        state.enter_visual_mode();
+        state.move_cursor_right();
+        state.move_cursor_right();
+        state.delete_visual_selection_to_slot();
+
+        let buffer_id = state.active_buffer_id().expect("buffer id exists");
+        let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+        assert_eq!(buffer.text, "aef");
+        assert_eq!(state.line_slot, Some("bcd".to_string()));
+        assert!(!state.is_visual_mode());
+        assert_eq!(state.status_bar.mode, "NORMAL");
+    }
+
+    #[test]
+    fn visual_delete_should_remove_selected_chars_across_lines() {
+        let mut state = test_state();
+        set_active_buffer_text(&mut state, "abc\ndef\nghi");
+        state.move_cursor_right();
+        state.enter_visual_mode();
+        state.move_cursor_down();
+        state.move_cursor_down();
+        state.move_cursor_right();
+        state.delete_visual_selection_to_slot();
+
+        let buffer_id = state.active_buffer_id().expect("buffer id exists");
+        let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+        assert_eq!(buffer.text, "a");
+        assert_eq!(state.line_slot, Some("bc\ndef\nghi".to_string()));
+        assert_eq!(buffer.cursor.row, 1);
+        assert_eq!(buffer.cursor.col, 2);
+    }
+
+    #[test]
+    fn visual_yank_should_copy_selection_without_modifying_buffer() {
+        let mut state = test_state();
+        set_active_buffer_text(&mut state, "abcdef");
+        state.move_cursor_right();
+        state.enter_visual_mode();
+        state.move_cursor_right();
+        state.move_cursor_right();
+        state.yank_visual_selection_to_slot();
+
+        let buffer_id = state.active_buffer_id().expect("buffer id exists");
+        let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+        assert_eq!(buffer.text, "abcdef");
+        assert_eq!(state.line_slot, Some("bcd".to_string()));
+        assert!(!state.is_visual_mode());
+    }
+
+    #[test]
+    fn visual_paste_should_replace_selection_in_single_line() {
+        let mut state = test_state();
+        set_active_buffer_text(&mut state, "abcdef");
+        state.line_slot = Some("XY".to_string());
+        state.move_cursor_right();
+        state.enter_visual_mode();
+        state.move_cursor_right();
+        state.move_cursor_right();
+        state.replace_visual_selection_with_slot();
+
+        let buffer_id = state.active_buffer_id().expect("buffer id exists");
+        let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+        assert_eq!(buffer.text, "aXYef");
+        assert!(!state.is_visual_mode());
+    }
+
+    #[test]
+    fn visual_paste_should_replace_selection_across_lines() {
+        let mut state = test_state();
+        set_active_buffer_text(&mut state, "abc\ndef\nghi");
+        state.line_slot = Some("Z".to_string());
+        state.move_cursor_right();
+        state.enter_visual_mode();
+        state.move_cursor_down();
+        state.move_cursor_down();
+        state.move_cursor_right();
+        state.replace_visual_selection_with_slot();
+
+        let buffer_id = state.active_buffer_id().expect("buffer id exists");
+        let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+        assert_eq!(buffer.text, "aZ");
+        assert!(!state.is_visual_mode());
+    }
+
+    #[test]
+    fn visual_line_delete_should_remove_whole_lines() {
+        let mut state = test_state();
+        set_active_buffer_text(&mut state, "a\nb\nc");
+        state.enter_visual_mode();
+        state.enter_visual_line_mode();
+        state.move_cursor_down();
+        state.delete_visual_selection_to_slot();
+
+        let buffer_id = state.active_buffer_id().expect("buffer id exists");
+        let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+        assert_eq!(buffer.text, "c");
+        assert_eq!(state.line_slot, Some("a\nb".to_string()));
+        assert!(!state.is_visual_mode());
+    }
+
+    #[test]
     fn insert_char_and_newline_should_edit_buffer_at_cursor() {
         let mut state = test_state();
         set_active_buffer_text(&mut state, "ab");
@@ -1995,6 +2446,35 @@ mod tests {
         let buffer_id = state.active_buffer_id().expect("buffer id exists");
         let text = &state.buffers.get(buffer_id).expect("buffer exists").text;
         assert_eq!(text, "X\nYab");
+    }
+
+    #[test]
+    fn open_line_below_at_cursor_should_insert_empty_line_and_move_cursor_to_line_start() {
+        let mut state = test_state();
+        set_active_buffer_text(&mut state, "abc\ndef");
+        state.move_cursor_right();
+        state.open_line_below_at_cursor();
+
+        let buffer_id = state.active_buffer_id().expect("buffer id exists");
+        let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+        assert_eq!(buffer.text, "abc\n\ndef");
+        assert_eq!(buffer.cursor.row, 2);
+        assert_eq!(buffer.cursor.col, 1);
+    }
+
+    #[test]
+    fn open_line_above_at_cursor_should_insert_empty_line_and_keep_cursor_on_current_row_index() {
+        let mut state = test_state();
+        set_active_buffer_text(&mut state, "abc\ndef");
+        state.move_cursor_down();
+        state.move_cursor_right();
+        state.open_line_above_at_cursor();
+
+        let buffer_id = state.active_buffer_id().expect("buffer id exists");
+        let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+        assert_eq!(buffer.text, "abc\n\ndef");
+        assert_eq!(buffer.cursor.row, 2);
+        assert_eq!(buffer.cursor.col, 1);
     }
 
     #[test]

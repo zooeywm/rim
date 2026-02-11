@@ -153,7 +153,12 @@ impl App {
     ) -> io::Result<()> {
         let style = match self.state.mode {
             EditorMode::Insert => SetCursorStyle::SteadyBar,
-            EditorMode::Normal | EditorMode::Command => SetCursorStyle::SteadyBlock,
+            EditorMode::Normal
+            | EditorMode::Command
+            | EditorMode::VisualChar
+            | EditorMode::VisualLine => {
+                SetCursorStyle::SteadyBlock
+            }
         };
         execute!(terminal.backend_mut(), style)?;
         Ok(())

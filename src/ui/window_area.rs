@@ -8,6 +8,7 @@ use crate::state::AppState;
 
 pub(super) struct WindowAreaWidget {
     windows: Vec<WindowView>,
+    selection_segments: Vec<SelectionSegment>,
     vertical_lines: Vec<VerticalLine>,
     horizontal_lines: Vec<HorizontalLine>,
 }
@@ -36,9 +37,17 @@ struct HorizontalLine {
     right_join_x: Option<u16>,
 }
 
+#[derive(Debug)]
+struct SelectionSegment {
+    x_start: u16,
+    x_end: u16,
+    y: u16,
+}
+
 impl WindowAreaWidget {
     pub(super) fn from_state(state: &AppState, content_area: Rect) -> (Self, Option<(u16, u16)>) {
         let mut windows = Vec::new();
+        let mut selection_segments = Vec::new();
         let mut cursor_position = None;
 
         for window_id in state.active_tab_window_ids() {
@@ -137,6 +146,20 @@ impl WindowAreaWidget {
                     content_area.x.saturating_add(cursor_x_local),
                     content_area.y.saturating_add(cursor_y_local),
                 ));
+
+                if state.is_visual_mode()
+                    && let Some(anchor) = state.visual_anchor
+                {
+                    selection_segments.extend(collect_visual_selection_segments(
+                        content,
+                        text_rect,
+                        window.scroll_x,
+                        window.scroll_y,
+                        anchor,
+                        cursor,
+                        state.is_visual_line_mode(),
+                    ));
+                }
             }
 
             windows.push(WindowView {
@@ -151,6 +174,7 @@ impl WindowAreaWidget {
         (
             Self {
                 windows,
+                selection_segments,
                 vertical_lines,
                 horizontal_lines,
             },
@@ -190,6 +214,16 @@ impl Widget for WindowAreaWidget {
                 .style(Style::default().fg(Color::DarkGray))
                 .render(number_rect, buf);
             Paragraph::new(window.text_text.as_str()).render(text_rect, buf);
+        }
+
+        for segment in self.selection_segments {
+            let abs_y = area.y.saturating_add(segment.y);
+            for x in segment.x_start..segment.x_end {
+                let abs_x = area.x.saturating_add(x);
+                if let Some(cell) = buf.cell_mut((abs_x, abs_y)) {
+                    cell.set_bg(Color::DarkGray);
+                }
+            }
         }
 
         for line in self.horizontal_lines {
@@ -288,6 +322,79 @@ fn collect_split_lines(
     }
 
     (vertical_lines, horizontal_lines)
+}
+
+fn collect_visual_selection_segments(
+    content: &str,
+    text_rect: Rect,
+    scroll_x: u16,
+    scroll_y: u16,
+    anchor: crate::state::CursorState,
+    cursor: crate::state::CursorState,
+    line_wise: bool,
+) -> Vec<SelectionSegment> {
+    let (start, end) = if (anchor.row, anchor.col) <= (cursor.row, cursor.col) {
+        (anchor, cursor)
+    } else {
+        (cursor, anchor)
+    };
+    let mut segments = Vec::new();
+    if text_rect.width == 0 || text_rect.height == 0 {
+        return segments;
+    }
+
+    let first_visible_row = scroll_y.saturating_add(1);
+    let last_visible_row = scroll_y.saturating_add(text_rect.height);
+    let visible_right_exclusive = scroll_x.saturating_add(text_rect.width);
+
+    for row in start.row..=end.row {
+        if row < first_visible_row || row > last_visible_row {
+            continue;
+        }
+        let line = content
+            .split('\n')
+            .nth(row.saturating_sub(1) as usize)
+            .unwrap_or("");
+        let line_len = line.chars().count() as u16;
+        if line_len == 0 {
+            continue;
+        }
+
+        let (mut col_start, mut col_end) = if line_wise {
+            (1, line_len)
+        } else if start.row == end.row {
+            (start.col, end.col)
+        } else if row == start.row {
+            (start.col, line_len)
+        } else if row == end.row {
+            (1, end.col)
+        } else {
+            (1, line_len)
+        };
+
+        col_start = col_start.max(1).min(line_len);
+        col_end = col_end.max(1).min(line_len);
+        if col_start > col_end {
+            continue;
+        }
+
+        let start_display = display_width_of_char_prefix(line, col_start.saturating_sub(1) as usize) as u16;
+        let end_display = display_width_of_char_prefix(line, col_end as usize) as u16;
+        let seg_start = start_display.max(scroll_x);
+        let seg_end = end_display.min(visible_right_exclusive);
+        if seg_start >= seg_end {
+            continue;
+        }
+
+        let y = text_rect
+            .y
+            .saturating_add(row.saturating_sub(first_visible_row));
+        let x_start = text_rect.x.saturating_add(seg_start.saturating_sub(scroll_x));
+        let x_end = text_rect.x.saturating_add(seg_end.saturating_sub(scroll_x));
+        segments.push(SelectionSegment { x_start, x_end, y });
+    }
+
+    segments
 }
 
 fn display_width_of_char_prefix(line: &str, char_count: usize) -> usize {
@@ -399,6 +506,9 @@ fn symbol_from_dirs(dirs: u8) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{DIR_DOWN, DIR_LEFT, DIR_RIGHT, DIR_UP, dirs_from_symbol, symbol_from_dirs};
+    use super::{SelectionSegment, collect_visual_selection_segments};
+    use crate::state::CursorState;
+    use ratatui::layout::Rect;
     use super::{display_width_of_char_prefix, visible_slice_by_display_width};
 
     fn merged_symbol(existing: &str, add_dirs: u8) -> &'static str {
@@ -466,5 +576,55 @@ mod tests {
         assert_eq!(visible_slice_by_display_width(line, 0, 3), "a中");
         assert_eq!(visible_slice_by_display_width(line, 1, 2), "中");
         assert_eq!(visible_slice_by_display_width(line, 3, 2), "bc");
+    }
+
+    #[test]
+    fn visual_segments_should_cover_range_in_single_line() {
+        let content = "abcdef";
+        let text_rect = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 1,
+        };
+        let segments = collect_visual_selection_segments(
+            content,
+            text_rect,
+            0,
+            0,
+            CursorState { row: 1, col: 2 },
+            CursorState { row: 1, col: 4 },
+            false,
+        );
+        assert_eq!(segments.len(), 1);
+        let SelectionSegment { x_start, x_end, y } = segments[0];
+        assert_eq!(y, 0);
+        assert_eq!(x_start, 1);
+        assert_eq!(x_end, 4);
+    }
+
+    #[test]
+    fn visual_line_segments_should_cover_entire_line_width() {
+        let content = "abcdef";
+        let text_rect = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 1,
+        };
+        let segments = collect_visual_selection_segments(
+            content,
+            text_rect,
+            0,
+            0,
+            CursorState { row: 1, col: 3 },
+            CursorState { row: 1, col: 3 },
+            true,
+        );
+        assert_eq!(segments.len(), 1);
+        let SelectionSegment { x_start, x_end, y } = segments[0];
+        assert_eq!(y, 0);
+        assert_eq!(x_start, 0);
+        assert_eq!(x_end, 6);
     }
 }

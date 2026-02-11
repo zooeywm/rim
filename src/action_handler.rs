@@ -135,6 +135,10 @@ impl ActionHandler {
             return self.handle_command_mode_key(state, io_gateway, key);
         }
 
+        if state.is_visual_mode() {
+            return self.handle_visual_mode_key(state, key);
+        }
+
         if state.is_insert_mode() {
             return self.handle_insert_mode_key(state, key);
         }
@@ -153,8 +157,22 @@ impl ActionHandler {
                 state.enter_insert_mode();
                 ControlFlow::Continue(())
             }
+            (KeyCode::Char('o'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                state.open_line_below_at_cursor();
+                state.enter_insert_mode();
+                ControlFlow::Continue(())
+            }
+            (KeyCode::Char('O'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                state.open_line_above_at_cursor();
+                state.enter_insert_mode();
+                ControlFlow::Continue(())
+            }
             (KeyCode::Char(':'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
                 state.enter_command_mode();
+                ControlFlow::Continue(())
+            }
+            (KeyCode::Char('v'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                state.enter_visual_mode();
                 ControlFlow::Continue(())
             }
             (KeyCode::Char('h'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
@@ -237,7 +255,7 @@ impl ActionHandler {
                 state.focus_window(FocusDirection::Right);
                 ControlFlow::Continue(())
             }
-            (KeyCode::Char('w'), m) if m.contains(KeyModifiers::CONTROL) => {
+            (KeyCode::Char('W'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
                 state.close_active_window();
                 ControlFlow::Continue(())
             }
@@ -271,6 +289,28 @@ impl ActionHandler {
             _ => {}
         }
 
+        ControlFlow::Continue(())
+    }
+
+    fn handle_visual_mode_key(&self, state: &mut AppState, key: KeyEvent) -> ControlFlow<()> {
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            return ControlFlow::Continue(());
+        }
+
+        match key.code {
+            KeyCode::Esc => state.exit_visual_mode(),
+            KeyCode::Char('v') => state.enter_visual_line_mode(),
+            KeyCode::Char('d') => state.delete_visual_selection_to_slot(),
+            KeyCode::Char('y') => state.yank_visual_selection_to_slot(),
+            KeyCode::Char('p') => state.replace_visual_selection_with_slot(),
+            KeyCode::Char('h') => state.move_cursor_left(),
+            KeyCode::Char('j') => state.move_cursor_down(),
+            KeyCode::Char('k') => state.move_cursor_up(),
+            KeyCode::Char('l') => state.move_cursor_right(),
+            KeyCode::Char('0') => state.move_cursor_line_start(),
+            KeyCode::Char('$') => state.move_cursor_line_end(),
+            _ => {}
+        }
         ControlFlow::Continue(())
     }
 
