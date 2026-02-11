@@ -11,11 +11,69 @@ use crate::action::{
 use crate::io_gateway::IoGateway;
 use crate::state::{AppState, BufferSwitchDirection, FocusDirection, SplitAxis};
 
-pub struct ActionHandler;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NormalKey {
+    Leader,
+    Tab,
+    Char(char),
+    Ctrl(char),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NormalCommand {
+    EnterInsert,
+    AppendInsert,
+    OpenLineBelowInsert,
+    OpenLineAboveInsert,
+    EnterCommand,
+    EnterVisual,
+    MoveLeft,
+    MoveLineStart,
+    MoveLineEnd,
+    MoveDown,
+    MoveUp,
+    MoveRight,
+    SplitHorizontal,
+    SplitVertical,
+    CutCharToSlot,
+    PasteSlotAfterCursor,
+    DeleteCurrentLineToSlot,
+    NewTab,
+    CloseCurrentTab,
+    SwitchPrevTab,
+    SwitchNextTab,
+    SwitchPrevBuffer,
+    SwitchNextBuffer,
+    CloseActiveBuffer,
+    NewEmptyBuffer,
+    FocusWindowLeft,
+    FocusWindowDown,
+    FocusWindowUp,
+    FocusWindowRight,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SequenceMatch {
+    Command(NormalCommand),
+    Pending,
+    NoMatch,
+}
+
+pub struct ActionHandler {
+    normal_sequence: Vec<NormalKey>,
+}
+
+impl ActionHandler {
+    pub fn new() -> Self {
+        Self {
+            normal_sequence: Vec::new(),
+        }
+    }
+}
 
 impl ActionHandler {
     pub fn apply(
-        &self,
+        &mut self,
         state: &mut AppState,
         io_gateway: &IoGateway,
         action: AppAction,
@@ -122,144 +180,218 @@ impl ActionHandler {
     }
 
     fn handle_key(
-        &self,
+        &mut self,
         state: &mut AppState,
         io_gateway: &IoGateway,
         key: KeyEvent,
     ) -> ControlFlow<()> {
         if key.modifiers.contains(KeyModifiers::ALT) {
+            self.normal_sequence.clear();
+            state.status_bar.key_sequence.clear();
             return ControlFlow::Continue(());
         }
 
         if state.is_command_mode() {
+            self.normal_sequence.clear();
+            state.status_bar.key_sequence.clear();
             return self.handle_command_mode_key(state, io_gateway, key);
         }
 
         if state.is_visual_mode() {
+            self.normal_sequence.clear();
+            state.status_bar.key_sequence.clear();
             return self.handle_visual_mode_key(state, key);
         }
 
         if state.is_insert_mode() {
+            self.normal_sequence.clear();
+            state.status_bar.key_sequence.clear();
             return self.handle_insert_mode_key(state, key);
         }
 
         self.handle_normal_mode_key(state, key)
     }
 
-    fn handle_normal_mode_key(&self, state: &mut AppState, key: KeyEvent) -> ControlFlow<()> {
-        match (key.code, key.modifiers) {
-            (KeyCode::Char('i'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                state.enter_insert_mode();
-                ControlFlow::Continue(())
+    fn handle_normal_mode_key(&mut self, state: &mut AppState, key: KeyEvent) -> ControlFlow<()> {
+        let Some(normal_key) = Self::to_normal_key(state, key) else {
+            self.normal_sequence.clear();
+            state.status_bar.key_sequence.clear();
+            return ControlFlow::Continue(());
+        };
+
+        self.normal_sequence.push(normal_key);
+
+        loop {
+            match Self::resolve_normal_sequence(&self.normal_sequence) {
+                SequenceMatch::Command(command) => {
+                    self.normal_sequence.clear();
+                    state.status_bar.key_sequence.clear();
+                    self.apply_normal_command(state, command);
+                    return ControlFlow::Continue(());
+                }
+                SequenceMatch::Pending => {
+                    state.status_bar.key_sequence =
+                        Self::render_normal_sequence(&self.normal_sequence);
+                    return ControlFlow::Continue(());
+                }
+                SequenceMatch::NoMatch => {
+                    if self.normal_sequence.len() <= 1 {
+                        self.normal_sequence.clear();
+                        state.status_bar.key_sequence.clear();
+                        return ControlFlow::Continue(());
+                    }
+                    let last = *self
+                        .normal_sequence
+                        .last()
+                        .expect("normal sequence has at least one key");
+                    self.normal_sequence.clear();
+                    self.normal_sequence.push(last);
+                    state.status_bar.key_sequence =
+                        Self::render_normal_sequence(&self.normal_sequence);
+                }
             }
-            (KeyCode::Char('a'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+        }
+    }
+
+    fn to_normal_key(state: &AppState, key: KeyEvent) -> Option<NormalKey> {
+        if key.modifiers.contains(KeyModifiers::ALT) {
+            return None;
+        }
+
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            if let KeyCode::Char(ch) = key.code {
+                return Some(NormalKey::Ctrl(ch.to_ascii_lowercase()));
+            }
+            return None;
+        }
+
+        if let KeyCode::Char(ch) = key.code {
+            if ch == state.leader_key {
+                return Some(NormalKey::Leader);
+            }
+            return Some(NormalKey::Char(ch));
+        }
+
+        if key.code == KeyCode::Tab {
+            return Some(NormalKey::Tab);
+        }
+
+        None
+    }
+
+    fn resolve_normal_sequence(keys: &[NormalKey]) -> SequenceMatch {
+        use NormalCommand as C;
+        use NormalKey as K;
+
+        match keys {
+            [K::Leader] => SequenceMatch::Pending,
+            [K::Leader, K::Char('w')] => SequenceMatch::Pending,
+            [K::Leader, K::Char('w'), K::Char('v')] => SequenceMatch::Command(C::SplitVertical),
+            [K::Leader, K::Char('w'), K::Char('h')] => SequenceMatch::Command(C::SplitHorizontal),
+            [K::Leader, K::Tab] => SequenceMatch::Pending,
+            [K::Leader, K::Tab, K::Char('n')] => SequenceMatch::Command(C::NewTab),
+            [K::Leader, K::Tab, K::Char('d')] => SequenceMatch::Command(C::CloseCurrentTab),
+            [K::Leader, K::Tab, K::Char('[')] => SequenceMatch::Command(C::SwitchPrevTab),
+            [K::Leader, K::Tab, K::Char(']')] => SequenceMatch::Command(C::SwitchNextTab),
+            [K::Leader, K::Char('b')] => SequenceMatch::Pending,
+            [K::Leader, K::Char('b'), K::Char('d')] => SequenceMatch::Command(C::CloseActiveBuffer),
+            [K::Leader, K::Char('b'), K::Char('n')] => SequenceMatch::Command(C::NewEmptyBuffer),
+            [K::Char('d')] => SequenceMatch::Pending,
+            [K::Char('d'), K::Char('d')] => SequenceMatch::Command(C::DeleteCurrentLineToSlot),
+            [K::Char('i')] => SequenceMatch::Command(C::EnterInsert),
+            [K::Char('a')] => SequenceMatch::Command(C::AppendInsert),
+            [K::Char('o')] => SequenceMatch::Command(C::OpenLineBelowInsert),
+            [K::Char('O')] => SequenceMatch::Command(C::OpenLineAboveInsert),
+            [K::Char(':')] => SequenceMatch::Command(C::EnterCommand),
+            [K::Char('v')] => SequenceMatch::Command(C::EnterVisual),
+            [K::Char('h')] => SequenceMatch::Command(C::MoveLeft),
+            [K::Char('0')] => SequenceMatch::Command(C::MoveLineStart),
+            [K::Char('$')] => SequenceMatch::Command(C::MoveLineEnd),
+            [K::Char('j')] => SequenceMatch::Command(C::MoveDown),
+            [K::Char('k')] => SequenceMatch::Command(C::MoveUp),
+            [K::Char('l')] => SequenceMatch::Command(C::MoveRight),
+            [K::Char('x')] => SequenceMatch::Command(C::CutCharToSlot),
+            [K::Char('p')] => SequenceMatch::Command(C::PasteSlotAfterCursor),
+            [K::Char('H')] => SequenceMatch::Command(C::SwitchPrevBuffer),
+            [K::Char('L')] => SequenceMatch::Command(C::SwitchNextBuffer),
+            [K::Char('{')] => SequenceMatch::Command(C::SwitchPrevBuffer),
+            [K::Char('}')] => SequenceMatch::Command(C::SwitchNextBuffer),
+            [K::Ctrl('h')] => SequenceMatch::Command(C::FocusWindowLeft),
+            [K::Ctrl('j')] => SequenceMatch::Command(C::FocusWindowDown),
+            [K::Ctrl('k')] => SequenceMatch::Command(C::FocusWindowUp),
+            [K::Ctrl('l')] => SequenceMatch::Command(C::FocusWindowRight),
+            _ => SequenceMatch::NoMatch,
+        }
+    }
+
+    fn render_normal_sequence(keys: &[NormalKey]) -> String {
+        keys.iter()
+            .map(|key| match key {
+                NormalKey::Leader => "<leader>".to_string(),
+                NormalKey::Tab => "<tab>".to_string(),
+                NormalKey::Char(ch) => ch.to_string(),
+                NormalKey::Ctrl(ch) => format!("<C-{}>", ch),
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    fn apply_normal_command(&self, state: &mut AppState, command: NormalCommand) {
+        match command {
+            NormalCommand::EnterInsert => state.enter_insert_mode(),
+            NormalCommand::AppendInsert => {
                 state.move_cursor_right();
                 state.enter_insert_mode();
-                ControlFlow::Continue(())
             }
-            (KeyCode::Char('o'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            NormalCommand::OpenLineBelowInsert => {
                 state.open_line_below_at_cursor();
                 state.enter_insert_mode();
-                ControlFlow::Continue(())
             }
-            (KeyCode::Char('O'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            NormalCommand::OpenLineAboveInsert => {
                 state.open_line_above_at_cursor();
                 state.enter_insert_mode();
-                ControlFlow::Continue(())
             }
-            (KeyCode::Char(':'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                state.enter_command_mode();
-                ControlFlow::Continue(())
-            }
-            (KeyCode::Char('v'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                state.enter_visual_mode();
-                ControlFlow::Continue(())
-            }
-            (KeyCode::Char('h'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                state.move_cursor_left();
-                ControlFlow::Continue(())
-            }
-            (KeyCode::Char('0'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                state.move_cursor_line_start();
-                ControlFlow::Continue(())
-            }
-            (KeyCode::Char('$'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                state.move_cursor_line_end();
-                ControlFlow::Continue(())
-            }
-            (KeyCode::Char('j'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                state.move_cursor_down();
-                ControlFlow::Continue(())
-            }
-            (KeyCode::Char('k'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                state.move_cursor_up();
-                ControlFlow::Continue(())
-            }
-            (KeyCode::Char('l'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                state.move_cursor_right();
-                ControlFlow::Continue(())
-            }
-            (KeyCode::Char('H'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                state.split_active_window(SplitAxis::Horizontal);
-                ControlFlow::Continue(())
-            }
-            (KeyCode::Char('V'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                state.split_active_window(SplitAxis::Vertical);
-                ControlFlow::Continue(())
-            }
-            (KeyCode::Char('x'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                state.cut_current_char_to_slot();
-                ControlFlow::Continue(())
-            }
-            (KeyCode::Char('p'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                state.paste_slot_at_cursor();
-                ControlFlow::Continue(())
-            }
-            (KeyCode::Char('t'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            NormalCommand::EnterCommand => state.enter_command_mode(),
+            NormalCommand::EnterVisual => state.enter_visual_mode(),
+            NormalCommand::MoveLeft => state.move_cursor_left(),
+            NormalCommand::MoveLineStart => state.move_cursor_line_start(),
+            NormalCommand::MoveLineEnd => state.move_cursor_line_end(),
+            NormalCommand::MoveDown => state.move_cursor_down(),
+            NormalCommand::MoveUp => state.move_cursor_up(),
+            NormalCommand::MoveRight => state.move_cursor_right(),
+            NormalCommand::SplitHorizontal => state.split_active_window(SplitAxis::Horizontal),
+            NormalCommand::SplitVertical => state.split_active_window(SplitAxis::Vertical),
+            NormalCommand::CutCharToSlot => state.cut_current_char_to_slot(),
+            NormalCommand::PasteSlotAfterCursor => state.paste_slot_at_cursor(),
+            NormalCommand::DeleteCurrentLineToSlot => state.delete_current_line_to_slot(),
+            NormalCommand::NewTab => {
                 state.open_new_tab();
-                ControlFlow::Continue(())
             }
-            (KeyCode::Char('X'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            NormalCommand::CloseCurrentTab => {
                 state.close_current_tab();
-                ControlFlow::Continue(())
             }
-            (KeyCode::Char('['), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            NormalCommand::SwitchPrevTab => {
                 state.switch_to_prev_tab();
-                ControlFlow::Continue(())
             }
-            (KeyCode::Char(']'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            NormalCommand::SwitchNextTab => {
                 state.switch_to_next_tab();
-                ControlFlow::Continue(())
             }
-            (KeyCode::Char('{'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            NormalCommand::SwitchPrevBuffer => {
                 state.switch_active_window_buffer(BufferSwitchDirection::Prev);
-                ControlFlow::Continue(())
             }
-            (KeyCode::Char('}'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            NormalCommand::SwitchNextBuffer => {
                 state.switch_active_window_buffer(BufferSwitchDirection::Next);
-                ControlFlow::Continue(())
             }
-            (KeyCode::Char('h'), m) if m.contains(KeyModifiers::CONTROL) => {
-                state.focus_window(FocusDirection::Left);
-                ControlFlow::Continue(())
+            NormalCommand::CloseActiveBuffer => {
+                state.close_active_buffer();
             }
-            (KeyCode::Char('j'), m) if m.contains(KeyModifiers::CONTROL) => {
-                state.focus_window(FocusDirection::Down);
-                ControlFlow::Continue(())
+            NormalCommand::NewEmptyBuffer => {
+                state.create_and_bind_empty_buffer();
             }
-            (KeyCode::Char('k'), m) if m.contains(KeyModifiers::CONTROL) => {
-                state.focus_window(FocusDirection::Up);
-                ControlFlow::Continue(())
-            }
-            (KeyCode::Char('l'), m) if m.contains(KeyModifiers::CONTROL) => {
-                state.focus_window(FocusDirection::Right);
-                ControlFlow::Continue(())
-            }
-            (KeyCode::Char('W'), m) if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                state.close_active_window();
-                ControlFlow::Continue(())
-            }
-            _ => ControlFlow::Continue(()),
+            NormalCommand::FocusWindowLeft => state.focus_window(FocusDirection::Left),
+            NormalCommand::FocusWindowDown => state.focus_window(FocusDirection::Down),
+            NormalCommand::FocusWindowUp => state.focus_window(FocusDirection::Up),
+            NormalCommand::FocusWindowRight => state.focus_window(FocusDirection::Right),
         }
     }
 
@@ -330,7 +462,16 @@ impl ActionHandler {
                 let command = state.take_command_line();
                 match command.as_str() {
                     "" => {}
-                    "q" | "quit" => return ControlFlow::Break(()),
+                    "qa" => return ControlFlow::Break(()),
+                    "q" | "quit" => {
+                        if state.active_tab_window_ids().len() > 1 {
+                            state.close_active_window();
+                        } else if state.tabs.len() > 1 {
+                            state.close_current_tab();
+                        } else {
+                            return ControlFlow::Break(());
+                        }
+                    }
                     "w" => {
                         self.enqueue_save_active_buffer(state, io_gateway, false, None);
                     }
@@ -446,5 +587,142 @@ impl ActionHandler {
         } else {
             state.status_bar.message = format!("saving {} buffers...", enqueued);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ActionHandler, NormalCommand, NormalKey, SequenceMatch};
+    use crate::state::AppState;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn to_normal_key_should_map_leader_char_to_leader_token() {
+        let mut state = AppState::new();
+        state.set_leader_key(' ');
+        let key = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
+
+        let mapped = ActionHandler::to_normal_key(&state, key);
+        assert_eq!(mapped, Some(NormalKey::Leader));
+    }
+
+    #[test]
+    fn resolve_normal_sequence_should_keep_leader_w_pending() {
+        let seq = vec![NormalKey::Leader, NormalKey::Char('w')];
+        let resolved = ActionHandler::resolve_normal_sequence(&seq);
+        assert_eq!(resolved, SequenceMatch::Pending);
+    }
+
+    #[test]
+    fn resolve_normal_sequence_should_map_leader_w_v_to_split_vertical() {
+        let seq = vec![
+            NormalKey::Leader,
+            NormalKey::Char('w'),
+            NormalKey::Char('v'),
+        ];
+        let resolved = ActionHandler::resolve_normal_sequence(&seq);
+        assert_eq!(
+            resolved,
+            SequenceMatch::Command(NormalCommand::SplitVertical)
+        );
+    }
+
+    #[test]
+    fn resolve_normal_sequence_should_map_leader_w_h_to_split_horizontal() {
+        let seq = vec![
+            NormalKey::Leader,
+            NormalKey::Char('w'),
+            NormalKey::Char('h'),
+        ];
+        let resolved = ActionHandler::resolve_normal_sequence(&seq);
+        assert_eq!(
+            resolved,
+            SequenceMatch::Command(NormalCommand::SplitHorizontal)
+        );
+    }
+
+    #[test]
+    fn resolve_normal_sequence_should_map_leader_tab_n_to_new_tab() {
+        let seq = vec![NormalKey::Leader, NormalKey::Tab, NormalKey::Char('n')];
+        let resolved = ActionHandler::resolve_normal_sequence(&seq);
+        assert_eq!(resolved, SequenceMatch::Command(NormalCommand::NewTab));
+    }
+
+    #[test]
+    fn resolve_normal_sequence_should_map_leader_tab_d_to_close_tab() {
+        let seq = vec![NormalKey::Leader, NormalKey::Tab, NormalKey::Char('d')];
+        let resolved = ActionHandler::resolve_normal_sequence(&seq);
+        assert_eq!(
+            resolved,
+            SequenceMatch::Command(NormalCommand::CloseCurrentTab)
+        );
+    }
+
+    #[test]
+    fn resolve_normal_sequence_should_map_leader_tab_left_bracket_to_prev_tab() {
+        let seq = vec![NormalKey::Leader, NormalKey::Tab, NormalKey::Char('[')];
+        let resolved = ActionHandler::resolve_normal_sequence(&seq);
+        assert_eq!(
+            resolved,
+            SequenceMatch::Command(NormalCommand::SwitchPrevTab)
+        );
+    }
+
+    #[test]
+    fn resolve_normal_sequence_should_map_leader_tab_right_bracket_to_next_tab() {
+        let seq = vec![NormalKey::Leader, NormalKey::Tab, NormalKey::Char(']')];
+        let resolved = ActionHandler::resolve_normal_sequence(&seq);
+        assert_eq!(
+            resolved,
+            SequenceMatch::Command(NormalCommand::SwitchNextTab)
+        );
+    }
+
+    #[test]
+    fn resolve_normal_sequence_should_map_upper_h_to_prev_buffer() {
+        let seq = vec![NormalKey::Char('H')];
+        let resolved = ActionHandler::resolve_normal_sequence(&seq);
+        assert_eq!(
+            resolved,
+            SequenceMatch::Command(NormalCommand::SwitchPrevBuffer)
+        );
+    }
+
+    #[test]
+    fn resolve_normal_sequence_should_map_upper_l_to_next_buffer() {
+        let seq = vec![NormalKey::Char('L')];
+        let resolved = ActionHandler::resolve_normal_sequence(&seq);
+        assert_eq!(
+            resolved,
+            SequenceMatch::Command(NormalCommand::SwitchNextBuffer)
+        );
+    }
+
+    #[test]
+    fn resolve_normal_sequence_should_map_leader_b_d_to_close_active_buffer() {
+        let seq = vec![
+            NormalKey::Leader,
+            NormalKey::Char('b'),
+            NormalKey::Char('d'),
+        ];
+        let resolved = ActionHandler::resolve_normal_sequence(&seq);
+        assert_eq!(
+            resolved,
+            SequenceMatch::Command(NormalCommand::CloseActiveBuffer)
+        );
+    }
+
+    #[test]
+    fn resolve_normal_sequence_should_map_leader_b_n_to_new_empty_buffer() {
+        let seq = vec![
+            NormalKey::Leader,
+            NormalKey::Char('b'),
+            NormalKey::Char('n'),
+        ];
+        let resolved = ActionHandler::resolve_normal_sequence(&seq);
+        assert_eq!(
+            resolved,
+            SequenceMatch::Command(NormalCommand::NewEmptyBuffer)
+        );
     }
 }

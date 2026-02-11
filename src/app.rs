@@ -40,7 +40,7 @@ impl App {
         Ok(Self {
             state,
             renderer: Renderer::new(),
-            action_handler: ActionHandler,
+            action_handler: ActionHandler::new(),
             io_gateway,
             event_tx,
             event_rx,
@@ -156,9 +156,7 @@ impl App {
             EditorMode::Normal
             | EditorMode::Command
             | EditorMode::VisualChar
-            | EditorMode::VisualLine => {
-                SetCursorStyle::SteadyBlock
-            }
+            | EditorMode::VisualLine => SetCursorStyle::SteadyBlock,
         };
         execute!(terminal.backend_mut(), style)?;
         Ok(())

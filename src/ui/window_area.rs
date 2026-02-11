@@ -378,7 +378,8 @@ fn collect_visual_selection_segments(
             continue;
         }
 
-        let start_display = display_width_of_char_prefix(line, col_start.saturating_sub(1) as usize) as u16;
+        let start_display =
+            display_width_of_char_prefix(line, col_start.saturating_sub(1) as usize) as u16;
         let end_display = display_width_of_char_prefix(line, col_end as usize) as u16;
         let seg_start = start_display.max(scroll_x);
         let seg_end = end_display.min(visible_right_exclusive);
@@ -389,7 +390,9 @@ fn collect_visual_selection_segments(
         let y = text_rect
             .y
             .saturating_add(row.saturating_sub(first_visible_row));
-        let x_start = text_rect.x.saturating_add(seg_start.saturating_sub(scroll_x));
+        let x_start = text_rect
+            .x
+            .saturating_add(seg_start.saturating_sub(scroll_x));
         let x_end = text_rect.x.saturating_add(seg_end.saturating_sub(scroll_x));
         segments.push(SelectionSegment { x_start, x_end, y });
     }
@@ -507,9 +510,9 @@ fn symbol_from_dirs(dirs: u8) -> &'static str {
 mod tests {
     use super::{DIR_DOWN, DIR_LEFT, DIR_RIGHT, DIR_UP, dirs_from_symbol, symbol_from_dirs};
     use super::{SelectionSegment, collect_visual_selection_segments};
+    use super::{display_width_of_char_prefix, visible_slice_by_display_width};
     use crate::state::CursorState;
     use ratatui::layout::Rect;
-    use super::{display_width_of_char_prefix, visible_slice_by_display_width};
 
     fn merged_symbol(existing: &str, add_dirs: u8) -> &'static str {
         symbol_from_dirs(dirs_from_symbol(existing) | add_dirs)

@@ -40,6 +40,7 @@ pub struct TabState {
 pub struct StatusBarState {
     pub mode: String,
     pub message: String,
+    pub key_sequence: String,
 }
 
 impl Default for StatusBarState {
@@ -47,6 +48,7 @@ impl Default for StatusBarState {
         Self {
             mode: "NORMAL".to_string(),
             message: "new file".to_string(),
+            key_sequence: String::new(),
         }
     }
 }
@@ -82,6 +84,7 @@ pub enum SplitAxis {
 pub struct AppState {
     pub title: String,
     pub active_tab: TabId,
+    pub leader_key: char,
     pub mode: EditorMode,
     pub visual_anchor: Option<CursorState>,
     pub command_line: String,
@@ -115,6 +118,7 @@ impl AppState {
         Self {
             title: "Rim".to_string(),
             active_tab: tab_id,
+            leader_key: ' ',
             mode: EditorMode::Normal,
             visual_anchor: None,
             command_line: String::new(),
@@ -142,6 +146,10 @@ impl AppState {
             text,
             cursor: CursorState::default(),
         })
+    }
+
+    pub fn set_leader_key(&mut self, key: char) {
+        self.leader_key = key;
     }
 
     pub fn open_new_tab(&mut self) -> TabId {
@@ -206,7 +214,14 @@ impl AppState {
         if self.mode == EditorMode::Command {
             return format!(":{}", self.command_line);
         }
-        format!("{} | {}", self.status_bar.mode, self.status_bar.message)
+        if self.status_bar.key_sequence.is_empty() {
+            return format!("{} | {}", self.status_bar.mode, self.status_bar.message);
+        }
+
+        format!(
+            "{} | {} | keys {}",
+            self.status_bar.mode, self.status_bar.message, self.status_bar.key_sequence
+        )
     }
 
     pub fn active_tab_window_ids(&self) -> Vec<WindowId> {
@@ -271,6 +286,36 @@ impl AppState {
         {
             self.switch_tab(next_tab);
         }
+    }
+
+    pub fn close_active_buffer(&mut self) {
+        let Some(active_buffer_id) = self.active_buffer_id() else {
+            self.status_bar.message = "buffer close failed: no active buffer".to_string();
+            return;
+        };
+
+        let _ = self.buffers.remove(active_buffer_id);
+
+        let mut fallback = self.buffers.keys().next();
+        if fallback.is_none() {
+            fallback = Some(self.create_buffer(None, String::new()));
+        }
+
+        for (_, window) in &mut self.windows {
+            if window.buffer_id == Some(active_buffer_id) {
+                window.buffer_id = fallback;
+            }
+        }
+
+        self.align_active_window_scroll_to_cursor();
+        self.status_bar.message = "buffer closed".to_string();
+    }
+
+    pub fn create_and_bind_empty_buffer(&mut self) -> BufferId {
+        let buffer_id = self.create_buffer(None, String::new());
+        self.bind_buffer_to_active_window(buffer_id);
+        self.status_bar.message = "new buffer".to_string();
+        buffer_id
     }
 
     pub fn focus_window(&mut self, direction: FocusDirection) {
@@ -607,8 +652,9 @@ impl AppState {
     fn insert_tab_after_active(&mut self) -> TabId {
         let current = self.active_tab.0;
         let new_id = TabId(current.saturating_add(1));
+        let buffer_id = self.create_buffer(None, String::new());
         let window_id = self
-            .create_window(None)
+            .create_window(Some(buffer_id))
             .expect("create default tab window should never fail");
         let old_tabs = std::mem::take(&mut self.tabs);
         let mut rebuilt_tabs = BTreeMap::new();
@@ -1192,6 +1238,33 @@ impl AppState {
         self.status_bar.message = "pasted".to_string();
     }
 
+    pub fn delete_current_line_to_slot(&mut self) {
+        let Some(buffer) = self.active_buffer_mut() else {
+            self.status_bar.message = "line delete failed: no active buffer".to_string();
+            return;
+        };
+
+        let row_idx = buffer.cursor.row.saturating_sub(1) as usize;
+        let mut lines = split_lines_owned(&buffer.text);
+        if row_idx >= lines.len() {
+            self.status_bar.message = "line delete failed: out of range".to_string();
+            return;
+        }
+
+        let deleted = lines.remove(row_idx);
+        if lines.is_empty() {
+            lines.push(String::new());
+        }
+
+        buffer.text = lines.join("\n");
+        let new_row = row_idx.min(lines.len().saturating_sub(1)).saturating_add(1) as u16;
+        buffer.cursor.row = new_row;
+        buffer.cursor.col = 1;
+        self.line_slot = Some(deleted);
+        self.align_active_window_scroll_to_cursor();
+        self.status_bar.message = "line deleted".to_string();
+    }
+
     pub fn delete_visual_selection_to_slot(&mut self) {
         let line_wise = self.is_visual_line_mode();
         let Some((start, end)) = self.normalized_visual_bounds() else {
@@ -1222,7 +1295,9 @@ impl AppState {
                 lines.push(String::new());
             }
             buffer.text = lines.join("\n");
-            let new_row = start_row.min(lines.len().saturating_sub(1)).saturating_add(1) as u16;
+            let new_row = start_row
+                .min(lines.len().saturating_sub(1))
+                .saturating_add(1) as u16;
             buffer.cursor.row = new_row;
             buffer.cursor.col = 1;
             self.line_slot = Some(deleted);
@@ -1264,7 +1339,11 @@ impl AppState {
             }
             deleted_parts.push(end_line[..end_del_byte].to_string());
 
-            let merged_line = format!("{}{}", &start_line[..start_keep_byte], &end_line[end_del_byte..]);
+            let merged_line = format!(
+                "{}{}",
+                &start_line[..start_keep_byte],
+                &end_line[end_del_byte..]
+            );
             lines[start_row] = merged_line;
             for _ in start_row.saturating_add(1)..=end_row {
                 lines.remove(start_row.saturating_add(1));
@@ -1394,7 +1473,11 @@ impl AppState {
             replacement.push(format!("{}{}{}", prefix, slot_lines[0], suffix));
         } else {
             replacement.push(format!("{}{}", prefix, slot_lines[0]));
-            for line in slot_lines.iter().skip(1).take(slot_lines.len().saturating_sub(2)) {
+            for line in slot_lines
+                .iter()
+                .skip(1)
+                .take(slot_lines.len().saturating_sub(2))
+            {
                 replacement.push(line.clone());
             }
             let last = slot_lines.last().cloned().unwrap_or_default();
@@ -1865,14 +1948,20 @@ mod tests {
     }
 
     #[test]
-    fn open_new_tab_should_create_default_window_without_buffer() {
+    fn open_new_tab_should_create_default_window_with_untitled_buffer() {
         let mut state = test_state();
         let tab_id = state.open_new_tab();
         let tab = state.tabs.get(&tab_id).expect("new tab should exist");
         assert_eq!(tab.windows.len(), 1);
         let window_id = tab.windows[0];
         let window = state.windows.get(window_id).expect("window should exist");
-        assert_eq!(window.buffer_id, None);
+        let buffer_id = window
+            .buffer_id
+            .expect("new tab window should bind a buffer");
+        let buffer = state.buffers.get(buffer_id).expect("buffer should exist");
+        assert_eq!(buffer.name, "untitled");
+        assert_eq!(buffer.path, None);
+        assert_eq!(buffer.text, "");
         assert_eq!(tab.active_window, window_id);
     }
 
@@ -2652,5 +2741,82 @@ mod tests {
         assert_eq!(buffer.text, "adbc");
         assert_eq!(buffer.cursor.row, 1);
         assert_eq!(buffer.cursor.col, 4);
+    }
+
+    #[test]
+    fn delete_current_line_to_slot_should_remove_line_and_store_it() {
+        let mut state = test_state();
+        set_active_buffer_text(&mut state, "a\nb\nc");
+        state.move_cursor_down();
+
+        state.delete_current_line_to_slot();
+
+        let buffer_id = state.active_buffer_id().expect("buffer id exists");
+        let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+        assert_eq!(buffer.text, "a\nc");
+        assert_eq!(buffer.cursor.row, 2);
+        assert_eq!(buffer.cursor.col, 1);
+        assert_eq!(state.line_slot, Some("b".to_string()));
+    }
+
+    #[test]
+    fn delete_current_line_to_slot_should_keep_one_empty_line_when_last_line_deleted() {
+        let mut state = test_state();
+        set_active_buffer_text(&mut state, "only");
+
+        state.delete_current_line_to_slot();
+
+        let buffer_id = state.active_buffer_id().expect("buffer id exists");
+        let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+        assert_eq!(buffer.text, "");
+        assert_eq!(buffer.cursor.row, 1);
+        assert_eq!(buffer.cursor.col, 1);
+        assert_eq!(state.line_slot, Some("only".to_string()));
+    }
+
+    #[test]
+    fn close_active_buffer_should_rebind_active_window_to_another_buffer() {
+        let mut state = test_state();
+        let current = state.active_buffer_id().expect("buffer id exists");
+        let other = state.create_buffer(Some(PathBuf::from("other.rs")), "x");
+
+        state.close_active_buffer();
+
+        assert!(!state.buffers.contains_key(current));
+        assert!(state.buffers.contains_key(other));
+        assert_eq!(state.active_buffer_id(), Some(other));
+    }
+
+    #[test]
+    fn close_active_buffer_should_create_untitled_when_last_buffer_closed() {
+        let mut state = AppState::new();
+        let only = state.create_buffer(None, "hello");
+        state.bind_buffer_to_active_window(only);
+
+        state.close_active_buffer();
+
+        assert!(!state.buffers.contains_key(only));
+        let rebound = state
+            .active_buffer_id()
+            .expect("active buffer should exist");
+        let buffer = state.buffers.get(rebound).expect("buffer exists");
+        assert_eq!(buffer.name, "untitled");
+        assert_eq!(buffer.path, None);
+        assert_eq!(buffer.text, "");
+    }
+
+    #[test]
+    fn create_and_bind_empty_buffer_should_bind_new_untitled_to_active_window() {
+        let mut state = test_state();
+        let old = state.active_buffer_id().expect("buffer id exists");
+
+        let new_buffer_id = state.create_and_bind_empty_buffer();
+
+        assert_ne!(new_buffer_id, old);
+        assert_eq!(state.active_buffer_id(), Some(new_buffer_id));
+        let buffer = state.buffers.get(new_buffer_id).expect("buffer exists");
+        assert_eq!(buffer.name, "untitled");
+        assert_eq!(buffer.path, None);
+        assert_eq!(buffer.text, "");
     }
 }
