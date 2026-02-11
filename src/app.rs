@@ -3,6 +3,7 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::thread;
 
+use crossterm::cursor::SetCursorStyle;
 use crossterm::event;
 use crossterm::execute;
 use crossterm::terminal::{
@@ -17,7 +18,7 @@ use crate::action::{AppAction, FileAction, TabAction, WindowAction};
 use crate::action_handler::ActionHandler;
 use crate::input::InputHandler;
 use crate::io_gateway::IoGateway;
-use crate::state::AppState;
+use crate::state::{AppState, EditorMode};
 use crate::ui::Renderer;
 
 pub struct App {
@@ -71,6 +72,7 @@ impl App {
         )?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
+        self.sync_cursor_style(&mut terminal)?;
         self.start_input_pump();
 
         loop {
@@ -94,10 +96,15 @@ impl App {
             {
                 break;
             }
+            self.sync_cursor_style(&mut terminal)?;
         }
 
         disable_raw_mode()?;
-        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+        execute!(
+            terminal.backend_mut(),
+            SetCursorStyle::DefaultUserShape,
+            LeaveAlternateScreen
+        )?;
         Ok(())
     }
 
@@ -138,5 +145,17 @@ impl App {
                 }
             }
         });
+    }
+
+    fn sync_cursor_style(
+        &mut self,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    ) -> io::Result<()> {
+        let style = match self.state.mode {
+            EditorMode::Insert => SetCursorStyle::SteadyBar,
+            EditorMode::Normal | EditorMode::Command => SetCursorStyle::SteadyBlock,
+        };
+        execute!(terminal.backend_mut(), style)?;
+        Ok(())
     }
 }

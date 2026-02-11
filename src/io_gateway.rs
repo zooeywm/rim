@@ -32,6 +32,27 @@ impl IoGateway {
                 io::Error::from(io::ErrorKind::BrokenPipe)
             })
     }
+
+    pub(crate) fn enqueue_save(
+        &self,
+        buffer_id: BufferId,
+        path: PathBuf,
+        text: String,
+    ) -> io::Result<()> {
+        self.request_tx
+            .send(IoRequest::SaveFile {
+                buffer_id,
+                path,
+                text,
+            })
+            .map_err(|err| {
+                error!(
+                    "enqueue_save failed: io request channel is disconnected: {}",
+                    err
+                );
+                io::Error::from(io::ErrorKind::BrokenPipe)
+            })
+    }
 }
 
 struct IoWorker;
@@ -47,6 +68,20 @@ impl IoWorker {
                         IoRequest::LoadFile { buffer_id, .. } => {
                             if let Err(send_err) =
                                 event_tx.send(AppAction::File(FileAction::LoadCompleted {
+                                    buffer_id,
+                                    result: Err(io::Error::new(err.kind(), err.to_string())),
+                                }))
+                            {
+                                error!(
+                                    "io worker failed to report runtime init failure to app: {}",
+                                    send_err
+                                );
+                                return;
+                            }
+                        }
+                        IoRequest::SaveFile { buffer_id, .. } => {
+                            if let Err(send_err) =
+                                event_tx.send(AppAction::File(FileAction::SaveCompleted {
                                     buffer_id,
                                     result: Err(io::Error::new(err.kind(), err.to_string())),
                                 }))
@@ -76,6 +111,20 @@ impl IoWorker {
                         return;
                     }
                 }
+                IoRequest::SaveFile {
+                    buffer_id,
+                    path,
+                    text,
+                } => {
+                    let result = Self::write_file_text(path, text);
+                    if let Err(err) = event_tx.send(AppAction::File(FileAction::SaveCompleted {
+                        buffer_id,
+                        result,
+                    })) {
+                        error!("io worker failed to send save completion event: {}", err);
+                        return;
+                    }
+                }
             }
         }
     }
@@ -84,8 +133,20 @@ impl IoWorker {
         let file_bytes = compio::fs::read(path).await?;
         String::from_utf8(file_bytes).map_err(|err| io::Error::new(ErrorKind::InvalidData, err))
     }
+
+    fn write_file_text(path: PathBuf, text: String) -> io::Result<()> {
+        std::fs::write(path, text)
+    }
 }
 
 enum IoRequest {
-    LoadFile { buffer_id: BufferId, path: PathBuf },
+    LoadFile {
+        buffer_id: BufferId,
+        path: PathBuf,
+    },
+    SaveFile {
+        buffer_id: BufferId,
+        path: PathBuf,
+        text: String,
+    },
 }

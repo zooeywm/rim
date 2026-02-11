@@ -71,10 +71,6 @@ pub enum FileAction {
         buffer_id: BufferId,
         result: io::Result<String>,
     },
-    SaveRequested {
-        buffer_id: BufferId,
-        path: PathBuf,
-    },
     SaveCompleted {
         buffer_id: BufferId,
         result: io::Result<()>,

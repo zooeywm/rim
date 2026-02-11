@@ -67,6 +67,7 @@ impl Default for CursorState {
 pub enum EditorMode {
     Normal,
     Insert,
+    Command,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,9 +79,12 @@ pub enum SplitAxis {
 #[derive(Debug)]
 pub struct AppState {
     pub title: String,
-    pub readonly: bool,
     pub active_tab: TabId,
     pub mode: EditorMode,
+    pub command_line: String,
+    pub quit_after_save: bool,
+    pub pending_save_path: Option<(BufferId, PathBuf)>,
+    pub line_slot: Option<String>,
     pub cursor_scroll_threshold: u16,
     pub buffers: SlotMap<BufferId, BufferState>,
     pub windows: SlotMap<WindowId, WindowState>,
@@ -107,9 +111,12 @@ impl AppState {
 
         Self {
             title: "Rim".to_string(),
-            readonly: true,
             active_tab: tab_id,
             mode: EditorMode::Normal,
+            command_line: String::new(),
+            quit_after_save: false,
+            pending_save_path: None,
+            line_slot: None,
             cursor_scroll_threshold: 0,
             buffers,
             windows,
@@ -192,15 +199,10 @@ impl AppState {
     }
 
     pub fn status_line(&self) -> String {
-        let readonly = if self.readonly {
-            "readonly"
-        } else {
-            "writable"
-        };
-        format!(
-            "{} | {} | {}",
-            self.status_bar.mode, self.status_bar.message, readonly
-        )
+        if self.mode == EditorMode::Command {
+            return format!(":{}", self.command_line);
+        }
+        format!("{} | {}", self.status_bar.mode, self.status_bar.message)
     }
 
     pub fn active_tab_window_ids(&self) -> Vec<WindowId> {
@@ -867,6 +869,10 @@ impl AppState {
         self.mode == EditorMode::Insert
     }
 
+    pub fn is_command_mode(&self) -> bool {
+        self.mode == EditorMode::Command
+    }
+
     pub fn enter_insert_mode(&mut self) {
         self.mode = EditorMode::Insert;
         self.status_bar.mode = "INSERT".to_string();
@@ -875,6 +881,96 @@ impl AppState {
     pub fn exit_insert_mode(&mut self) {
         self.mode = EditorMode::Normal;
         self.status_bar.mode = "NORMAL".to_string();
+    }
+
+    pub fn enter_command_mode(&mut self) {
+        self.mode = EditorMode::Command;
+        self.command_line.clear();
+        self.status_bar.mode = "COMMAND".to_string();
+    }
+
+    pub fn exit_command_mode(&mut self) {
+        self.mode = EditorMode::Normal;
+        self.command_line.clear();
+        self.status_bar.mode = "NORMAL".to_string();
+    }
+
+    pub fn push_command_char(&mut self, ch: char) {
+        self.command_line.push(ch);
+    }
+
+    pub fn pop_command_char(&mut self) {
+        let _ = self.command_line.pop();
+    }
+
+    pub fn take_command_line(&mut self) -> String {
+        let command = self.command_line.trim().to_string();
+        self.exit_command_mode();
+        command
+    }
+
+    pub fn active_buffer_save_snapshot(
+        &self,
+        path_override: Option<PathBuf>,
+    ) -> Result<(BufferId, PathBuf, String), &'static str> {
+        let buffer_id = self.active_buffer_id().ok_or("no active buffer")?;
+        let buffer = self.buffers.get(buffer_id).ok_or("active buffer missing")?;
+        let path = match path_override {
+            Some(path) => path,
+            None => buffer.path.clone().ok_or("buffer has no file path")?,
+        };
+        Ok((buffer_id, path, buffer.text.clone()))
+    }
+
+    pub fn active_buffer_has_path(&self) -> Option<bool> {
+        let buffer_id = self.active_buffer_id()?;
+        let buffer = self.buffers.get(buffer_id)?;
+        Some(buffer.path.is_some())
+    }
+
+    pub fn all_buffer_save_snapshots(&self) -> (Vec<(BufferId, PathBuf, String)>, usize) {
+        let mut snapshots = Vec::new();
+        let mut missing_path = 0usize;
+
+        for (buffer_id, buffer) in &self.buffers {
+            let Some(path) = buffer.path.clone() else {
+                missing_path = missing_path.saturating_add(1);
+                continue;
+            };
+            snapshots.push((buffer_id, path, buffer.text.clone()));
+        }
+
+        snapshots.sort_by_key(|(id, _, _)| id.data().as_ffi());
+        (snapshots, missing_path)
+    }
+
+    pub fn set_pending_save_path(&mut self, buffer_id: BufferId, path: Option<PathBuf>) {
+        self.pending_save_path = path.map(|p| (buffer_id, p));
+    }
+
+    pub fn apply_pending_save_path_if_matches(&mut self, buffer_id: BufferId) {
+        let Some((pending_buffer_id, path)) = self.pending_save_path.clone() else {
+            return;
+        };
+        if pending_buffer_id != buffer_id {
+            return;
+        }
+
+        if let Some(buffer) = self.buffers.get_mut(buffer_id) {
+            buffer.path = Some(path.clone());
+            if let Some(name) = buffer_name_from_path(&path) {
+                buffer.name = name;
+            }
+        }
+        self.pending_save_path = None;
+    }
+
+    pub fn clear_pending_save_path_if_matches(&mut self, buffer_id: BufferId) {
+        if let Some((pending_buffer_id, _)) = self.pending_save_path
+            && pending_buffer_id == buffer_id
+        {
+            self.pending_save_path = None;
+        }
     }
 
     pub fn insert_char_at_cursor(&mut self, ch: char) {
@@ -958,6 +1054,66 @@ impl AppState {
 
         buffer.text = lines.join("\n");
         self.align_active_window_scroll_to_cursor();
+    }
+
+    pub fn cut_current_char_to_slot(&mut self) {
+        let Some(buffer) = self.active_buffer_mut() else {
+            self.status_bar.message = "cut failed: no active buffer".to_string();
+            return;
+        };
+        let row_idx = buffer.cursor.row.saturating_sub(1) as usize;
+        let col_idx = buffer.cursor.col.saturating_sub(1) as usize;
+        let mut lines = split_lines_owned(&buffer.text);
+        let Some(line) = lines.get_mut(row_idx) else {
+            self.status_bar.message = "cut failed: out of range".to_string();
+            return;
+        };
+        let char_count = line.chars().count();
+        if col_idx >= char_count {
+            self.status_bar.message = "cut failed: no char".to_string();
+            return;
+        }
+
+        let start = char_to_byte_idx(line, col_idx);
+        let end = char_to_byte_idx(line, col_idx.saturating_add(1));
+        let cut = line[start..end].to_string();
+        line.drain(start..end);
+        buffer.text = lines.join("\n");
+        self.line_slot = Some(cut);
+        self.align_active_window_scroll_to_cursor();
+        self.status_bar.message = "char cut".to_string();
+    }
+
+    pub fn paste_slot_at_cursor(&mut self) {
+        let Some(slot_text) = self.line_slot.clone() else {
+            self.status_bar.message = "paste failed: slot is empty".to_string();
+            return;
+        };
+        let Some(buffer) = self.active_buffer_mut() else {
+            self.status_bar.message = "paste failed: no active buffer".to_string();
+            return;
+        };
+
+        let row_idx = buffer.cursor.row.saturating_sub(1) as usize;
+        let col_idx = buffer.cursor.col.saturating_sub(1) as usize;
+        let mut lines = split_lines_owned(&buffer.text);
+        if row_idx >= lines.len() {
+            lines.resize(row_idx.saturating_add(1), String::new());
+        }
+        let line = lines
+            .get_mut(row_idx)
+            .expect("row index must exist after resize");
+        let char_count = line.chars().count();
+        let insert_char_idx = col_idx.saturating_add(1).min(char_count);
+        let byte_idx = char_to_byte_idx(line, insert_char_idx);
+        line.insert_str(byte_idx, &slot_text);
+        buffer.cursor.col = buffer
+            .cursor
+            .col
+            .saturating_add(slot_text.chars().count() as u16);
+        buffer.text = lines.join("\n");
+        self.align_active_window_scroll_to_cursor();
+        self.status_bar.message = "pasted".to_string();
     }
 
     fn active_window_visible_rows(&self) -> u16 {
@@ -1916,5 +2072,105 @@ mod tests {
 
         state.move_cursor_line_end();
         assert_eq!(state.active_cursor().col, 5);
+    }
+
+    #[test]
+    fn command_mode_should_toggle_and_show_prompt_in_status_line() {
+        let mut state = test_state();
+        state.enter_command_mode();
+        state.push_command_char('q');
+        assert!(state.is_command_mode());
+        assert_eq!(state.status_bar.mode, "COMMAND");
+        assert!(state.status_line().contains(":q"));
+
+        state.exit_command_mode();
+        assert!(!state.is_command_mode());
+        assert_eq!(state.status_bar.mode, "NORMAL");
+    }
+
+    #[test]
+    fn take_command_line_should_return_trimmed_text_and_leave_command_mode() {
+        let mut state = test_state();
+        state.enter_command_mode();
+        state.push_command_char(' ');
+        state.push_command_char('q');
+        state.push_command_char(' ');
+        let cmd = state.take_command_line();
+        assert_eq!(cmd, "q");
+        assert!(!state.is_command_mode());
+        assert_eq!(state.status_bar.mode, "NORMAL");
+    }
+
+    #[test]
+    fn active_buffer_save_snapshot_should_fail_without_path() {
+        let mut state = test_state();
+        let untitled = state.create_buffer(None, "x");
+        state.bind_buffer_to_active_window(untitled);
+        let err = state
+            .active_buffer_save_snapshot(None)
+            .expect_err("snapshot should fail");
+        assert_eq!(err, "buffer has no file path");
+    }
+
+    #[test]
+    fn apply_pending_save_path_should_update_buffer_metadata() {
+        let mut state = test_state();
+        let buffer_id = state.active_buffer_id().expect("buffer id exists");
+        let target = PathBuf::from("/tmp/new_name.rs");
+        state.set_pending_save_path(buffer_id, Some(target.clone()));
+        state.apply_pending_save_path_if_matches(buffer_id);
+
+        let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+        assert_eq!(buffer.path, Some(target));
+        assert_eq!(buffer.name, "new_name.rs");
+    }
+
+    #[test]
+    fn all_buffer_save_snapshots_should_skip_untitled_buffers() {
+        let mut state = test_state();
+        let _untitled = state.create_buffer(None, "u");
+        let _named = state.create_buffer(Some(PathBuf::from("/tmp/b.rs")), "b");
+
+        let (snapshots, missing_path) = state.all_buffer_save_snapshots();
+        assert_eq!(missing_path, 1);
+        assert!(snapshots.len() >= 2);
+    }
+
+    #[test]
+    fn active_buffer_has_path_should_reflect_current_buffer_binding() {
+        let mut state = test_state();
+        assert_eq!(state.active_buffer_has_path(), Some(true));
+
+        let untitled = state.create_buffer(None, "u");
+        state.bind_buffer_to_active_window(untitled);
+        assert_eq!(state.active_buffer_has_path(), Some(false));
+    }
+
+    #[test]
+    fn cut_current_char_to_slot_should_remove_char_and_store_it() {
+        let mut state = test_state();
+        set_active_buffer_text(&mut state, "abcd");
+        state.move_cursor_right();
+        state.cut_current_char_to_slot();
+
+        let buffer_id = state.active_buffer_id().expect("buffer id exists");
+        let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+        assert_eq!(buffer.text, "acd");
+        assert_eq!(state.line_slot, Some("b".to_string()));
+    }
+
+    #[test]
+    fn paste_slot_at_cursor_should_insert_slot_text_after_cursor() {
+        let mut state = test_state();
+        set_active_buffer_text(&mut state, "ad");
+        state.line_slot = Some("bc".to_string());
+        state.move_cursor_right();
+        state.paste_slot_at_cursor();
+
+        let buffer_id = state.active_buffer_id().expect("buffer id exists");
+        let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+        assert_eq!(buffer.text, "adbc");
+        assert_eq!(buffer.cursor.row, 1);
+        assert_eq!(buffer.cursor.col, 4);
     }
 }
