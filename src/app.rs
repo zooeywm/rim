@@ -14,7 +14,7 @@ use ratatui::backend::CrosstermBackend;
 use tracing::error;
 use tracing::trace;
 
-use crate::action::{AppAction, FileAction, TabAction, WindowAction};
+use crate::action::{AppAction, FileAction};
 use crate::action_handler::ActionHandler;
 use crate::input::InputHandler;
 use crate::io_gateway::IoGateway;
@@ -109,16 +109,7 @@ impl App {
     }
 
     fn action_affects_layout(&self, action: &AppAction) -> bool {
-        match action {
-            AppAction::Editor(_) => true,
-            AppAction::Layout(_) => true,
-            AppAction::Window(WindowAction::CloseActive) => true,
-            AppAction::Tab(TabAction::SwitchPrev | TabAction::SwitchNext) => {
-                self.state.tabs.len() > 1
-            }
-            AppAction::Tab(_) => true,
-            _ => false,
-        }
+        matches!(action, AppAction::Editor(_) | AppAction::Layout(_))
     }
 
     fn start_input_pump(&self) {

@@ -148,10 +148,6 @@ impl AppState {
         })
     }
 
-    pub fn set_leader_key(&mut self, key: char) {
-        self.leader_key = key;
-    }
-
     pub fn open_new_tab(&mut self) -> TabId {
         let tab_id = self.insert_tab_after_active();
         self.switch_tab(tab_id);
@@ -909,10 +905,6 @@ impl AppState {
             }
         }
         true
-    }
-
-    pub fn set_cursor_scroll_threshold(&mut self, threshold: u16) {
-        self.cursor_scroll_threshold = threshold;
     }
 
     pub fn is_insert_mode(&self) -> bool {
@@ -2109,7 +2101,7 @@ mod tests {
         let mut state = test_state();
         set_active_buffer_text(&mut state, "1\n2\n3\n4\n5\n6");
         state.update_active_tab_layout(80, 4);
-        state.set_cursor_scroll_threshold(1);
+        state.cursor_scroll_threshold = 1;
 
         state.move_cursor_down();
         state.move_cursor_down();

@@ -5,8 +5,8 @@ use tracing::error;
 use tracing::info;
 
 use crate::action::{
-    AppAction, BufferAction, EditorAction, FileAction, LayoutAction, StatusAction, SystemAction,
-    TabAction, WindowAction,
+    AppAction, BufferAction, EditorAction, FileAction, LayoutAction, SystemAction, TabAction,
+    WindowAction,
 };
 use crate::io_gateway::IoGateway;
 use crate::state::{AppState, BufferSwitchDirection, FocusDirection, SplitAxis};
@@ -19,42 +19,9 @@ enum NormalKey {
     Ctrl(char),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NormalCommand {
-    EnterInsert,
-    AppendInsert,
-    OpenLineBelowInsert,
-    OpenLineAboveInsert,
-    EnterCommand,
-    EnterVisual,
-    MoveLeft,
-    MoveLineStart,
-    MoveLineEnd,
-    MoveDown,
-    MoveUp,
-    MoveRight,
-    SplitHorizontal,
-    SplitVertical,
-    CutCharToSlot,
-    PasteSlotAfterCursor,
-    DeleteCurrentLineToSlot,
-    NewTab,
-    CloseCurrentTab,
-    SwitchPrevTab,
-    SwitchNextTab,
-    SwitchPrevBuffer,
-    SwitchNextBuffer,
-    CloseActiveBuffer,
-    NewEmptyBuffer,
-    FocusWindowLeft,
-    FocusWindowDown,
-    FocusWindowUp,
-    FocusWindowRight,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 enum SequenceMatch {
-    Command(NormalCommand),
+    Action(AppAction),
     Pending,
     NoMatch,
 }
@@ -82,6 +49,9 @@ impl ActionHandler {
             AppAction::Editor(EditorAction::KeyPressed(key)) => {
                 return self.handle_key(state, io_gateway, key);
             }
+            AppAction::Editor(editor_action) => {
+                self.apply_editor_action(state, editor_action);
+            }
             AppAction::Layout(LayoutAction::SplitHorizontal) => {
                 state.split_active_window(SplitAxis::Horizontal);
             }
@@ -89,6 +59,19 @@ impl ActionHandler {
                 state.split_active_window(SplitAxis::Vertical);
             }
             AppAction::Layout(LayoutAction::ViewportResized { .. }) => {}
+            AppAction::Window(WindowAction::FocusLeft) => state.focus_window(FocusDirection::Left),
+            AppAction::Window(WindowAction::FocusDown) => state.focus_window(FocusDirection::Down),
+            AppAction::Window(WindowAction::FocusUp) => state.focus_window(FocusDirection::Up),
+            AppAction::Window(WindowAction::FocusRight) => {
+                state.focus_window(FocusDirection::Right)
+            }
+            AppAction::Window(WindowAction::CloseActive) => state.close_active_window(),
+            AppAction::Buffer(BufferAction::SwitchPrev) => {
+                state.switch_active_window_buffer(BufferSwitchDirection::Prev);
+            }
+            AppAction::Buffer(BufferAction::SwitchNext) => {
+                state.switch_active_window_buffer(BufferSwitchDirection::Next);
+            }
             AppAction::Tab(TabAction::New) => {
                 state.open_new_tab();
             }
@@ -100,36 +83,6 @@ impl ActionHandler {
             }
             AppAction::Tab(TabAction::SwitchNext) => {
                 state.switch_to_next_tab();
-            }
-            AppAction::Window(WindowAction::FocusLeft) => {
-                state.focus_window(FocusDirection::Left);
-            }
-            AppAction::Window(WindowAction::FocusDown) => {
-                state.focus_window(FocusDirection::Down);
-            }
-            AppAction::Window(WindowAction::FocusUp) => {
-                state.focus_window(FocusDirection::Up);
-            }
-            AppAction::Window(WindowAction::FocusRight) => {
-                state.focus_window(FocusDirection::Right);
-            }
-            AppAction::Window(WindowAction::CloseActive) => {
-                state.close_active_window();
-            }
-            AppAction::Buffer(BufferAction::SwitchPrev) => {
-                state.switch_active_window_buffer(BufferSwitchDirection::Prev);
-            }
-            AppAction::Buffer(BufferAction::SwitchNext) => {
-                state.switch_active_window_buffer(BufferSwitchDirection::Next);
-            }
-            AppAction::Status(StatusAction::SetMode(mode)) => {
-                state.status_bar.mode = mode;
-            }
-            AppAction::Status(StatusAction::SetMessage(message)) => {
-                state.status_bar.message = message;
-            }
-            AppAction::Status(StatusAction::ClearMessage) => {
-                state.status_bar.message.clear();
             }
             AppAction::File(FileAction::LoadCompleted { buffer_id, result }) => match result {
                 Ok(text) => {
@@ -209,10 +162,15 @@ impl ActionHandler {
             return self.handle_insert_mode_key(state, key);
         }
 
-        self.handle_normal_mode_key(state, key)
+        self.handle_normal_mode_key(state, io_gateway, key)
     }
 
-    fn handle_normal_mode_key(&mut self, state: &mut AppState, key: KeyEvent) -> ControlFlow<()> {
+    fn handle_normal_mode_key(
+        &mut self,
+        state: &mut AppState,
+        io_gateway: &IoGateway,
+        key: KeyEvent,
+    ) -> ControlFlow<()> {
         let Some(normal_key) = Self::to_normal_key(state, key) else {
             self.normal_sequence.clear();
             state.status_bar.key_sequence.clear();
@@ -223,11 +181,10 @@ impl ActionHandler {
 
         loop {
             match Self::resolve_normal_sequence(&self.normal_sequence) {
-                SequenceMatch::Command(command) => {
+                SequenceMatch::Action(action) => {
                     self.normal_sequence.clear();
                     state.status_bar.key_sequence.clear();
-                    self.apply_normal_command(state, command);
-                    return ControlFlow::Continue(());
+                    return self.apply(state, io_gateway, action);
                 }
                 SequenceMatch::Pending => {
                     state.status_bar.key_sequence =
@@ -280,46 +237,73 @@ impl ActionHandler {
     }
 
     fn resolve_normal_sequence(keys: &[NormalKey]) -> SequenceMatch {
-        use NormalCommand as C;
         use NormalKey as K;
 
         match keys {
             [K::Leader] => SequenceMatch::Pending,
             [K::Leader, K::Char('w')] => SequenceMatch::Pending,
-            [K::Leader, K::Char('w'), K::Char('v')] => SequenceMatch::Command(C::SplitVertical),
-            [K::Leader, K::Char('w'), K::Char('h')] => SequenceMatch::Command(C::SplitHorizontal),
+            [K::Leader, K::Char('w'), K::Char('v')] => {
+                SequenceMatch::Action(AppAction::Layout(LayoutAction::SplitVertical))
+            }
+            [K::Leader, K::Char('w'), K::Char('h')] => {
+                SequenceMatch::Action(AppAction::Layout(LayoutAction::SplitHorizontal))
+            }
             [K::Leader, K::Tab] => SequenceMatch::Pending,
-            [K::Leader, K::Tab, K::Char('n')] => SequenceMatch::Command(C::NewTab),
-            [K::Leader, K::Tab, K::Char('d')] => SequenceMatch::Command(C::CloseCurrentTab),
-            [K::Leader, K::Tab, K::Char('[')] => SequenceMatch::Command(C::SwitchPrevTab),
-            [K::Leader, K::Tab, K::Char(']')] => SequenceMatch::Command(C::SwitchNextTab),
+            [K::Leader, K::Tab, K::Char('n')] => {
+                SequenceMatch::Action(AppAction::Tab(TabAction::New))
+            }
+            [K::Leader, K::Tab, K::Char('d')] => {
+                SequenceMatch::Action(AppAction::Tab(TabAction::CloseCurrent))
+            }
+            [K::Leader, K::Tab, K::Char('[')] => {
+                SequenceMatch::Action(AppAction::Tab(TabAction::SwitchPrev))
+            }
+            [K::Leader, K::Tab, K::Char(']')] => {
+                SequenceMatch::Action(AppAction::Tab(TabAction::SwitchNext))
+            }
             [K::Leader, K::Char('b')] => SequenceMatch::Pending,
-            [K::Leader, K::Char('b'), K::Char('d')] => SequenceMatch::Command(C::CloseActiveBuffer),
-            [K::Leader, K::Char('b'), K::Char('n')] => SequenceMatch::Command(C::NewEmptyBuffer),
+            [K::Leader, K::Char('b'), K::Char('d')] => {
+                SequenceMatch::Action(AppAction::Editor(EditorAction::CloseActiveBuffer))
+            }
+            [K::Leader, K::Char('b'), K::Char('n')] => {
+                SequenceMatch::Action(AppAction::Editor(EditorAction::NewEmptyBuffer))
+            }
             [K::Char('d')] => SequenceMatch::Pending,
-            [K::Char('d'), K::Char('d')] => SequenceMatch::Command(C::DeleteCurrentLineToSlot),
-            [K::Char('i')] => SequenceMatch::Command(C::EnterInsert),
-            [K::Char('a')] => SequenceMatch::Command(C::AppendInsert),
-            [K::Char('o')] => SequenceMatch::Command(C::OpenLineBelowInsert),
-            [K::Char('O')] => SequenceMatch::Command(C::OpenLineAboveInsert),
-            [K::Char(':')] => SequenceMatch::Command(C::EnterCommand),
-            [K::Char('v')] => SequenceMatch::Command(C::EnterVisual),
-            [K::Char('h')] => SequenceMatch::Command(C::MoveLeft),
-            [K::Char('0')] => SequenceMatch::Command(C::MoveLineStart),
-            [K::Char('$')] => SequenceMatch::Command(C::MoveLineEnd),
-            [K::Char('j')] => SequenceMatch::Command(C::MoveDown),
-            [K::Char('k')] => SequenceMatch::Command(C::MoveUp),
-            [K::Char('l')] => SequenceMatch::Command(C::MoveRight),
-            [K::Char('x')] => SequenceMatch::Command(C::CutCharToSlot),
-            [K::Char('p')] => SequenceMatch::Command(C::PasteSlotAfterCursor),
-            [K::Char('H')] => SequenceMatch::Command(C::SwitchPrevBuffer),
-            [K::Char('L')] => SequenceMatch::Command(C::SwitchNextBuffer),
-            [K::Char('{')] => SequenceMatch::Command(C::SwitchPrevBuffer),
-            [K::Char('}')] => SequenceMatch::Command(C::SwitchNextBuffer),
-            [K::Ctrl('h')] => SequenceMatch::Command(C::FocusWindowLeft),
-            [K::Ctrl('j')] => SequenceMatch::Command(C::FocusWindowDown),
-            [K::Ctrl('k')] => SequenceMatch::Command(C::FocusWindowUp),
-            [K::Ctrl('l')] => SequenceMatch::Command(C::FocusWindowRight),
+            [K::Char('d'), K::Char('d')] => {
+                SequenceMatch::Action(AppAction::Editor(EditorAction::DeleteCurrentLineToSlot))
+            }
+            [K::Char('i')] => SequenceMatch::Action(AppAction::Editor(EditorAction::EnterInsert)),
+            [K::Char('a')] => SequenceMatch::Action(AppAction::Editor(EditorAction::AppendInsert)),
+            [K::Char('o')] => {
+                SequenceMatch::Action(AppAction::Editor(EditorAction::OpenLineBelowInsert))
+            }
+            [K::Char('O')] => {
+                SequenceMatch::Action(AppAction::Editor(EditorAction::OpenLineAboveInsert))
+            }
+            [K::Char(':')] => {
+                SequenceMatch::Action(AppAction::Editor(EditorAction::EnterCommandMode))
+            }
+            [K::Char('v')] => {
+                SequenceMatch::Action(AppAction::Editor(EditorAction::EnterVisualMode))
+            }
+            [K::Char('h')] => SequenceMatch::Action(AppAction::Editor(EditorAction::MoveLeft)),
+            [K::Char('0')] => SequenceMatch::Action(AppAction::Editor(EditorAction::MoveLineStart)),
+            [K::Char('$')] => SequenceMatch::Action(AppAction::Editor(EditorAction::MoveLineEnd)),
+            [K::Char('j')] => SequenceMatch::Action(AppAction::Editor(EditorAction::MoveDown)),
+            [K::Char('k')] => SequenceMatch::Action(AppAction::Editor(EditorAction::MoveUp)),
+            [K::Char('l')] => SequenceMatch::Action(AppAction::Editor(EditorAction::MoveRight)),
+            [K::Char('x')] => SequenceMatch::Action(AppAction::Editor(EditorAction::CutCharToSlot)),
+            [K::Char('p')] => {
+                SequenceMatch::Action(AppAction::Editor(EditorAction::PasteSlotAfterCursor))
+            }
+            [K::Char('H')] => SequenceMatch::Action(AppAction::Buffer(BufferAction::SwitchPrev)),
+            [K::Char('L')] => SequenceMatch::Action(AppAction::Buffer(BufferAction::SwitchNext)),
+            [K::Char('{')] => SequenceMatch::Action(AppAction::Buffer(BufferAction::SwitchPrev)),
+            [K::Char('}')] => SequenceMatch::Action(AppAction::Buffer(BufferAction::SwitchNext)),
+            [K::Ctrl('h')] => SequenceMatch::Action(AppAction::Window(WindowAction::FocusLeft)),
+            [K::Ctrl('j')] => SequenceMatch::Action(AppAction::Window(WindowAction::FocusDown)),
+            [K::Ctrl('k')] => SequenceMatch::Action(AppAction::Window(WindowAction::FocusUp)),
+            [K::Ctrl('l')] => SequenceMatch::Action(AppAction::Window(WindowAction::FocusRight)),
             _ => SequenceMatch::NoMatch,
         }
     }
@@ -336,62 +320,37 @@ impl ActionHandler {
             .join("")
     }
 
-    fn apply_normal_command(&self, state: &mut AppState, command: NormalCommand) {
-        match command {
-            NormalCommand::EnterInsert => state.enter_insert_mode(),
-            NormalCommand::AppendInsert => {
+    fn apply_editor_action(&self, state: &mut AppState, action: EditorAction) {
+        match action {
+            EditorAction::KeyPressed(_) => {}
+            EditorAction::EnterInsert => state.enter_insert_mode(),
+            EditorAction::AppendInsert => {
                 state.move_cursor_right();
                 state.enter_insert_mode();
             }
-            NormalCommand::OpenLineBelowInsert => {
+            EditorAction::OpenLineBelowInsert => {
                 state.open_line_below_at_cursor();
                 state.enter_insert_mode();
             }
-            NormalCommand::OpenLineAboveInsert => {
+            EditorAction::OpenLineAboveInsert => {
                 state.open_line_above_at_cursor();
                 state.enter_insert_mode();
             }
-            NormalCommand::EnterCommand => state.enter_command_mode(),
-            NormalCommand::EnterVisual => state.enter_visual_mode(),
-            NormalCommand::MoveLeft => state.move_cursor_left(),
-            NormalCommand::MoveLineStart => state.move_cursor_line_start(),
-            NormalCommand::MoveLineEnd => state.move_cursor_line_end(),
-            NormalCommand::MoveDown => state.move_cursor_down(),
-            NormalCommand::MoveUp => state.move_cursor_up(),
-            NormalCommand::MoveRight => state.move_cursor_right(),
-            NormalCommand::SplitHorizontal => state.split_active_window(SplitAxis::Horizontal),
-            NormalCommand::SplitVertical => state.split_active_window(SplitAxis::Vertical),
-            NormalCommand::CutCharToSlot => state.cut_current_char_to_slot(),
-            NormalCommand::PasteSlotAfterCursor => state.paste_slot_at_cursor(),
-            NormalCommand::DeleteCurrentLineToSlot => state.delete_current_line_to_slot(),
-            NormalCommand::NewTab => {
-                state.open_new_tab();
-            }
-            NormalCommand::CloseCurrentTab => {
-                state.close_current_tab();
-            }
-            NormalCommand::SwitchPrevTab => {
-                state.switch_to_prev_tab();
-            }
-            NormalCommand::SwitchNextTab => {
-                state.switch_to_next_tab();
-            }
-            NormalCommand::SwitchPrevBuffer => {
-                state.switch_active_window_buffer(BufferSwitchDirection::Prev);
-            }
-            NormalCommand::SwitchNextBuffer => {
-                state.switch_active_window_buffer(BufferSwitchDirection::Next);
-            }
-            NormalCommand::CloseActiveBuffer => {
-                state.close_active_buffer();
-            }
-            NormalCommand::NewEmptyBuffer => {
+            EditorAction::EnterCommandMode => state.enter_command_mode(),
+            EditorAction::EnterVisualMode => state.enter_visual_mode(),
+            EditorAction::MoveLeft => state.move_cursor_left(),
+            EditorAction::MoveLineStart => state.move_cursor_line_start(),
+            EditorAction::MoveLineEnd => state.move_cursor_line_end(),
+            EditorAction::MoveDown => state.move_cursor_down(),
+            EditorAction::MoveUp => state.move_cursor_up(),
+            EditorAction::MoveRight => state.move_cursor_right(),
+            EditorAction::CutCharToSlot => state.cut_current_char_to_slot(),
+            EditorAction::PasteSlotAfterCursor => state.paste_slot_at_cursor(),
+            EditorAction::DeleteCurrentLineToSlot => state.delete_current_line_to_slot(),
+            EditorAction::CloseActiveBuffer => state.close_active_buffer(),
+            EditorAction::NewEmptyBuffer => {
                 state.create_and_bind_empty_buffer();
             }
-            NormalCommand::FocusWindowLeft => state.focus_window(FocusDirection::Left),
-            NormalCommand::FocusWindowDown => state.focus_window(FocusDirection::Down),
-            NormalCommand::FocusWindowUp => state.focus_window(FocusDirection::Up),
-            NormalCommand::FocusWindowRight => state.focus_window(FocusDirection::Right),
         }
     }
 
@@ -447,7 +406,7 @@ impl ActionHandler {
     }
 
     fn handle_command_mode_key(
-        &self,
+        &mut self,
         state: &mut AppState,
         io_gateway: &IoGateway,
         key: KeyEvent,
@@ -462,14 +421,32 @@ impl ActionHandler {
                 let command = state.take_command_line();
                 match command.as_str() {
                     "" => {}
-                    "qa" => return ControlFlow::Break(()),
+                    "qa" => {
+                        return self.apply(
+                            state,
+                            io_gateway,
+                            AppAction::System(SystemAction::Quit),
+                        );
+                    }
                     "q" | "quit" => {
                         if state.active_tab_window_ids().len() > 1 {
-                            state.close_active_window();
+                            return self.apply(
+                                state,
+                                io_gateway,
+                                AppAction::Window(WindowAction::CloseActive),
+                            );
                         } else if state.tabs.len() > 1 {
-                            state.close_current_tab();
+                            return self.apply(
+                                state,
+                                io_gateway,
+                                AppAction::Tab(TabAction::CloseCurrent),
+                            );
                         } else {
-                            return ControlFlow::Break(());
+                            return self.apply(
+                                state,
+                                io_gateway,
+                                AppAction::System(SystemAction::Quit),
+                            );
                         }
                     }
                     "w" => {
@@ -592,14 +569,15 @@ impl ActionHandler {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActionHandler, NormalCommand, NormalKey, SequenceMatch};
+    use super::{ActionHandler, NormalKey, SequenceMatch};
+    use crate::action::{AppAction, BufferAction, EditorAction, LayoutAction, TabAction};
     use crate::state::AppState;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     #[test]
     fn to_normal_key_should_map_leader_char_to_leader_token() {
         let mut state = AppState::new();
-        state.set_leader_key(' ');
+        state.leader_key = ' ';
         let key = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
 
         let mapped = ActionHandler::to_normal_key(&state, key);
@@ -610,7 +588,7 @@ mod tests {
     fn resolve_normal_sequence_should_keep_leader_w_pending() {
         let seq = vec![NormalKey::Leader, NormalKey::Char('w')];
         let resolved = ActionHandler::resolve_normal_sequence(&seq);
-        assert_eq!(resolved, SequenceMatch::Pending);
+        assert!(matches!(resolved, SequenceMatch::Pending));
     }
 
     #[test]
@@ -621,10 +599,10 @@ mod tests {
             NormalKey::Char('v'),
         ];
         let resolved = ActionHandler::resolve_normal_sequence(&seq);
-        assert_eq!(
+        assert!(matches!(
             resolved,
-            SequenceMatch::Command(NormalCommand::SplitVertical)
-        );
+            SequenceMatch::Action(AppAction::Layout(LayoutAction::SplitVertical))
+        ));
     }
 
     #[test]
@@ -635,67 +613,70 @@ mod tests {
             NormalKey::Char('h'),
         ];
         let resolved = ActionHandler::resolve_normal_sequence(&seq);
-        assert_eq!(
+        assert!(matches!(
             resolved,
-            SequenceMatch::Command(NormalCommand::SplitHorizontal)
-        );
+            SequenceMatch::Action(AppAction::Layout(LayoutAction::SplitHorizontal))
+        ));
     }
 
     #[test]
     fn resolve_normal_sequence_should_map_leader_tab_n_to_new_tab() {
         let seq = vec![NormalKey::Leader, NormalKey::Tab, NormalKey::Char('n')];
         let resolved = ActionHandler::resolve_normal_sequence(&seq);
-        assert_eq!(resolved, SequenceMatch::Command(NormalCommand::NewTab));
+        assert!(matches!(
+            resolved,
+            SequenceMatch::Action(AppAction::Tab(TabAction::New))
+        ));
     }
 
     #[test]
     fn resolve_normal_sequence_should_map_leader_tab_d_to_close_tab() {
         let seq = vec![NormalKey::Leader, NormalKey::Tab, NormalKey::Char('d')];
         let resolved = ActionHandler::resolve_normal_sequence(&seq);
-        assert_eq!(
+        assert!(matches!(
             resolved,
-            SequenceMatch::Command(NormalCommand::CloseCurrentTab)
-        );
+            SequenceMatch::Action(AppAction::Tab(TabAction::CloseCurrent))
+        ));
     }
 
     #[test]
     fn resolve_normal_sequence_should_map_leader_tab_left_bracket_to_prev_tab() {
         let seq = vec![NormalKey::Leader, NormalKey::Tab, NormalKey::Char('[')];
         let resolved = ActionHandler::resolve_normal_sequence(&seq);
-        assert_eq!(
+        assert!(matches!(
             resolved,
-            SequenceMatch::Command(NormalCommand::SwitchPrevTab)
-        );
+            SequenceMatch::Action(AppAction::Tab(TabAction::SwitchPrev))
+        ));
     }
 
     #[test]
     fn resolve_normal_sequence_should_map_leader_tab_right_bracket_to_next_tab() {
         let seq = vec![NormalKey::Leader, NormalKey::Tab, NormalKey::Char(']')];
         let resolved = ActionHandler::resolve_normal_sequence(&seq);
-        assert_eq!(
+        assert!(matches!(
             resolved,
-            SequenceMatch::Command(NormalCommand::SwitchNextTab)
-        );
+            SequenceMatch::Action(AppAction::Tab(TabAction::SwitchNext))
+        ));
     }
 
     #[test]
     fn resolve_normal_sequence_should_map_upper_h_to_prev_buffer() {
         let seq = vec![NormalKey::Char('H')];
         let resolved = ActionHandler::resolve_normal_sequence(&seq);
-        assert_eq!(
+        assert!(matches!(
             resolved,
-            SequenceMatch::Command(NormalCommand::SwitchPrevBuffer)
-        );
+            SequenceMatch::Action(AppAction::Buffer(BufferAction::SwitchPrev))
+        ));
     }
 
     #[test]
     fn resolve_normal_sequence_should_map_upper_l_to_next_buffer() {
         let seq = vec![NormalKey::Char('L')];
         let resolved = ActionHandler::resolve_normal_sequence(&seq);
-        assert_eq!(
+        assert!(matches!(
             resolved,
-            SequenceMatch::Command(NormalCommand::SwitchNextBuffer)
-        );
+            SequenceMatch::Action(AppAction::Buffer(BufferAction::SwitchNext))
+        ));
     }
 
     #[test]
@@ -706,10 +687,10 @@ mod tests {
             NormalKey::Char('d'),
         ];
         let resolved = ActionHandler::resolve_normal_sequence(&seq);
-        assert_eq!(
+        assert!(matches!(
             resolved,
-            SequenceMatch::Command(NormalCommand::CloseActiveBuffer)
-        );
+            SequenceMatch::Action(AppAction::Editor(EditorAction::CloseActiveBuffer))
+        ));
     }
 
     #[test]
@@ -720,9 +701,9 @@ mod tests {
             NormalKey::Char('n'),
         ];
         let resolved = ActionHandler::resolve_normal_sequence(&seq);
-        assert_eq!(
+        assert!(matches!(
             resolved,
-            SequenceMatch::Command(NormalCommand::NewEmptyBuffer)
-        );
+            SequenceMatch::Action(AppAction::Editor(EditorAction::NewEmptyBuffer))
+        ));
     }
 }
