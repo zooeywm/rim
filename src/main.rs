@@ -1,30 +1,22 @@
-mod action;
-mod action_handler;
-mod app;
-mod input;
-mod io_gateway;
-mod logging;
-mod state;
-mod ui;
-
-use std::io;
 use std::path::PathBuf;
 
-use app::App;
+use anyhow::{Context, Result};
+use rim::app::App;
+use rim::logging;
 
-fn main() -> io::Result<()> {
-    logging::init_logging()?;
+fn main() {
+    if let Err(err) = run() {
+        eprintln!("{:#}", err);
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<()> {
+    logging::init_logging().context("initialize logging failed")?;
     let file_paths = std::env::args()
         .skip(1)
         .map(PathBuf::from)
         .collect::<Vec<_>>();
-    let mut app = App::new()?;
-    if file_paths.is_empty() {
-        app.create_untitled_buffer();
-    } else {
-        for path in file_paths {
-            app.open_file(path)?;
-        }
-    }
-    app.run()
+    let app = App::new().context("initialize app failed")?;
+    app.run(file_paths).context("run app failed")
 }

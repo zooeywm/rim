@@ -73,10 +73,18 @@ impl WindowAreaWidget {
                 continue;
             }
 
-            let number_col_width = if local_rect.width <= 5 {
+            let content = window
+                .buffer_id
+                .and_then(|buffer_id| state.buffers.get(buffer_id))
+                .map(|buf| buf.text.as_str())
+                .unwrap_or("");
+            let logical_lines = logical_lines_with_newline_info(content);
+            let total_lines = logical_lines.len().max(1);
+            let desired_number_col_width = total_lines.to_string().len() as u16 + 1;
+            let number_col_width = if local_rect.width <= desired_number_col_width {
                 0
             } else {
-                local_rect.width.min(5)
+                desired_number_col_width
             };
             let text_width = local_rect.width.saturating_sub(number_col_width);
             if text_width == 0 {
@@ -90,62 +98,66 @@ impl WindowAreaWidget {
                 height: local_rect.height,
             };
 
-            let content = window
-                .buffer_id
-                .and_then(|buffer_id| state.buffers.get(buffer_id))
-                .map(|buf| buf.text.as_str())
-                .unwrap_or("");
             let scroll_y = window.scroll_y as usize;
             let scroll_x = window.scroll_x as usize;
             let visible_rows = local_rect.height as usize;
             let line_numbers_text = if number_col_width == 0 {
                 String::new()
             } else {
-                content
-                    .lines()
+                logical_lines
+                    .iter()
                     .enumerate()
                     .skip(scroll_y)
                     .take(visible_rows)
-                    .map(|(i, _)| format!("{:>4} ", i + 1))
+                    .map(|(i, _)| {
+                        format!(
+                            "{:>width$} ",
+                            i + 1,
+                            width = number_col_width.saturating_sub(1) as usize
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join("\n")
             };
-            let text_text = content
-                .lines()
+            let text_text = logical_lines
+                .iter()
                 .skip(scroll_y)
                 .take(visible_rows)
-                .map(|line| visible_slice_by_display_width(line, scroll_x, text_width as usize))
+                .map(|line| {
+                    let rendered = render_line_for_display(line.text, line.has_newline);
+                    visible_slice_by_display_width(&rendered, scroll_x, text_width as usize)
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
 
             if state.active_window_id() == window_id {
                 let cursor = state.active_cursor();
                 let line_idx = cursor.row.saturating_sub(1) as usize;
-                let active_line = content.lines().nth(line_idx).unwrap_or("");
+                let active_line = logical_lines
+                    .get(line_idx)
+                    .map(|line| line.text)
+                    .unwrap_or("");
                 let cursor_col_chars = cursor.col.saturating_sub(1) as usize;
                 let cursor_display_col =
                     display_width_of_char_prefix(active_line, cursor_col_chars);
-                let cursor_x_offset = cursor_display_col
-                    .saturating_sub(scroll_x)
-                    .min(text_rect.width.saturating_sub(1) as usize)
-                    as u16;
-                let cursor_x_local = text_rect.x.saturating_add(cursor_x_offset).min(
-                    text_rect
-                        .x
-                        .saturating_add(text_rect.width.saturating_sub(1)),
-                );
-                let cursor_y_local = text_rect
-                    .y
-                    .saturating_add(cursor.row.saturating_sub(1).saturating_sub(window.scroll_y))
-                    .min(
-                        text_rect
-                            .y
-                            .saturating_add(text_rect.height.saturating_sub(1)),
-                    );
-                cursor_position = Some((
-                    content_area.x.saturating_add(cursor_x_local),
-                    content_area.y.saturating_add(cursor_y_local),
-                ));
+                let cursor_line = cursor.row.saturating_sub(1);
+                let row_in_view = cursor_line >= window.scroll_y
+                    && cursor_line < window.scroll_y.saturating_add(text_rect.height);
+                let col_in_view_left = cursor_display_col >= scroll_x;
+                if row_in_view && col_in_view_left {
+                    let cursor_x_offset = cursor_display_col
+                        .saturating_sub(scroll_x)
+                        .min(text_rect.width.saturating_sub(1) as usize)
+                        as u16;
+                    let cursor_x_local = text_rect.x.saturating_add(cursor_x_offset);
+                    let cursor_y_local = text_rect
+                        .y
+                        .saturating_add(cursor_line.saturating_sub(window.scroll_y));
+                    cursor_position = Some((
+                        content_area.x.saturating_add(cursor_x_local),
+                        content_area.y.saturating_add(cursor_y_local),
+                    ));
+                }
 
                 if state.is_visual_mode()
                     && let Some(anchor) = state.visual_anchor
@@ -180,6 +192,50 @@ impl WindowAreaWidget {
             },
             cursor_position,
         )
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LogicalLine<'a> {
+    text: &'a str,
+    has_newline: bool,
+}
+
+fn logical_lines_with_newline_info(content: &str) -> Vec<LogicalLine<'_>> {
+    let mut lines = content
+        .lines()
+        .map(|line| LogicalLine {
+            text: line,
+            has_newline: false,
+        })
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        lines.push(LogicalLine {
+            text: "",
+            has_newline: false,
+        });
+        return lines;
+    }
+    let len = lines.len();
+    for line in lines.iter_mut().take(len.saturating_sub(1)) {
+        line.has_newline = true;
+    }
+    if content.ends_with('\n')
+        && let Some(last) = lines.last_mut()
+    {
+        last.has_newline = true;
+    }
+    lines
+}
+
+fn render_line_for_display(line: &str, has_newline: bool) -> String {
+    if has_newline {
+        let mut rendered = String::with_capacity(line.len().saturating_add(3));
+        rendered.push_str(line);
+        rendered.push(' ');
+        rendered
+    } else {
+        line.to_string()
     }
 }
 
@@ -347,40 +403,48 @@ fn collect_visual_selection_segments(
     let last_visible_row = scroll_y.saturating_add(text_rect.height);
     let visible_right_exclusive = scroll_x.saturating_add(text_rect.width);
 
+    let logical_lines = logical_lines_with_newline_info(content);
     for row in start.row..=end.row {
         if row < first_visible_row || row > last_visible_row {
             continue;
         }
-        let line = content
-            .split('\n')
-            .nth(row.saturating_sub(1) as usize)
-            .unwrap_or("");
+        let Some(logical_line) = logical_lines.get(row.saturating_sub(1) as usize) else {
+            continue;
+        };
+        let line = logical_line.text;
         let line_len = line.chars().count() as u16;
-        if line_len == 0 {
+        let selectable_len = if logical_line.has_newline {
+            line_len.saturating_add(1)
+        } else {
+            line_len
+        };
+        if selectable_len == 0 {
             continue;
         }
 
         let (mut col_start, mut col_end) = if line_wise {
-            (1, line_len)
+            (1, selectable_len)
         } else if start.row == end.row {
             (start.col, end.col)
         } else if row == start.row {
-            (start.col, line_len)
+            (start.col, selectable_len)
         } else if row == end.row {
             (1, end.col)
         } else {
-            (1, line_len)
+            (1, selectable_len)
         };
 
-        col_start = col_start.max(1).min(line_len);
-        col_end = col_end.max(1).min(line_len);
+        col_start = col_start.max(1).min(selectable_len.max(1));
+        col_end = col_end.max(1).min(selectable_len.max(1));
         if col_start > col_end {
             continue;
         }
 
+        let rendered_line = render_line_for_display(line, logical_line.has_newline);
         let start_display =
-            display_width_of_char_prefix(line, col_start.saturating_sub(1) as usize) as u16;
-        let end_display = display_width_of_char_prefix(line, col_end as usize) as u16;
+            display_width_of_char_prefix(&rendered_line, col_start.saturating_sub(1) as usize)
+                as u16;
+        let end_display = display_width_of_char_prefix(&rendered_line, col_end as usize) as u16;
         let seg_start = start_display.max(scroll_x);
         let seg_end = end_display.min(visible_right_exclusive);
         if seg_start >= seg_end {
@@ -507,127 +571,4 @@ fn symbol_from_dirs(dirs: u8) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{DIR_DOWN, DIR_LEFT, DIR_RIGHT, DIR_UP, dirs_from_symbol, symbol_from_dirs};
-    use super::{SelectionSegment, collect_visual_selection_segments};
-    use super::{display_width_of_char_prefix, visible_slice_by_display_width};
-    use crate::state::CursorState;
-    use ratatui::layout::Rect;
-
-    fn merged_symbol(existing: &str, add_dirs: u8) -> &'static str {
-        symbol_from_dirs(dirs_from_symbol(existing) | add_dirs)
-    }
-
-    #[test]
-    fn symbol_and_dir_mapping_table() {
-        let cases = [
-            ("│", DIR_UP | DIR_DOWN),
-            ("─", DIR_LEFT | DIR_RIGHT),
-            ("├", DIR_UP | DIR_DOWN | DIR_RIGHT),
-            ("┤", DIR_UP | DIR_DOWN | DIR_LEFT),
-            ("┬", DIR_LEFT | DIR_RIGHT | DIR_DOWN),
-            ("┴", DIR_LEFT | DIR_RIGHT | DIR_UP),
-            ("┼", DIR_UP | DIR_DOWN | DIR_LEFT | DIR_RIGHT),
-        ];
-
-        for (symbol, dirs) in cases {
-            assert_eq!(dirs_from_symbol(symbol), dirs);
-            assert_eq!(symbol_from_dirs(dirs), symbol);
-        }
-    }
-
-    #[test]
-    fn merge_table_for_common_intersections() {
-        let cases = [
-            ("─", DIR_DOWN, "┬"),
-            ("─", DIR_UP, "┴"),
-            ("─", DIR_UP | DIR_DOWN, "┼"),
-            ("│", DIR_LEFT, "┤"),
-            ("│", DIR_RIGHT, "├"),
-        ];
-
-        for (existing, add_dirs, expected) in cases {
-            assert_eq!(merged_symbol(existing, add_dirs), expected);
-        }
-    }
-
-    #[test]
-    fn merge_table_for_recent_regressions() {
-        let cases = [
-            // set_right_tee_cell: DIR_UP | DIR_RIGHT
-            ("─", DIR_UP | DIR_RIGHT, "┴"),
-            // set_left_tee_cell: DIR_UP | DIR_LEFT
-            ("─", DIR_UP | DIR_LEFT, "┴"),
-        ];
-
-        for (existing, add_dirs, expected) in cases {
-            assert_eq!(merged_symbol(existing, add_dirs), expected);
-        }
-    }
-
-    #[test]
-    fn display_width_prefix_counts_wide_chars() {
-        let line = "a中b";
-        assert_eq!(display_width_of_char_prefix(line, 1), 1);
-        assert_eq!(display_width_of_char_prefix(line, 2), 3);
-        assert_eq!(display_width_of_char_prefix(line, 3), 4);
-    }
-
-    #[test]
-    fn visible_slice_uses_display_columns() {
-        let line = "a中bc";
-        assert_eq!(visible_slice_by_display_width(line, 0, 3), "a中");
-        assert_eq!(visible_slice_by_display_width(line, 1, 2), "中");
-        assert_eq!(visible_slice_by_display_width(line, 3, 2), "bc");
-    }
-
-    #[test]
-    fn visual_segments_should_cover_range_in_single_line() {
-        let content = "abcdef";
-        let text_rect = Rect {
-            x: 0,
-            y: 0,
-            width: 10,
-            height: 1,
-        };
-        let segments = collect_visual_selection_segments(
-            content,
-            text_rect,
-            0,
-            0,
-            CursorState { row: 1, col: 2 },
-            CursorState { row: 1, col: 4 },
-            false,
-        );
-        assert_eq!(segments.len(), 1);
-        let SelectionSegment { x_start, x_end, y } = segments[0];
-        assert_eq!(y, 0);
-        assert_eq!(x_start, 1);
-        assert_eq!(x_end, 4);
-    }
-
-    #[test]
-    fn visual_line_segments_should_cover_entire_line_width() {
-        let content = "abcdef";
-        let text_rect = Rect {
-            x: 0,
-            y: 0,
-            width: 10,
-            height: 1,
-        };
-        let segments = collect_visual_selection_segments(
-            content,
-            text_rect,
-            0,
-            0,
-            CursorState { row: 1, col: 3 },
-            CursorState { row: 1, col: 3 },
-            true,
-        );
-        assert_eq!(segments.len(), 1);
-        let SelectionSegment { x_start, x_end, y } = segments[0];
-        assert_eq!(y, 0);
-        assert_eq!(x_start, 0);
-        assert_eq!(x_end, 6);
-    }
-}
+mod tests;

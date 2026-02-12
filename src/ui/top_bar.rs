@@ -3,7 +3,6 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
-use slotmap::Key;
 
 use crate::state::AppState;
 
@@ -19,12 +18,11 @@ impl TopBarWidget {
         let active_buffer_id = state.active_buffer_id();
         let active_tab_id = state.active_tab;
 
-        let mut buffer_items = state
-            .buffers
+        let buffer_items = state
+            .buffer_order
             .iter()
-            .map(|(id, buf)| (id, buf.name.clone()))
+            .filter_map(|id| state.buffers.get(*id).map(|buf| (*id, buf.name.clone())))
             .collect::<Vec<_>>();
-        buffer_items.sort_by_key(|(id, _)| id.data().as_ffi());
 
         let mut buffer_spans = Vec::new();
         for (idx, (id, name)) in buffer_items.iter().enumerate() {

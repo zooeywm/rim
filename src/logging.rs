@@ -1,12 +1,30 @@
-use std::io;
 use std::path::PathBuf;
 
+use thiserror::Error;
 use time::macros::format_description;
 use tracing_subscriber::fmt::time::UtcTime;
 
-pub fn init_logging() -> io::Result<()> {
+#[derive(Debug, Error)]
+pub enum LoggingError {
+    #[error("create log directory failed: {path}")]
+    CreateLogDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("initialize tracing subscriber failed")]
+    InitSubscriber {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+}
+
+pub fn init_logging() -> Result<(), LoggingError> {
     let log_dir = user_log_dir();
-    std::fs::create_dir_all(&log_dir)?;
+    std::fs::create_dir_all(&log_dir).map_err(|source| LoggingError::CreateLogDir {
+        path: log_dir.clone(),
+        source,
+    })?;
 
     let timer = UtcTime::new(format_description!(
         "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"
@@ -20,7 +38,8 @@ pub fn init_logging() -> io::Result<()> {
         )
         .with_writer(file_appender)
         .with_ansi(false)
-        .init();
+        .try_init()
+        .map_err(|source| LoggingError::InitSubscriber { source })?;
 
     Ok(())
 }

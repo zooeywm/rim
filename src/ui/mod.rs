@@ -1,4 +1,5 @@
 mod status_bar;
+mod terminal_session;
 mod top_bar;
 mod window_area;
 
@@ -6,6 +7,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 
 use crate::state::AppState;
 use status_bar::StatusBarWidget;
+pub(crate) use terminal_session::TerminalSession;
 use top_bar::TopBarWidget;
 use window_area::WindowAreaWidget;
 
@@ -45,13 +47,18 @@ impl Renderer {
         frame.render_widget(top_bar, chunks[0]);
         frame.render_widget(window_area, chunks[1]);
         frame.render_widget(status_bar, chunks[2]);
-
-        if let Some((x, y)) = cursor_position {
-            frame.set_cursor_position((x, y));
+        if let Some(cursor_to_draw) = cursor_position {
+            frame.set_cursor_position(cursor_to_draw);
         }
     }
 
     pub fn mark_layout_dirty(&mut self) {
         self.last_content_area = None;
+    }
+}
+
+impl Default for Renderer {
+    fn default() -> Self {
+        Self::new()
     }
 }

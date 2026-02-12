@@ -1,4 +1,3 @@
-use std::io;
 use std::path::PathBuf;
 
 use crossterm::event::KeyEvent;
@@ -25,12 +24,20 @@ pub enum EditorAction {
     OpenLineAboveInsert,
     EnterCommandMode,
     EnterVisualMode,
+    EnterVisualLineMode,
     MoveLeft,
     MoveLineStart,
     MoveLineEnd,
     MoveDown,
     MoveUp,
     MoveRight,
+    MoveFileStart,
+    MoveFileEnd,
+    ScrollViewDown,
+    ScrollViewUp,
+    ScrollViewHalfPageDown,
+    ScrollViewHalfPageUp,
+    JoinLineBelow,
     CutCharToSlot,
     PasteSlotAfterCursor,
     DeleteCurrentLineToSlot,
@@ -73,14 +80,25 @@ pub enum FileAction {
     OpenRequested {
         path: PathBuf,
     },
+    ExternalChangeDetected {
+        buffer_id: BufferId,
+        path: PathBuf,
+    },
     LoadCompleted {
         buffer_id: BufferId,
-        result: io::Result<String>,
+        source: FileLoadSource,
+        result: anyhow::Result<String>,
     },
     SaveCompleted {
         buffer_id: BufferId,
-        result: io::Result<()>,
+        result: anyhow::Result<()>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileLoadSource {
+    Open,
+    External,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

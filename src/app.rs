@@ -1,110 +1,99 @@
-use std::io;
-use std::io::ErrorKind;
 use std::path::PathBuf;
-use std::thread;
 
-use crossterm::cursor::SetCursorStyle;
-use crossterm::event;
-use crossterm::execute;
-use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, SetTitle, disable_raw_mode, enable_raw_mode,
-};
-use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
-use tracing::error;
+use anyhow::{Context, Result};
 use tracing::trace;
 
 use crate::action::{AppAction, FileAction};
-use crate::action_handler::ActionHandler;
-use crate::input::InputHandler;
-use crate::io_gateway::IoGateway;
-use crate::state::{AppState, EditorMode};
-use crate::ui::Renderer;
+use crate::action_handler::{ActionHandler, ActionHandlerState};
+use crate::file_io_service::FileIoState;
+use crate::file_watcher_service::FileWatcherState;
+use crate::input::InputPumpService;
+use crate::state::AppState;
+use crate::ui::{Renderer, TerminalSession};
+use std::ops::ControlFlow;
 
+#[derive(derive_more::AsRef, derive_more::AsMut)]
 pub struct App {
-    state: AppState,
+    #[as_ref]
+    #[as_mut]
+    pub(super) state: crate::state::AppState,
     renderer: Renderer,
-    action_handler: ActionHandler,
-    io_gateway: IoGateway,
+    #[as_ref]
+    #[as_mut]
+    pub(super) action_handler: ActionHandlerState,
+    #[as_ref]
+    #[as_mut]
+    pub(super) file_io_service: crate::file_io_service::FileIoState,
+    #[as_ref]
+    #[as_mut]
+    pub(super) file_watcher_service: crate::file_watcher_service::FileWatcherState,
     event_tx: flume::Sender<AppAction>,
     event_rx: flume::Receiver<AppAction>,
 }
 
 impl App {
-    pub fn new() -> io::Result<Self> {
+    pub fn new() -> Result<Self> {
         let state = AppState::new();
 
         let (event_tx, event_rx) = flume::bounded(1024);
-        let io_gateway = IoGateway::start(event_tx.clone());
+        let file_io_service = FileIoState::start(event_tx.clone());
+        let file_watcher_service = FileWatcherState::start(event_tx.clone());
 
         Ok(Self {
             state,
             renderer: Renderer::new(),
-            action_handler: ActionHandler::new(),
-            io_gateway,
+            action_handler: ActionHandlerState::new(),
+            file_io_service,
+            file_watcher_service,
             event_tx,
             event_rx,
         })
     }
 
-    pub fn open_file(&mut self, path: PathBuf) -> io::Result<()> {
-        self.event_tx
-            .send(AppAction::File(FileAction::OpenRequested { path }))
-            .map_err(|err| {
-                error!("failed to enqueue OpenRequested action: {}", err);
-                io::Error::new(ErrorKind::BrokenPipe, "event bus disconnected")
-            })
+    fn bootstrap_files(&mut self, file_paths: Vec<PathBuf>) -> Result<()> {
+        if file_paths.is_empty() {
+            self.state.create_untitled_buffer();
+            return Ok(());
+        }
+        for path in file_paths {
+            self.event_tx
+                .send(AppAction::File(FileAction::OpenRequested { path }))
+                .context("event bus disconnected while enqueueing app action")?;
+        }
+        Ok(())
     }
 
-    pub fn create_untitled_buffer(&mut self) {
-        let buffer_id = self.state.create_buffer(None, String::new());
-        self.state.bind_buffer_to_active_window(buffer_id);
-        self.state.status_bar.message = "new file".to_string();
-    }
-
-    pub fn run(mut self) -> io::Result<()> {
-        enable_raw_mode()?;
-        let mut stdout = io::stdout();
-        execute!(
-            stdout,
-            EnterAlternateScreen,
-            SetTitle(self.state.title.as_str())
-        )?;
-        let backend = CrosstermBackend::new(stdout);
-        let mut terminal = Terminal::new(backend)?;
-        self.sync_cursor_style(&mut terminal)?;
-        self.start_input_pump();
+    pub fn run(mut self, file_paths: Vec<PathBuf>) -> Result<()> {
+        self.bootstrap_files(file_paths)
+            .context("bootstrap startup files failed")?;
+        let mut terminal_session = TerminalSession::enter(self.state.title.as_str())
+            .context("enter terminal session failed")?;
+        terminal_session
+            .sync_cursor_style(self.state.mode)
+            .context("sync cursor style failed")?;
+        let mut input_pump_service = InputPumpService::new();
+        input_pump_service.start(self.event_tx.clone());
 
         loop {
-            terminal.draw(|frame| self.renderer.render(frame, &mut self.state))?;
+            terminal_session
+                .draw(|frame| self.renderer.render(frame, &mut self.state))
+                .context("terminal draw failed")?;
             trace!("redraw");
 
-            let action = self.event_rx.recv().map_err(|err| {
-                error!(
-                    "event bus disconnected while waiting for next action: {}",
-                    err
-                );
-                io::Error::new(ErrorKind::BrokenPipe, "event bus disconnected")
-            })?;
+            let action = self
+                .event_rx
+                .recv()
+                .context("event bus disconnected while waiting for next action")?;
             if self.action_affects_layout(&action) {
                 self.renderer.mark_layout_dirty();
             }
-            if self
-                .action_handler
-                .apply(&mut self.state, &self.io_gateway, action)
-                .is_break()
-            {
+            if self.handle_action(action).is_break() {
                 break;
             }
-            self.sync_cursor_style(&mut terminal)?;
+            terminal_session
+                .sync_cursor_style(self.state.mode)
+                .context("sync cursor style failed")?;
         }
-
-        disable_raw_mode()?;
-        execute!(
-            terminal.backend_mut(),
-            SetCursorStyle::DefaultUserShape,
-            LeaveAlternateScreen
-        )?;
         Ok(())
     }
 
@@ -112,44 +101,7 @@ impl App {
         matches!(action, AppAction::Editor(_) | AppAction::Layout(_))
     }
 
-    fn start_input_pump(&self) {
-        let event_tx = self.event_tx.clone();
-        let input_handler = InputHandler::new();
-        thread::spawn(move || {
-            loop {
-                let evt = match event::read() {
-                    Ok(evt) => evt,
-                    Err(err) => {
-                        error!("input pump stopped: failed to read terminal event: {}", err);
-                        break;
-                    }
-                };
-                let Some(action) = input_handler.action(&evt) else {
-                    continue;
-                };
-                if let Err(err) = event_tx.send(action) {
-                    error!(
-                        "input pump stopped: failed to send action to event bus: {}",
-                        err
-                    );
-                    break;
-                }
-            }
-        });
-    }
-
-    fn sync_cursor_style(
-        &mut self,
-        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    ) -> io::Result<()> {
-        let style = match self.state.mode {
-            EditorMode::Insert => SetCursorStyle::SteadyBar,
-            EditorMode::Normal
-            | EditorMode::Command
-            | EditorMode::VisualChar
-            | EditorMode::VisualLine => SetCursorStyle::SteadyBlock,
-        };
-        execute!(terminal.backend_mut(), style)?;
-        Ok(())
+    fn handle_action(&mut self, action: AppAction) -> ControlFlow<()> {
+        self.apply(action)
     }
 }
