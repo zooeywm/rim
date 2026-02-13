@@ -11,7 +11,7 @@ use tracing::error;
 use crate::action::{AppAction, FileAction};
 use crate::state::BufferId;
 
-#[derive(Clone, dep_inj::DepInj)]
+#[derive(dep_inj::DepInj)]
 #[target(FileWatcherImpl)]
 pub struct FileWatcherState {
     watch_tx: flume::Sender<WatchRequest>,
@@ -92,18 +92,18 @@ impl FileWatcherState {
             }
         };
 
-        let mut file_to_buffers: HashMap<PathBuf, HashSet<BufferId>> = HashMap::new();
+        let mut file_to_buffer: HashMap<PathBuf, BufferId> = HashMap::new();
         let mut buffer_to_file: HashMap<BufferId, PathBuf> = HashMap::new();
-        let mut watch_target_to_buffers: HashMap<PathBuf, HashSet<BufferId>> = HashMap::new();
+        let mut watch_target_ref_counts: HashMap<PathBuf, usize> = HashMap::new();
 
         loop {
             while let Ok(request) = watch_rx.try_recv() {
                 Self::apply_watch_request(
                     request,
                     &mut watcher,
-                    &mut file_to_buffers,
+                    &mut file_to_buffer,
                     &mut buffer_to_file,
-                    &mut watch_target_to_buffers,
+                    &mut watch_target_ref_counts,
                 );
             }
 
@@ -111,9 +111,9 @@ impl FileWatcherState {
                 Ok(request) => Self::apply_watch_request(
                     request,
                     &mut watcher,
-                    &mut file_to_buffers,
+                    &mut file_to_buffer,
                     &mut buffer_to_file,
-                    &mut watch_target_to_buffers,
+                    &mut watch_target_ref_counts,
                 ),
                 Err(flume::RecvTimeoutError::Timeout) => {}
                 Err(flume::RecvTimeoutError::Disconnected) => break,
@@ -134,8 +134,8 @@ impl FileWatcherState {
                 let mut affected_buffers = HashSet::new();
                 for path in event.paths {
                     let normalized_path = Self::normalize_watch_path(&path);
-                    if let Some(buffer_ids) = file_to_buffers.get(&normalized_path) {
-                        affected_buffers.extend(buffer_ids.iter().copied());
+                    if let Some(buffer_id) = file_to_buffer.get(&normalized_path) {
+                        affected_buffers.insert(*buffer_id);
                     }
                 }
 
@@ -160,9 +160,9 @@ impl FileWatcherState {
     fn apply_watch_request(
         request: WatchRequest,
         watcher: &mut RecommendedWatcher,
-        file_to_buffers: &mut HashMap<PathBuf, HashSet<BufferId>>,
+        file_to_buffer: &mut HashMap<PathBuf, BufferId>,
         buffer_to_file: &mut HashMap<BufferId, PathBuf>,
-        watch_target_to_buffers: &mut HashMap<PathBuf, HashSet<BufferId>>,
+        watch_target_ref_counts: &mut HashMap<PathBuf, usize>,
     ) {
         match request {
             WatchRequest::WatchBufferPath { buffer_id, path } => {
@@ -170,36 +170,49 @@ impl FileWatcherState {
                 let watch_target = Self::watch_target_for_file(&normalized_file);
 
                 let old_file = buffer_to_file.insert(buffer_id, normalized_file.clone());
+                let should_attach_watch_target =
+                    !matches!(old_file.as_ref(), Some(old) if old == &normalized_file);
                 if let Some(old_file) = old_file
                     && old_file != normalized_file
                 {
                     Self::detach_buffer_from_file(
                         watcher,
-                        file_to_buffers,
-                        watch_target_to_buffers,
+                        file_to_buffer,
+                        watch_target_ref_counts,
                         &old_file,
                         buffer_id,
                     );
                 }
 
-                file_to_buffers
-                    .entry(normalized_file)
-                    .or_default()
-                    .insert(buffer_id);
-
-                let is_first_for_target = !watch_target_to_buffers.contains_key(&watch_target);
-                watch_target_to_buffers
-                    .entry(watch_target.clone())
-                    .or_default()
-                    .insert(buffer_id);
-                if is_first_for_target
-                    && let Err(err) = watcher.watch(&watch_target, RecursiveMode::NonRecursive)
+                if let Some(old_owner) = file_to_buffer.get(&normalized_file).copied()
+                    && old_owner != buffer_id
                 {
-                    error!(
-                        "file watcher watch failed: path={} error={}",
-                        watch_target.display(),
-                        err
+                    buffer_to_file.remove(&old_owner);
+                    Self::detach_buffer_from_file(
+                        watcher,
+                        file_to_buffer,
+                        watch_target_ref_counts,
+                        &normalized_file,
+                        old_owner,
                     );
+                }
+                file_to_buffer.insert(normalized_file, buffer_id);
+
+                if should_attach_watch_target {
+                    let count = watch_target_ref_counts
+                        .entry(watch_target.clone())
+                        .or_insert(0);
+                    let is_first_for_target = *count == 0;
+                    *count = count.saturating_add(1);
+                    if is_first_for_target
+                        && let Err(err) = watcher.watch(&watch_target, RecursiveMode::NonRecursive)
+                    {
+                        error!(
+                            "file watcher watch failed: path={} error={}",
+                            watch_target.display(),
+                            err
+                        );
+                    }
                 }
             }
             WatchRequest::UnwatchBuffer { buffer_id } => {
@@ -208,8 +221,8 @@ impl FileWatcherState {
                 };
                 Self::detach_buffer_from_file(
                     watcher,
-                    file_to_buffers,
-                    watch_target_to_buffers,
+                    file_to_buffer,
+                    watch_target_ref_counts,
                     &file_path,
                     buffer_id,
                 );
@@ -219,28 +232,35 @@ impl FileWatcherState {
 
     fn detach_buffer_from_file(
         watcher: &mut RecommendedWatcher,
-        file_to_buffers: &mut HashMap<PathBuf, HashSet<BufferId>>,
-        watch_target_to_buffers: &mut HashMap<PathBuf, HashSet<BufferId>>,
+        file_to_buffer: &mut HashMap<PathBuf, BufferId>,
+        watch_target_ref_counts: &mut HashMap<PathBuf, usize>,
         file_path: &PathBuf,
         buffer_id: BufferId,
     ) {
-        if let Some(buffer_ids) = file_to_buffers.get_mut(file_path) {
-            buffer_ids.remove(&buffer_id);
-            if buffer_ids.is_empty() {
-                file_to_buffers.remove(file_path);
+        let removed = if let Some(owner) = file_to_buffer.get(file_path).copied() {
+            if owner == buffer_id {
+                file_to_buffer.remove(file_path);
+                true
+            } else {
+                false
             }
+        } else {
+            false
+        };
+        if !removed {
+            return;
         }
 
         let watch_target = Self::watch_target_for_file(file_path);
-        let Some(buffer_ids) = watch_target_to_buffers.get_mut(&watch_target) else {
+        let Some(count) = watch_target_ref_counts.get_mut(&watch_target) else {
             return;
         };
-        buffer_ids.remove(&buffer_id);
-        if !buffer_ids.is_empty() {
+        *count = count.saturating_sub(1);
+        if *count > 0 {
             return;
         }
 
-        watch_target_to_buffers.remove(&watch_target);
+        watch_target_ref_counts.remove(&watch_target);
         if let Err(err) = watcher.unwatch(&watch_target) {
             error!(
                 "file watcher unwatch failed: path={} error={}",
@@ -251,7 +271,14 @@ impl FileWatcherState {
     }
 
     fn normalize_watch_path(path: &PathBuf) -> PathBuf {
-        std::fs::canonicalize(path).unwrap_or_else(|_| path.clone())
+        let absolute = if path.is_absolute() {
+            path.clone()
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(path))
+                .unwrap_or_else(|_| path.clone())
+        };
+        std::fs::canonicalize(&absolute).unwrap_or(absolute)
     }
 
     fn watch_target_for_file(path: &Path) -> PathBuf {

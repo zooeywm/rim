@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use slotmap::{Key, SlotMap, new_key_type};
@@ -23,9 +23,25 @@ pub struct BufferState {
     pub dirty: bool,
     pub externally_modified: bool,
     pub cursor: CursorState,
+    pub undo_stack: Vec<BufferHistoryEntry>,
+    pub redo_stack: Vec<BufferHistoryEntry>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BufferHistoryEntry {
+    pub edits: Vec<BufferEditSnapshot>,
+    pub before_cursor: CursorState,
+    pub after_cursor: CursorState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BufferEditSnapshot {
+    pub start_byte: usize,
+    pub deleted_text: String,
+    pub inserted_text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WindowState {
     pub buffer_id: Option<BufferId>,
     pub scroll_x: u16,
@@ -86,6 +102,21 @@ pub enum SplitAxis {
     Vertical,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NormalSequenceKey {
+    Leader,
+    Tab,
+    Char(char),
+    Ctrl(char),
+}
+
+#[derive(Debug)]
+pub struct PendingInsertUndoGroup {
+    pub buffer_id: BufferId,
+    pub before_cursor: CursorState,
+    pub edits: Vec<BufferEditSnapshot>,
+}
+
 #[derive(Debug)]
 pub struct AppState {
     pub title: String,
@@ -100,6 +131,11 @@ pub struct AppState {
     pub line_slot: Option<String>,
     pub line_slot_line_wise: bool,
     pub cursor_scroll_threshold: u16,
+    pub normal_sequence: Vec<NormalSequenceKey>,
+    pub visual_g_pending: bool,
+    pub pending_insert_group: Option<PendingInsertUndoGroup>,
+    pub in_flight_internal_saves: HashSet<BufferId>,
+    pub last_internal_save_fingerprint: HashMap<BufferId, u64>,
     pub buffers: SlotMap<BufferId, BufferState>,
     pub buffer_order: Vec<BufferId>,
     pub windows: SlotMap<WindowId, WindowState>,
@@ -108,6 +144,19 @@ pub struct AppState {
 }
 
 impl AppState {
+    const MAX_HISTORY_ENTRIES: usize = 256;
+
+    pub fn normalize_file_path(path: &Path) -> PathBuf {
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(path))
+                .unwrap_or_else(|_| path.to_path_buf())
+        };
+        std::fs::canonicalize(&absolute).unwrap_or(absolute)
+    }
+
     pub fn new() -> Self {
         let buffers = SlotMap::with_key();
         let mut windows = SlotMap::with_key();
@@ -137,6 +186,11 @@ impl AppState {
             line_slot: None,
             line_slot_line_wise: false,
             cursor_scroll_threshold: 0,
+            normal_sequence: Vec::new(),
+            visual_g_pending: false,
+            pending_insert_group: None,
+            in_flight_internal_saves: HashSet::new(),
+            last_internal_save_fingerprint: HashMap::new(),
             buffers,
             buffer_order: Vec::new(),
             windows,
@@ -395,6 +449,77 @@ impl AppState {
         }
     }
 
+    pub fn push_buffer_history_entry(&mut self, buffer_id: BufferId, entry: BufferHistoryEntry) {
+        let Some(buffer) = self.buffers.get_mut(buffer_id) else {
+            return;
+        };
+        if entry.edits.is_empty() {
+            return;
+        }
+
+        buffer.undo_stack.push(entry);
+        if buffer.undo_stack.len() > Self::MAX_HISTORY_ENTRIES {
+            buffer.undo_stack.remove(0);
+        }
+        buffer.redo_stack.clear();
+    }
+
+    pub fn undo_active_buffer_edit(&mut self) {
+        let Some(buffer_id) = self.active_buffer_id() else {
+            self.status_bar.message = "undo failed: no active buffer".to_string();
+            return;
+        };
+        let Some(buffer) = self.buffers.get_mut(buffer_id) else {
+            self.status_bar.message = "undo failed: active buffer missing".to_string();
+            return;
+        };
+        let Some(previous_entry) = buffer.undo_stack.pop() else {
+            self.status_bar.message = "undo: nothing to undo".to_string();
+            return;
+        };
+
+        for edit in previous_entry.edits.iter().rev() {
+            apply_text_delta_undo(&mut buffer.text, edit);
+        }
+        buffer.cursor = previous_entry.before_cursor;
+        buffer.redo_stack.push(previous_entry);
+        if buffer.redo_stack.len() > Self::MAX_HISTORY_ENTRIES {
+            buffer.redo_stack.remove(0);
+        }
+        buffer.dirty = true;
+
+        self.align_active_window_scroll_to_cursor();
+        self.status_bar.message = "undo".to_string();
+    }
+
+    pub fn redo_active_buffer_edit(&mut self) {
+        let Some(buffer_id) = self.active_buffer_id() else {
+            self.status_bar.message = "redo failed: no active buffer".to_string();
+            return;
+        };
+        let Some(buffer) = self.buffers.get_mut(buffer_id) else {
+            self.status_bar.message = "redo failed: active buffer missing".to_string();
+            return;
+        };
+        let Some(next_entry) = buffer.redo_stack.pop() else {
+            self.status_bar.message = "redo: nothing to redo".to_string();
+            return;
+        };
+
+        for edit in &next_entry.edits {
+            apply_text_delta_redo(&mut buffer.text, edit);
+        }
+        buffer.cursor = next_entry.after_cursor;
+        buffer.undo_stack.push(next_entry);
+        if buffer.undo_stack.len() > Self::MAX_HISTORY_ENTRIES {
+            buffer.undo_stack.remove(0);
+        }
+        buffer.dirty = true;
+
+        self.align_active_window_scroll_to_cursor();
+        self.status_bar.message = "redo".to_string();
+    }
+
     pub fn has_dirty_buffers(&self) -> bool {
         self.buffers.values().any(|buffer| buffer.dirty)
     }
@@ -409,6 +534,16 @@ impl Default for AppState {
 fn buffer_name_from_path(path: &Path) -> Option<String> {
     path.file_name()
         .map(|name| name.to_string_lossy().to_string())
+}
+
+fn apply_text_delta_undo(text: &mut String, delta: &BufferEditSnapshot) {
+    let undo_end = delta.start_byte.saturating_add(delta.inserted_text.len());
+    text.replace_range(delta.start_byte..undo_end, &delta.deleted_text);
+}
+
+fn apply_text_delta_redo(text: &mut String, delta: &BufferEditSnapshot) {
+    let redo_end = delta.start_byte.saturating_add(delta.deleted_text.len());
+    text.replace_range(delta.start_byte..redo_end, &delta.inserted_text);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -3,6 +3,12 @@ use std::path::PathBuf;
 use super::{AppState, BufferId, BufferState, BufferSwitchDirection, CursorState};
 
 impl AppState {
+    pub fn find_buffer_by_path(&self, path: &std::path::Path) -> Option<BufferId> {
+        self.buffers.iter().find_map(|(buffer_id, buffer)| {
+            (buffer.path.as_deref() == Some(path)).then_some(buffer_id)
+        })
+    }
+
     pub fn create_buffer(&mut self, path: Option<PathBuf>, text: impl Into<String>) -> BufferId {
         let text = text.into();
         let name = path
@@ -17,6 +23,8 @@ impl AppState {
             dirty: false,
             externally_modified: false,
             cursor: CursorState::default(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         });
         self.buffer_order.push(id);
         id

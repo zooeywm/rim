@@ -524,30 +524,32 @@ impl AppState {
             line.drain(start_byte..end_byte);
             deleted
         } else {
-            let start_line = lines[start_row].clone();
-            let end_line = lines[end_row].clone();
+            let start_line = lines[start_row].as_str();
+            let end_line = lines[end_row].as_str();
             let start_keep_byte =
-                char_to_byte_idx(&start_line, start_col.saturating_sub(1) as usize);
-            let end_del_byte = char_to_byte_idx(&end_line, end_col as usize);
+                char_to_byte_idx(start_line, start_col.saturating_sub(1) as usize);
+            let end_del_byte = char_to_byte_idx(end_line, end_col as usize);
+            let deleted_start = start_line[start_keep_byte..].to_string();
+            let deleted_end = end_line[..end_del_byte].to_string();
+            let merged_prefix = start_line[..start_keep_byte].to_string();
+            let merged_suffix = end_line[end_del_byte..].to_string();
 
-            let mut deleted_parts = Vec::new();
-            deleted_parts.push(start_line[start_keep_byte..].to_string());
+            let mut deleted_text = String::new();
+            deleted_text.push_str(&deleted_start);
             for line in lines.iter().take(end_row).skip(start_row.saturating_add(1)) {
-                deleted_parts.push(line.clone());
+                deleted_text.push('\n');
+                deleted_text.push_str(line);
             }
-            deleted_parts.push(end_line[..end_del_byte].to_string());
+            deleted_text.push('\n');
+            deleted_text.push_str(&deleted_end);
 
-            let merged_line = format!(
-                "{}{}",
-                &start_line[..start_keep_byte],
-                &end_line[end_del_byte..]
-            );
+            let merged_line = format!("{}{}", merged_prefix, merged_suffix);
             lines[start_row] = merged_line;
             for _ in start_row.saturating_add(1)..=end_row {
                 lines.remove(start_row.saturating_add(1));
             }
 
-            deleted_parts.join("\n")
+            deleted_text
         };
 
         buffer.text = lines.join("\n");
@@ -603,16 +605,18 @@ impl AppState {
             let end_byte = char_to_byte_idx(start_line, end_col as usize);
             start_line[start_byte..end_byte].to_string()
         } else {
-            let mut parts = Vec::new();
+            let mut yanked = String::new();
             let start_keep_byte =
                 char_to_byte_idx(start_line, start_col.saturating_sub(1) as usize);
-            parts.push(start_line[start_keep_byte..].to_string());
+            yanked.push_str(&start_line[start_keep_byte..]);
             for line in lines.iter().take(end_row).skip(start_row.saturating_add(1)) {
-                parts.push(line.clone());
+                yanked.push('\n');
+                yanked.push_str(line);
             }
             let end_del_byte = char_to_byte_idx(end_line, end_col as usize);
-            parts.push(end_line[..end_del_byte].to_string());
-            parts.join("\n")
+            yanked.push('\n');
+            yanked.push_str(&end_line[..end_del_byte]);
+            yanked
         };
 
         self.line_slot = Some(yanked);
@@ -665,15 +669,15 @@ impl AppState {
             return;
         }
 
-        let start_line = lines[start_row].clone();
-        let end_line = lines[end_row].clone();
+        let start_line = lines[start_row].as_str();
+        let end_line = lines[end_row].as_str();
         let start_line_len = start_line.chars().count() as u16;
         let end_line_len = end_line.chars().count() as u16;
         let start_col = start.col.max(1).min(start_line_len.max(1));
         let end_col = end.col.max(1).min(end_line_len.max(1));
 
-        let prefix_end = char_to_byte_idx(&start_line, start_col.saturating_sub(1) as usize);
-        let suffix_start = char_to_byte_idx(&end_line, end_col as usize);
+        let prefix_end = char_to_byte_idx(start_line, start_col.saturating_sub(1) as usize);
+        let suffix_start = char_to_byte_idx(end_line, end_col as usize);
         let prefix = start_line[..prefix_end].to_string();
         let suffix = end_line[suffix_start..].to_string();
 

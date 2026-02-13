@@ -14,7 +14,7 @@ pub enum FileIoServiceError {
     RequestChannelDisconnected { operation: &'static str },
 }
 
-#[derive(Clone, dep_inj::DepInj)]
+#[derive(dep_inj::DepInj)]
 #[target(FileIoImpl)]
 pub struct FileIoState {
     request_tx: flume::Sender<FileIoRequest>,
