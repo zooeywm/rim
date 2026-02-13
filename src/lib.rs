@@ -1,10 +1,11 @@
-pub mod action;
-pub mod action_handler;
 pub mod app;
-mod boilerplate;
-pub mod file_io_service;
-pub mod file_watcher_service;
-pub mod input;
 pub mod logging;
-pub mod state;
-pub mod ui;
+
+mod action;
+mod action_handler;
+mod boilerplate;
+mod file_io_service;
+mod file_watcher_service;
+mod input;
+mod state;
+mod ui;
