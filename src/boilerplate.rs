@@ -1,8 +1,5 @@
-use std::ops::ControlFlow;
 use std::path::PathBuf;
 
-use crate::action::AppAction;
-use crate::action_handler::{ActionHandler, ActionHandlerImpl};
 use crate::app::App;
 use crate::file_io_service::{FileIo, FileIoImpl, FileIoServiceError};
 use crate::file_watcher_service::{FileWatcher, FileWatcherImpl, FileWatcherServiceError};
@@ -42,11 +39,5 @@ impl FileWatcher for App {
 
     fn enqueue_unwatch(&self, buffer_id: BufferId) -> Result<(), FileWatcherServiceError> {
         FileWatcherImpl::inj_ref(self).enqueue_unwatch(buffer_id)
-    }
-}
-
-impl ActionHandler for App {
-    fn apply(&mut self, action: AppAction) -> ControlFlow<()> {
-        ActionHandlerImpl::inj_ref_mut(self).apply(action)
     }
 }

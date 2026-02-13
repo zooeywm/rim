@@ -6,9 +6,8 @@ use tracing_subscriber::fmt::time::UtcTime;
 
 #[derive(Debug, Error)]
 pub enum LoggingError {
-    #[error("create log directory failed: {path}")]
+    #[error("create log directory failed")]
     CreateLogDir {
-        path: PathBuf,
         #[source]
         source: std::io::Error,
     },
@@ -21,10 +20,7 @@ pub enum LoggingError {
 
 pub fn init_logging() -> Result<(), LoggingError> {
     let log_dir = user_log_dir();
-    std::fs::create_dir_all(&log_dir).map_err(|source| LoggingError::CreateLogDir {
-        path: log_dir.clone(),
-        source,
-    })?;
+    std::fs::create_dir_all(&log_dir).map_err(|source| LoggingError::CreateLogDir { source })?;
 
     let timer = UtcTime::new(format_description!(
         "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"

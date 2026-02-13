@@ -39,6 +39,8 @@ cargo clippy
 - `x`: cut current character into the single slot
 - `p`: paste slot content after cursor
 - `J`: join current line with line below
+- `u`: undo
+- `Ctrl+r`: redo
 - `H` / `L`: switch buffer prev / next
 - `{` / `}`: switch buffer prev / next
 - `Ctrl+h` `Ctrl+j` `Ctrl+k` `Ctrl+l`: focus window
@@ -86,6 +88,11 @@ Implemented commands:
 - `:e <path>`
 - `:w <path>`, `:w! <path>`
 - `:wq <path>`, `:wq! <path>`
+
+File-open behavior:
+
+- `:e <path>` opens by normalized absolute path.
+- Opening the same file again reuses the existing buffer (even across tabs/windows) instead of creating duplicates.
 
 `:q` behavior:
 

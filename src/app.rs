@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use tracing::trace;
 
 use crate::action::{AppAction, FileAction};
-use crate::action_handler::{ActionHandler, ActionHandlerState};
+use crate::action_handler::{ActionHandlerImpl, ActionHandlerState};
 use crate::file_io_service::FileIoState;
 use crate::file_watcher_service::FileWatcherState;
 use crate::input::InputPumpService;
@@ -102,6 +102,6 @@ impl App {
     }
 
     fn handle_action(&mut self, action: AppAction) -> ControlFlow<()> {
-        self.apply(action)
+        ActionHandlerImpl::inj_ref_mut(self).apply(action)
     }
 }

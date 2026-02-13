@@ -83,7 +83,7 @@ impl AppState {
         let closed_layout = self
             .windows
             .get(active_window)
-            .cloned()
+            .copied()
             .expect("invariant: active window id must exist in windows");
         let absorbed_target = self.absorb_closed_window(&remaining_windows, &closed_layout);
         let absorbed_group = absorbed_target.is_none()
@@ -117,11 +117,10 @@ impl AppState {
             .get(&tab_id)
             .map(|t| t.active_window)
             .expect("invariant: active tab must exist");
-        let active_window = self
+        let active_window = *self
             .windows
             .get(active_window_id)
-            .expect("invariant: active window id must exist in windows")
-            .clone();
+            .expect("invariant: active window id must exist in windows");
         let (updated_active, new_window_layout) = split_window_layout(&active_window, axis);
 
         let Some(new_window_id) = self.create_window(active_window.buffer_id) else {
@@ -286,7 +285,7 @@ impl AppState {
         let mut group = candidates
             .iter()
             .copied()
-            .filter_map(|id| self.windows.get(id).map(|w| (id, w.clone())))
+            .filter_map(|id| self.windows.get(id).map(|w| (id, *w)))
             .filter(|(_, w)| {
                 closed.x.saturating_add(closed.width) == w.x
                     && w.width > 0
@@ -313,7 +312,7 @@ impl AppState {
         let mut group = candidates
             .iter()
             .copied()
-            .filter_map(|id| self.windows.get(id).map(|w| (id, w.clone())))
+            .filter_map(|id| self.windows.get(id).map(|w| (id, *w)))
             .filter(|(_, w)| {
                 w.x.saturating_add(w.width) == closed.x
                     && w.width > 0
@@ -339,7 +338,7 @@ impl AppState {
         let mut group = candidates
             .iter()
             .copied()
-            .filter_map(|id| self.windows.get(id).map(|w| (id, w.clone())))
+            .filter_map(|id| self.windows.get(id).map(|w| (id, *w)))
             .filter(|(_, w)| {
                 closed.y.saturating_add(closed.height) == w.y
                     && w.height > 0
@@ -366,7 +365,7 @@ impl AppState {
         let mut group = candidates
             .iter()
             .copied()
-            .filter_map(|id| self.windows.get(id).map(|w| (id, w.clone())))
+            .filter_map(|id| self.windows.get(id).map(|w| (id, *w)))
             .filter(|(_, w)| {
                 w.y.saturating_add(w.height) == closed.y
                     && w.height > 0
@@ -434,8 +433,8 @@ fn is_full_horizontal_cover(group: &[(WindowId, WindowState)], closed: &WindowSt
 }
 
 fn split_window_layout(window: &WindowState, axis: SplitAxis) -> (WindowState, WindowState) {
-    let mut first = window.clone();
-    let mut second = window.clone();
+    let mut first = *window;
+    let mut second = *window;
     let base_width = window.width.max(1);
     let base_height = window.height.max(1);
     match axis {

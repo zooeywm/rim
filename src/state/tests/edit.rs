@@ -1,5 +1,5 @@
 use super::common::{set_active_buffer_text, test_state};
-use crate::state::CursorState;
+use crate::state::{BufferEditSnapshot, BufferHistoryEntry, CursorState};
 
 #[test]
 fn cursor_move_right_should_stop_at_line_end() {
@@ -662,4 +662,61 @@ fn visual_char_move_right_should_stop_at_newline_slot_without_crossing_row() {
 
     assert_eq!(state.active_cursor().row, 1);
     assert_eq!(state.active_cursor().col, 3);
+}
+
+#[test]
+fn undo_active_buffer_edit_should_restore_previous_text_and_cursor() {
+    let mut state = test_state();
+    set_active_buffer_text(&mut state, "ab");
+    state.move_cursor_right();
+    let buffer_id = state.active_buffer_id().expect("buffer id exists");
+    state.insert_char_at_cursor('x');
+    state.push_buffer_history_entry(
+        buffer_id,
+        BufferHistoryEntry {
+            edits: vec![BufferEditSnapshot {
+                start_byte: 1,
+                deleted_text: String::new(),
+                inserted_text: "x".to_string(),
+            }],
+            before_cursor: CursorState { row: 1, col: 2 },
+            after_cursor: CursorState { row: 1, col: 3 },
+        },
+    );
+
+    state.undo_active_buffer_edit();
+
+    let buffer_id = state.active_buffer_id().expect("buffer id exists");
+    let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+    assert_eq!(buffer.text, "ab");
+    assert_eq!(buffer.cursor, CursorState { row: 1, col: 2 });
+}
+
+#[test]
+fn redo_active_buffer_edit_should_reapply_last_undone_change() {
+    let mut state = test_state();
+    set_active_buffer_text(&mut state, "ab");
+    state.move_cursor_right();
+    let buffer_id = state.active_buffer_id().expect("buffer id exists");
+    state.insert_char_at_cursor('x');
+    state.push_buffer_history_entry(
+        buffer_id,
+        BufferHistoryEntry {
+            edits: vec![BufferEditSnapshot {
+                start_byte: 1,
+                deleted_text: String::new(),
+                inserted_text: "x".to_string(),
+            }],
+            before_cursor: CursorState { row: 1, col: 2 },
+            after_cursor: CursorState { row: 1, col: 3 },
+        },
+    );
+    state.undo_active_buffer_edit();
+
+    state.redo_active_buffer_edit();
+
+    let buffer_id = state.active_buffer_id().expect("buffer id exists");
+    let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+    assert_eq!(buffer.text, "axb");
+    assert_eq!(buffer.cursor, CursorState { row: 1, col: 3 });
 }

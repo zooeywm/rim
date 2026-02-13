@@ -37,6 +37,8 @@ pub enum EditorAction {
     ScrollViewUp,
     ScrollViewHalfPageDown,
     ScrollViewHalfPageUp,
+    Undo,
+    Redo,
     JoinLineBelow,
     CutCharToSlot,
     PasteSlotAfterCursor,

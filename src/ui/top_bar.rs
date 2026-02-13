@@ -18,14 +18,15 @@ impl TopBarWidget {
         let active_buffer_id = state.active_buffer_id();
         let active_tab_id = state.active_tab;
 
-        let buffer_items = state
+        let buffer_ids = state
             .buffer_order
             .iter()
-            .filter_map(|id| state.buffers.get(*id).map(|buf| (*id, buf.name.clone())))
+            .copied()
+            .filter(|id| state.buffers.get(*id).is_some())
             .collect::<Vec<_>>();
 
         let mut buffer_spans = Vec::new();
-        for (idx, (id, name)) in buffer_items.iter().enumerate() {
+        for (idx, id) in buffer_ids.iter().enumerate() {
             let is_active = active_buffer_id == Some(*id);
             let style = if is_active {
                 Style::default()
@@ -35,10 +36,13 @@ impl TopBarWidget {
             } else {
                 Style::default().fg(Color::Gray)
             };
+            let Some(buffer) = state.buffers.get(*id) else {
+                continue;
+            };
             buffer_spans.push(Span::styled(" ", style));
-            buffer_spans.push(Span::styled(name.clone(), style));
+            buffer_spans.push(Span::styled(buffer.name.clone(), style));
             buffer_spans.push(Span::styled(" ", style));
-            if idx + 1 != buffer_items.len() {
+            if idx + 1 != buffer_ids.len() {
                 buffer_spans.push(Span::raw(" "));
             }
         }
