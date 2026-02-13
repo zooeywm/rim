@@ -3,6 +3,8 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::state::AppState;
 
+const TAB_DISPLAY_WIDTH: usize = 4;
+
 pub(super) struct WindowAreaWidget {
 	windows:            Vec<WindowView>,
 	selection_segments: Vec<SelectionSegment>,
@@ -189,13 +191,14 @@ fn logical_lines_with_newline_info(content: &str) -> Vec<LogicalLine<'_>> {
 }
 
 fn render_line_for_display(line: &str, has_newline: bool) -> String {
+	let expanded_line = expand_tabs_for_display(line);
 	if has_newline {
-		let mut rendered = String::with_capacity(line.len().saturating_add(3));
-		rendered.push_str(line);
+		let mut rendered = String::with_capacity(expanded_line.len().saturating_add(3));
+		rendered.push_str(expanded_line.as_str());
 		rendered.push(' ');
 		rendered
 	} else {
-		line.to_string()
+		expanded_line
 	}
 }
 
@@ -382,10 +385,10 @@ fn collect_visual_selection_segments(
 			continue;
 		}
 
-		let rendered_line = render_line_for_display(line, logical_line.has_newline);
 		let start_display =
-			display_width_of_char_prefix(&rendered_line, col_start.saturating_sub(1) as usize) as u16;
-		let end_display = display_width_of_char_prefix(&rendered_line, col_end as usize) as u16;
+			display_width_of_logical_col(line, logical_line.has_newline, col_start.saturating_sub(1) as usize)
+				as u16;
+		let end_display = display_width_of_logical_col(line, logical_line.has_newline, col_end as usize) as u16;
 		let seg_start = start_display.max(scroll_x);
 		let seg_end = end_display.min(visible_right_exclusive);
 		if seg_start >= seg_end {
@@ -402,7 +405,16 @@ fn collect_visual_selection_segments(
 }
 
 fn display_width_of_char_prefix(line: &str, char_count: usize) -> usize {
-	line.chars().take(char_count).map(|ch| UnicodeWidthChar::width(ch).unwrap_or(0)).sum()
+	line.chars().take(char_count).map(char_display_width).sum()
+}
+
+fn display_width_of_logical_col(line: &str, has_newline: bool, logical_char_count: usize) -> usize {
+	let line_char_count = line.chars().count();
+	let mut width = display_width_of_char_prefix(line, logical_char_count.min(line_char_count));
+	if has_newline && logical_char_count > line_char_count {
+		width = width.saturating_add(1);
+	}
+	width
 }
 
 fn visible_slice_by_display_width(line: &str, skip_cols: usize, max_cols: usize) -> String {
@@ -413,7 +425,7 @@ fn visible_slice_by_display_width(line: &str, skip_cols: usize, max_cols: usize)
 	let mut consumed = 0usize;
 	let mut start = line.len();
 	for (idx, ch) in line.char_indices() {
-		let width = UnicodeWidthChar::width(ch).unwrap_or(0);
+		let width = char_display_width(ch);
 		if consumed + width <= skip_cols {
 			consumed += width;
 			continue;
@@ -425,7 +437,7 @@ fn visible_slice_by_display_width(line: &str, skip_cols: usize, max_cols: usize)
 	let mut out = String::new();
 	let mut used = 0usize;
 	for ch in line[start..].chars() {
-		let width = UnicodeWidthChar::width(ch).unwrap_or(0);
+		let width = char_display_width(ch);
 		if width == 0 {
 			if !out.is_empty() {
 				out.push(ch);
@@ -439,6 +451,26 @@ fn visible_slice_by_display_width(line: &str, skip_cols: usize, max_cols: usize)
 		used += width;
 	}
 	out
+}
+
+fn char_display_width(ch: char) -> usize {
+	if ch == '\t' {
+		TAB_DISPLAY_WIDTH
+	} else {
+		UnicodeWidthChar::width(ch).unwrap_or(0)
+	}
+}
+
+fn expand_tabs_for_display(line: &str) -> String {
+	let mut rendered = String::with_capacity(line.len());
+	for ch in line.chars() {
+		if ch == '\t' {
+			rendered.push_str("    ");
+		} else {
+			rendered.push(ch);
+		}
+	}
+	rendered
 }
 
 fn set_separator_cell(cell: &mut Cell) { merge_cell(cell, DIR_LEFT | DIR_RIGHT); }

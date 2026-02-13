@@ -1684,8 +1684,10 @@ mod tests {
 		state.bind_buffer_to_active_window(buffer_id);
 		state.set_buffer_dirty(buffer_id, true);
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		let _ = dispatch_test_action(
 			&mut handler,
@@ -1711,8 +1713,10 @@ mod tests {
 		state.bind_buffer_to_active_window(buffer_id);
 		state.set_buffer_dirty(buffer_id, true);
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		let _ = dispatch_test_action(
 			&mut handler,
@@ -1734,8 +1738,10 @@ mod tests {
 		state.bind_buffer_to_active_window(buffer_id);
 
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		let _ = dispatch_test_action(
 			&mut handler,
@@ -1769,8 +1775,10 @@ mod tests {
 		state.bind_buffer_to_active_window(buffer_id);
 
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		let _ = dispatch_test_action(
 			&mut handler,
@@ -1804,8 +1812,10 @@ mod tests {
 		state.bind_buffer_to_active_window(buffer_id);
 
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		let _ = dispatch_test_action(
 			&mut handler,
@@ -1849,8 +1859,10 @@ mod tests {
 		state.in_flight_internal_saves.insert(buffer_id);
 
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		let _ = dispatch_test_action(
 			&mut handler,
@@ -1873,8 +1885,10 @@ mod tests {
 		state.enter_command_mode();
 		state.push_command_char('q');
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		let flow = dispatch_test_action(
 			&mut handler,
@@ -1899,8 +1913,10 @@ mod tests {
 		state.push_command_char('q');
 		state.push_command_char('!');
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		let flow = dispatch_test_action(
 			&mut handler,
@@ -1923,8 +1939,10 @@ mod tests {
 		state.enter_command_mode();
 		state.push_command_char('q');
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		let flow = dispatch_test_action(
 			&mut handler,
@@ -1945,8 +1963,10 @@ mod tests {
 		state.bind_buffer_to_active_window(buffer_id);
 		state.set_buffer_dirty(buffer_id, false);
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		let flow = dispatch_test_action(
 			&mut handler,
@@ -1974,8 +1994,10 @@ mod tests {
 		state.bind_buffer_to_active_window(buffer_id);
 		state.set_buffer_dirty(buffer_id, true);
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		let flow = dispatch_test_action(
 			&mut handler,
@@ -2008,8 +2030,10 @@ mod tests {
 		state.enter_command_mode();
 		state.push_command_char('w');
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		let flow = dispatch_test_action(
 			&mut handler,
@@ -2033,8 +2057,10 @@ mod tests {
 		state.enter_command_mode();
 		state.push_command_char('e');
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		let flow = dispatch_test_action(
 			&mut handler,
@@ -2060,8 +2086,10 @@ mod tests {
 		state.push_command_char('e');
 		state.push_command_char('!');
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		let flow = dispatch_test_action(
 			&mut handler,
@@ -2090,8 +2118,10 @@ mod tests {
 		state.push_command_char('x');
 		state.push_command_char('t');
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		let flow = dispatch_test_action(
 			&mut handler,
@@ -2127,8 +2157,10 @@ mod tests {
 		state.push_command_char('x');
 		state.push_command_char('t');
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		let flow = dispatch_test_action(
 			&mut handler,
@@ -2166,8 +2198,10 @@ mod tests {
 		state.push_command_char('x');
 		state.push_command_char('t');
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		let flow = dispatch_test_action(
 			&mut handler,
@@ -2195,8 +2229,10 @@ mod tests {
 		state.bind_buffer_to_active_window(buffer_id);
 		state.enter_visual_mode();
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		let _ = dispatch_test_action(
 			&mut handler,
@@ -2227,8 +2263,10 @@ mod tests {
 		state.move_cursor_down();
 		state.enter_visual_mode();
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		let _ = dispatch_test_action(
 			&mut handler,
@@ -2265,8 +2303,10 @@ mod tests {
 		let buffer_id = state.create_buffer(None, "abcd");
 		state.bind_buffer_to_active_window(buffer_id);
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		for key in [
 			KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
@@ -2304,8 +2344,10 @@ mod tests {
 		state.line_slot = Some("XY".to_string());
 		state.line_slot_line_wise = false;
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		for key in [
 			KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
@@ -2343,8 +2385,10 @@ mod tests {
 		state.line_slot = Some("b".to_string());
 		state.line_slot_line_wise = true;
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		let _ = dispatch_test_action(
 			&mut handler,
@@ -2374,8 +2418,10 @@ mod tests {
 		let buffer_id = state.create_buffer(None, "");
 		state.bind_buffer_to_active_window(buffer_id);
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		for key in [
 			KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE),
@@ -2421,8 +2467,10 @@ mod tests {
 		let buffer_id = state.create_buffer(None, "a");
 		state.bind_buffer_to_active_window(buffer_id);
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		for key in [
 			KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE),
@@ -2461,8 +2509,10 @@ mod tests {
 		let buffer_id = state.create_buffer(None, "a");
 		state.bind_buffer_to_active_window(buffer_id);
 		let (tx, _rx) = flume::bounded(8);
-		let file_io_service = FileIoState::start(tx.clone());
-		let file_watcher_service = FileWatcherState::start(tx);
+		let file_io_service = FileIoState::new(tx.clone());
+		file_io_service.start();
+		let file_watcher_service = FileWatcherState::new(tx);
+		file_watcher_service.start();
 
 		for key in [
 			KeyEvent::new(KeyCode::Char('O'), KeyModifiers::SHIFT),

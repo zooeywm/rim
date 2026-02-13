@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use ratatui::layout::Rect;
 
-use super::{DIR_DOWN, DIR_LEFT, DIR_RIGHT, DIR_UP, SelectionSegment, WindowAreaWidget, collect_visual_selection_segments, dirs_from_symbol, display_width_of_char_prefix, symbol_from_dirs, visible_slice_by_display_width};
+use super::{DIR_DOWN, DIR_LEFT, DIR_RIGHT, DIR_UP, SelectionSegment, WindowAreaWidget, collect_visual_selection_segments, dirs_from_symbol, display_width_of_char_prefix, render_line_for_display, symbol_from_dirs, visible_slice_by_display_width};
 use crate::state::{AppState, CursorState};
 
 fn merged_symbol(existing: &str, add_dirs: u8) -> &'static str {
@@ -65,11 +65,25 @@ fn display_width_prefix_counts_wide_chars() {
 }
 
 #[test]
+fn display_width_prefix_counts_tab_as_four_spaces() {
+	let line = "a\tb";
+	assert_eq!(display_width_of_char_prefix(line, 1), 1);
+	assert_eq!(display_width_of_char_prefix(line, 2), 5);
+	assert_eq!(display_width_of_char_prefix(line, 3), 6);
+}
+
+#[test]
 fn visible_slice_uses_display_columns() {
 	let line = "a中bc";
 	assert_eq!(visible_slice_by_display_width(line, 0, 3), "a中");
 	assert_eq!(visible_slice_by_display_width(line, 1, 2), "中");
 	assert_eq!(visible_slice_by_display_width(line, 3, 2), "bc");
+}
+
+#[test]
+fn render_line_for_display_should_expand_tab_to_spaces() {
+	assert_eq!(render_line_for_display("\t", false), "    ");
+	assert_eq!(render_line_for_display("a\tb", false), "a    b");
 }
 
 #[test]

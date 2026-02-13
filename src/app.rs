@@ -8,17 +8,17 @@ use crate::{action::{AppAction, FileAction}, action_handler::{ActionHandlerImpl,
 #[derive(derive_more::AsRef, derive_more::AsMut)]
 pub struct App {
 	#[as_mut]
-	state:                AppState,
-	renderer:             Renderer,
+	state:          AppState,
+	renderer:       Renderer,
 	#[as_ref]
 	#[as_mut]
-	action_handler:       ActionHandlerState,
+	action_handler: ActionHandlerState,
 	#[as_ref]
-	file_io_service:      FileIoState,
+	file_io:        FileIoState,
 	#[as_ref]
-	file_watcher_service: FileWatcherState,
-	event_tx:             flume::Sender<AppAction>,
-	event_rx:             flume::Receiver<AppAction>,
+	file_watcher:   FileWatcherState,
+	event_tx:       flume::Sender<AppAction>,
+	event_rx:       flume::Receiver<AppAction>,
 }
 
 impl App {
@@ -26,15 +26,15 @@ impl App {
 		let state = AppState::new();
 
 		let (event_tx, event_rx) = flume::bounded(1024);
-		let file_io_service = FileIoState::start(event_tx.clone());
-		let file_watcher_service = FileWatcherState::start(event_tx.clone());
+		let file_io_service = FileIoState::new(event_tx.clone());
+		let file_watcher_service = FileWatcherState::new(event_tx.clone());
 
 		Ok(Self {
 			state,
 			renderer: Renderer::new(),
 			action_handler: ActionHandlerState::new(),
-			file_io_service,
-			file_watcher_service,
+			file_io: file_io_service,
+			file_watcher: file_watcher_service,
 			event_tx,
 			event_rx,
 		})
@@ -55,6 +55,8 @@ impl App {
 	}
 
 	pub fn run(mut self, file_paths: Vec<PathBuf>) -> Result<()> {
+		self.file_io.start();
+		self.file_watcher.start();
 		self.bootstrap_files(file_paths).context("bootstrap startup files failed")?;
 		let mut terminal_session =
 			TerminalSession::enter(self.state.title.as_str()).context("enter terminal session failed")?;

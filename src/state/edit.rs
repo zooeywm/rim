@@ -2,6 +2,8 @@ use unicode_width::UnicodeWidthChar;
 
 use super::{AppState, BufferState, CursorState};
 
+const TAB_DISPLAY_WIDTH: usize = 4;
+
 impl AppState {
 	pub fn move_cursor_left(&mut self) {
 		tracing::info!("move left");
@@ -928,7 +930,7 @@ impl AppState {
 		self
 			.active_buffer_text()
 			.and_then(|text| text.lines().nth(row_index))
-			.map(|line| line.chars().map(|ch| UnicodeWidthChar::width(ch).unwrap_or(0) as u16).sum())
+			.map(|line| line.chars().map(|ch| char_display_width(ch) as u16).sum())
 			.unwrap_or(0)
 	}
 }
@@ -949,7 +951,15 @@ fn char_to_byte_idx(s: &str, char_idx: usize) -> usize {
 }
 
 fn display_width_of_char_prefix(line: &str, char_count: usize) -> usize {
-	line.chars().take(char_count).map(|ch| UnicodeWidthChar::width(ch).unwrap_or(0)).sum()
+	line.chars().take(char_count).map(char_display_width).sum()
+}
+
+fn char_display_width(ch: char) -> usize {
+	if ch == '\t' {
+		TAB_DISPLAY_WIDTH
+	} else {
+		UnicodeWidthChar::width(ch).unwrap_or(0)
+	}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
