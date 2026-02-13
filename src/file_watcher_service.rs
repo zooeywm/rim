@@ -10,6 +10,8 @@ use crate::{action::{AppAction, FileAction}, state::BufferId};
 #[target(FileWatcherImpl)]
 pub struct FileWatcherState {
 	watch_tx: flume::Sender<WatchRequest>,
+	watch_rx: flume::Receiver<WatchRequest>,
+	event_tx: flume::Sender<AppAction>,
 }
 
 #[derive(Debug, Error)]
@@ -42,13 +44,18 @@ where Deps: AsRef<FileWatcherState>
 }
 
 impl FileWatcherState {
-	pub(crate) fn start(event_tx: flume::Sender<AppAction>) -> Self {
+	pub fn new(event_tx: flume::Sender<AppAction>) -> Self {
 		let (watch_tx, watch_rx) = flume::unbounded();
-		thread::spawn(move || Self::run_watch_worker(watch_rx, event_tx));
-		Self { watch_tx }
+		Self { watch_tx, watch_rx, event_tx }
 	}
 
-	fn run_watch_worker(watch_rx: flume::Receiver<WatchRequest>, event_tx: flume::Sender<AppAction>) {
+	pub fn start(&self) {
+		let watch_rx = self.watch_rx.clone();
+		let event_tx = self.event_tx.clone();
+		thread::spawn(move || Self::run(watch_rx, event_tx));
+	}
+
+	fn run(watch_rx: flume::Receiver<WatchRequest>, event_tx: flume::Sender<AppAction>) {
 		let (notify_tx, notify_rx) = std::sync::mpsc::channel();
 		let mut watcher = match RecommendedWatcher::new(
 			move |res| {
