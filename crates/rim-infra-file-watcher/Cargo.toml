@@ -1,0 +1,13 @@
+[package]
+name = "rim-infra-file-watcher"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+flume = "0.12"
+notify = "8.2"
+thiserror = "2"
+tracing = "0.1"
+dep-inj = "0.1"
+dep-inj-target = { git = "https://github.com/zooeywm/dep-inj-target.git" }
+rim-kernel = { path = "../rim-kernel" }

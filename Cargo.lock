@@ -1427,25 +1427,117 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a96887878f22d7bad8a3b6dc5b7440e0ada9a245242924394987b21cf2210a4c"
 
 [[package]]
-name = "rim"
+name = "rim-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "compio",
- "crossterm",
  "dep-inj",
  "dep-inj-target",
  "derive_more",
  "flume",
- "notify",
- "ratatui",
- "slotmap",
+ "rim-infra-file-io",
+ "rim-infra-file-watcher",
+ "rim-infra-input",
+ "rim-infra-swap",
+ "rim-infra-ui",
+ "rim-kernel",
+ "tracing",
+]
+
+[[package]]
+name = "rim-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rim-app",
  "thiserror 2.0.18",
  "time",
- "tracing",
  "tracing-appender",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "rim-infra-file-io"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "compio",
+ "dep-inj",
+ "dep-inj-target",
+ "flume",
+ "rim-kernel",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "rim-infra-file-watcher"
+version = "0.1.0"
+dependencies = [
+ "dep-inj",
+ "dep-inj-target",
+ "flume",
+ "notify",
+ "rim-kernel",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "rim-infra-input"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "flume",
+ "rim-kernel",
+ "tracing",
+]
+
+[[package]]
+name = "rim-infra-swap"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "dep-inj",
+ "dep-inj-target",
+ "flume",
+ "rim-kernel",
+ "ropey",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "rim-infra-ui"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "ratatui",
+ "rim-kernel",
+ "thiserror 2.0.18",
  "unicode-width",
+]
+
+[[package]]
+name = "rim-kernel"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "slotmap",
+ "thiserror 2.0.18",
+ "tracing",
+ "unicode-width",
+]
+
+[[package]]
+name = "ropey"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93411e420bcd1a75ddd1dc3caf18c23155eda2c090631a85af21ba19e97093b5"
+dependencies = [
+ "smallvec",
+ "str_indices",
 ]
 
 [[package]]
@@ -1537,6 +1629,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
+]
+
+[[package]]
+name = "serde_json"
+version = "1.0.149"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86"
+dependencies = [
+ "itoa",
+ "memchr",
+ "serde",
+ "serde_core",
+ "zmij",
 ]
 
 [[package]]
@@ -1641,6 +1746,12 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "str_indices"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d08889ec5408683408db66ad89e0e1f93dff55c73a4ccc71c427d5b277ee47e6"
 
 [[package]]
 name = "strsim"
@@ -2317,3 +2428,9 @@ name = "wit-bindgen"
 version = "0.51.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7249219f66ced02969388cf2bb044a09756a083d0fab1e566056b04d9fbcaa5"
+
+[[package]]
+name = "zmij"
+version = "1.0.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"

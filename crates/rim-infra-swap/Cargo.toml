@@ -1,0 +1,15 @@
+[package]
+name = "rim-infra-swap"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+flume = "0.12"
+ropey = "1.6"
+tracing = "0.1"
+serde_json = "1"
+dep-inj = "0.1"
+dep-inj-target = { git = "https://github.com/zooeywm/dep-inj-target.git" }
+rim-kernel = { path = "../rim-kernel" }

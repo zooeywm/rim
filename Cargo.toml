@@ -1,22 +1,12 @@
-[package]
-name = "rim"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-anyhow = "1"
-thiserror = "2"
-ratatui = "0.30"
-crossterm = "0.29"
-compio = { version = "0.18", features = ["fs", "macros"] }
-flume = "0.12"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "time"] }
-tracing-appender = "0.2"
-time = { version = "0.3", features = ["formatting", "macros"] }
-slotmap = "1.0"
-unicode-width = "0.2"
-notify = "8.2"
-dep-inj = "0.1"
-dep-inj-target = { git = "https://github.com/zooeywm/dep-inj-target.git" }
-derive_more = { version = "2.1", features = ["as_ref"] }
+[workspace]
+members = [
+	"crates/rim-kernel",
+	"crates/rim-infra-file-io",
+	"crates/rim-infra-file-watcher",
+	"crates/rim-infra-swap",
+	"crates/rim-infra-input",
+	"crates/rim-infra-ui",
+	"crates/rim-app",
+	"crates/rim-cli",
+]
+resolver = "2"
