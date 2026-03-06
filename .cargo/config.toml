@@ -1,5 +1,5 @@
 [alias]
 # Cross-compile the CLI to a Windows MSVC release binary through cargo-xwin.
-win-release = "xwin build --release --target x86_64-pc-windows-msvc -p rim-tui"
+win-release = "xwin build --release --target x86_64-pc-windows-msvc -p rim-app"
 # Run clippy against the Windows MSVC target through cargo-xwin.
 win-clippy = "xwin clippy --target x86_64-pc-windows-msvc --workspace --all-targets --all-features"

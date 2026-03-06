@@ -12,19 +12,21 @@ use tracing::{error, info};
 
 const SWAP_FILE_MAGIC: &str = "RIMSWP\t1";
 const UNDO_FILE_VERSION: u32 = 1;
-const REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(40);
 const FLUSH_DEBOUNCE_WINDOW: Duration = Duration::from_millis(180);
 const INSERT_MERGE_WINDOW: Duration = Duration::from_millis(350);
 
 #[derive(dep_inj::DepInj)]
 #[target(PersistenceIoImpl)]
 pub struct PersistenceIoState {
-	request_tx:  flume::Sender<PersistenceRequest>,
-	request_rx:  flume::Receiver<PersistenceRequest>,
-	event_tx:    flume::Sender<AppAction>,
-	swap_dir:    PathBuf,
-	undo_dir:    PathBuf,
-	worker_join: Mutex<Option<thread::JoinHandle<()>>>,
+	worker_tx:      flume::Sender<PersistenceWorkerEvent>,
+	worker_rx:      flume::Receiver<PersistenceWorkerEvent>,
+	scheduler_tx:   flume::Sender<FlushSchedulerCommand>,
+	scheduler_rx:   flume::Receiver<FlushSchedulerCommand>,
+	app_event_tx:   flume::Sender<AppAction>,
+	swap_dir:       PathBuf,
+	undo_dir:       PathBuf,
+	worker_join:    Mutex<Option<thread::JoinHandle<()>>>,
+	scheduler_join: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
 impl AsRef<PersistenceIoState> for PersistenceIoState {
@@ -35,10 +37,13 @@ impl<Deps> PersistenceIo for PersistenceIoImpl<Deps>
 where Deps: AsRef<PersistenceIoState>
 {
 	fn enqueue_open(&self, buffer_id: BufferId, source_path: PathBuf) -> Result<(), PersistenceIoError> {
-		self.request_tx.send(PersistenceRequest::Open { buffer_id, source_path }).map_err(|err| {
-			error!("enqueue_open failed: swap request channel is disconnected: {}", err);
-			PersistenceIoError::RequestChannelDisconnected { operation: "open" }
-		})
+		self
+			.worker_tx
+			.send(PersistenceWorkerEvent::Request(PersistenceRequest::Open { buffer_id, source_path }))
+			.map_err(|err| {
+				error!("enqueue_open failed: persistence worker channel is disconnected: {}", err);
+				PersistenceIoError::RequestChannelDisconnected { operation: "open" }
+			})
 	}
 
 	fn enqueue_detect_conflict(
@@ -46,10 +51,13 @@ where Deps: AsRef<PersistenceIoState>
 		buffer_id: BufferId,
 		source_path: PathBuf,
 	) -> Result<(), PersistenceIoError> {
-		self.request_tx.send(PersistenceRequest::DetectConflict { buffer_id, source_path }).map_err(|err| {
-			error!("enqueue_detect_conflict failed: swap request channel is disconnected: {}", err);
-			PersistenceIoError::RequestChannelDisconnected { operation: "detect_conflict" }
-		})
+		self
+			.worker_tx
+			.send(PersistenceWorkerEvent::Request(PersistenceRequest::DetectConflict { buffer_id, source_path }))
+			.map_err(|err| {
+				error!("enqueue_detect_conflict failed: persistence worker channel is disconnected: {}", err);
+				PersistenceIoError::RequestChannelDisconnected { operation: "detect_conflict" }
+			})
 	}
 
 	fn enqueue_edit(
@@ -58,17 +66,23 @@ where Deps: AsRef<PersistenceIoState>
 		source_path: PathBuf,
 		op: SwapEditOp,
 	) -> Result<(), PersistenceIoError> {
-		self.request_tx.send(PersistenceRequest::Edit { buffer_id, source_path, op }).map_err(|err| {
-			error!("enqueue_edit failed: swap request channel is disconnected: {}", err);
-			PersistenceIoError::RequestChannelDisconnected { operation: "edit" }
-		})
+		self
+			.worker_tx
+			.send(PersistenceWorkerEvent::Request(PersistenceRequest::Edit { buffer_id, source_path, op }))
+			.map_err(|err| {
+				error!("enqueue_edit failed: persistence worker channel is disconnected: {}", err);
+				PersistenceIoError::RequestChannelDisconnected { operation: "edit" }
+			})
 	}
 
 	fn enqueue_mark_clean(&self, buffer_id: BufferId, source_path: PathBuf) -> Result<(), PersistenceIoError> {
-		self.request_tx.send(PersistenceRequest::MarkClean { buffer_id, source_path }).map_err(|err| {
-			error!("enqueue_mark_clean failed: swap request channel is disconnected: {}", err);
-			PersistenceIoError::RequestChannelDisconnected { operation: "mark_clean" }
-		})
+		self
+			.worker_tx
+			.send(PersistenceWorkerEvent::Request(PersistenceRequest::MarkClean { buffer_id, source_path }))
+			.map_err(|err| {
+				error!("enqueue_mark_clean failed: persistence worker channel is disconnected: {}", err);
+				PersistenceIoError::RequestChannelDisconnected { operation: "mark_clean" }
+			})
 	}
 
 	fn enqueue_initialize_base(
@@ -79,10 +93,15 @@ where Deps: AsRef<PersistenceIoState>
 		delete_existing: bool,
 	) -> Result<(), PersistenceIoError> {
 		self
-			.request_tx
-			.send(PersistenceRequest::InitializeBase { buffer_id, source_path, base_text, delete_existing })
+			.worker_tx
+			.send(PersistenceWorkerEvent::Request(PersistenceRequest::InitializeBase {
+				buffer_id,
+				source_path,
+				base_text,
+				delete_existing,
+			}))
 			.map_err(|err| {
-				error!("enqueue_initialize_base failed: swap request channel is disconnected: {}", err);
+				error!("enqueue_initialize_base failed: persistence worker channel is disconnected: {}", err);
 				PersistenceIoError::RequestChannelDisconnected { operation: "initialize_base" }
 			})
 	}
@@ -93,10 +112,17 @@ where Deps: AsRef<PersistenceIoState>
 		source_path: PathBuf,
 		base_text: String,
 	) -> Result<(), PersistenceIoError> {
-		self.request_tx.send(PersistenceRequest::Recover { buffer_id, source_path, base_text }).map_err(|err| {
-			error!("enqueue_recover failed: swap request channel is disconnected: {}", err);
-			PersistenceIoError::RequestChannelDisconnected { operation: "recover" }
-		})
+		self
+			.worker_tx
+			.send(PersistenceWorkerEvent::Request(PersistenceRequest::Recover {
+				buffer_id,
+				source_path,
+				base_text,
+			}))
+			.map_err(|err| {
+				error!("enqueue_recover failed: persistence worker channel is disconnected: {}", err);
+				PersistenceIoError::RequestChannelDisconnected { operation: "recover" }
+			})
 	}
 
 	fn enqueue_load_history(
@@ -105,12 +131,17 @@ where Deps: AsRef<PersistenceIoState>
 		source_path: PathBuf,
 		expected_text: String,
 	) -> Result<(), PersistenceIoError> {
-		self.request_tx.send(PersistenceRequest::LoadHistory { buffer_id, source_path, expected_text }).map_err(
-			|err| {
-				error!("enqueue_load_history failed: persistence request channel is disconnected: {}", err);
+		self
+			.worker_tx
+			.send(PersistenceWorkerEvent::Request(PersistenceRequest::LoadHistory {
+				buffer_id,
+				source_path,
+				expected_text,
+			}))
+			.map_err(|err| {
+				error!("enqueue_load_history failed: persistence worker channel is disconnected: {}", err);
 				PersistenceIoError::RequestChannelDisconnected { operation: "load_history" }
-			},
-		)
+			})
 	}
 
 	fn enqueue_save_history(
@@ -119,52 +150,72 @@ where Deps: AsRef<PersistenceIoState>
 		source_path: PathBuf,
 		history: PersistedBufferHistory,
 	) -> Result<(), PersistenceIoError> {
-		self.request_tx.send(PersistenceRequest::SaveHistory { source_path, history }).map_err(|err| {
-			error!("enqueue_save_history failed: persistence request channel is disconnected: {}", err);
-			PersistenceIoError::RequestChannelDisconnected { operation: "save_history" }
-		})
+		self
+			.worker_tx
+			.send(PersistenceWorkerEvent::Request(PersistenceRequest::SaveHistory { source_path, history }))
+			.map_err(|err| {
+				error!("enqueue_save_history failed: persistence worker channel is disconnected: {}", err);
+				PersistenceIoError::RequestChannelDisconnected { operation: "save_history" }
+			})
 	}
 
 	fn enqueue_close(&self, buffer_id: BufferId) -> Result<(), PersistenceIoError> {
-		self.request_tx.send(PersistenceRequest::Close { buffer_id }).map_err(|err| {
-			error!("enqueue_close failed: swap request channel is disconnected: {}", err);
-			PersistenceIoError::RequestChannelDisconnected { operation: "close" }
-		})
+		self.worker_tx.send(PersistenceWorkerEvent::Request(PersistenceRequest::Close { buffer_id })).map_err(
+			|err| {
+				error!("enqueue_close failed: persistence worker channel is disconnected: {}", err);
+				PersistenceIoError::RequestChannelDisconnected { operation: "close" }
+			},
+		)
 	}
 }
 
 impl PersistenceIoState {
 	pub fn new(event_tx: flume::Sender<AppAction>) -> Self {
-		let (request_tx, request_rx) = flume::unbounded();
+		let (worker_tx, worker_rx) = flume::unbounded();
+		let (scheduler_tx, scheduler_rx) = flume::unbounded();
 		Self {
-			request_tx,
-			request_rx,
-			event_tx,
+			worker_tx,
+			worker_rx,
+			scheduler_tx,
+			scheduler_rx,
+			app_event_tx: event_tx,
 			swap_dir: user_swap_dir(),
 			undo_dir: user_undo_dir(),
 			worker_join: Mutex::new(None),
+			scheduler_join: Mutex::new(None),
 		}
 	}
 
 	pub fn start(&self) {
-		let mut guard = self.worker_join.lock().expect("swap worker mutex poisoned");
-		if guard.is_some() {
+		let mut worker_guard = self.worker_join.lock().expect("swap worker mutex poisoned");
+		if worker_guard.is_none() {
+			let worker_rx = self.worker_rx.clone();
+			let scheduler_tx = self.scheduler_tx.clone();
+			let event_tx = self.app_event_tx.clone();
+			let swap_dir = self.swap_dir.clone();
+			let undo_dir = self.undo_dir.clone();
+			let join = thread::spawn(move || {
+				if let Err(err) = Self::run(worker_rx, scheduler_tx, event_tx, swap_dir, undo_dir) {
+					error!("swap worker exited with error: {:#}", err);
+				}
+			});
+			*worker_guard = Some(join);
+		}
+		drop(worker_guard);
+
+		let mut scheduler_guard = self.scheduler_join.lock().expect("swap scheduler mutex poisoned");
+		if scheduler_guard.is_some() {
 			return;
 		}
-		let request_rx = self.request_rx.clone();
-		let event_tx = self.event_tx.clone();
-		let swap_dir = self.swap_dir.clone();
-		let undo_dir = self.undo_dir.clone();
-		let join = thread::spawn(move || {
-			if let Err(err) = Self::run(request_rx, event_tx, swap_dir, undo_dir) {
-				error!("swap worker exited with error: {:#}", err);
-			}
-		});
-		*guard = Some(join);
+		let worker_tx = self.worker_tx.clone();
+		let scheduler_rx = self.scheduler_rx.clone();
+		let join = thread::spawn(move || Self::run_flush_scheduler(worker_tx, scheduler_rx));
+		*scheduler_guard = Some(join);
 	}
 
 	fn run(
-		request_rx: flume::Receiver<PersistenceRequest>,
+		worker_rx: flume::Receiver<PersistenceWorkerEvent>,
+		scheduler_tx: flume::Sender<FlushSchedulerCommand>,
 		event_tx: flume::Sender<AppAction>,
 		swap_dir: PathBuf,
 		undo_dir: PathBuf,
@@ -179,47 +230,99 @@ impl PersistenceIoState {
 		let pid = std::process::id();
 		let username = current_username();
 
-		loop {
-			match request_rx.recv_timeout(REQUEST_POLL_INTERVAL) {
-				Ok(request) => {
-					// Bundle worker dependencies into a single context so the request
-					// dispatcher does not grow an unstable argument list.
-					let keep_running = Self::handle_request(request, PersistenceWorkerContext {
-						event_tx: &event_tx,
-						swap_dir: &swap_dir,
-						undo_dir: &undo_dir,
-						pid,
-						username: username.as_str(),
-						sessions: &mut sessions,
-						undo_sessions: &mut undo_sessions,
-					});
-					if !keep_running {
-						break;
-					}
+		while let Ok(event) = worker_rx.recv() {
+			let keep_running = match event {
+				PersistenceWorkerEvent::Request(request) => Self::handle_request(request, PersistenceWorkerContext {
+					scheduler_tx: &scheduler_tx,
+					event_tx: &event_tx,
+					swap_dir: &swap_dir,
+					undo_dir: &undo_dir,
+					pid,
+					username: username.as_str(),
+					sessions: &mut sessions,
+					undo_sessions: &mut undo_sessions,
+				}),
+				PersistenceWorkerEvent::FlushDue { buffer_id, generation } => {
+					Self::handle_flush_due(buffer_id, generation, &mut sessions)
 				}
-				Err(flume::RecvTimeoutError::Timeout) => {}
-				Err(flume::RecvTimeoutError::Disconnected) => break,
-			}
-
-			let now = Instant::now();
-			for session in sessions.values_mut() {
-				if let Err(err) = session.flush_if_due(now) {
-					error!(
-						"swap flush failed: source={} swap={} error={:#}",
-						session.source_path.display(),
-						session.swap_path.display(),
-						err
-					);
-				}
+			};
+			if !keep_running {
+				break;
 			}
 		}
 
 		Ok(())
 	}
 
+	fn run_flush_scheduler(
+		worker_tx: flume::Sender<PersistenceWorkerEvent>,
+		scheduler_rx: flume::Receiver<FlushSchedulerCommand>,
+	) {
+		let mut deadlines: HashMap<BufferId, FlushSchedule> = HashMap::new();
+
+		loop {
+			let next_due = deadlines.values().map(|schedule| schedule.due_at).min();
+			let command = match next_due {
+				Some(next_due_at) => {
+					let now = Instant::now();
+					if next_due_at <= now {
+						Self::dispatch_due_flushes(&worker_tx, &mut deadlines, now);
+						continue;
+					}
+					match scheduler_rx.recv_timeout(next_due_at.saturating_duration_since(now)) {
+						Ok(command) => Some(command),
+						Err(flume::RecvTimeoutError::Timeout) => {
+							Self::dispatch_due_flushes(&worker_tx, &mut deadlines, Instant::now());
+							continue;
+						}
+						Err(flume::RecvTimeoutError::Disconnected) => None,
+					}
+				}
+				None => scheduler_rx.recv().ok(),
+			};
+
+			let Some(command) = command else {
+				break;
+			};
+			match command {
+				FlushSchedulerCommand::Schedule { buffer_id, generation, due_at } => {
+					deadlines.insert(buffer_id, FlushSchedule { generation, due_at });
+				}
+				FlushSchedulerCommand::Shutdown => break,
+			}
+		}
+	}
+
+	fn dispatch_due_flushes(
+		worker_tx: &flume::Sender<PersistenceWorkerEvent>,
+		deadlines: &mut HashMap<BufferId, FlushSchedule>,
+		now: Instant,
+	) {
+		let due_buffers = deadlines
+			.iter()
+			.filter_map(|(buffer_id, schedule)| {
+				(schedule.due_at <= now).then_some((*buffer_id, schedule.generation))
+			})
+			.collect::<Vec<_>>();
+		for (buffer_id, generation) in due_buffers {
+			deadlines.remove(&buffer_id);
+			if worker_tx.send(PersistenceWorkerEvent::FlushDue { buffer_id, generation }).is_err() {
+				return;
+			}
+		}
+	}
+
 	fn handle_request(request: PersistenceRequest, context: PersistenceWorkerContext<'_>) -> bool {
-		let PersistenceWorkerContext { event_tx, swap_dir, undo_dir, pid, username, sessions, undo_sessions } =
-			context;
+		let PersistenceWorkerContext {
+			scheduler_tx,
+			event_tx,
+			swap_dir,
+			undo_dir,
+			pid,
+			username,
+			sessions,
+			undo_sessions,
+		} = context;
 		match request {
 			PersistenceRequest::Shutdown => return false,
 			PersistenceRequest::Open { buffer_id, source_path } => {
@@ -252,8 +355,11 @@ impl PersistenceIoState {
 					error!("swap rebind before edit failed: {:#}", err);
 					return true;
 				}
-				if let Err(err) = session.apply_edit(op, Instant::now()) {
+				let now = Instant::now();
+				if let Err(err) = session.apply_edit(op, now) {
 					error!("swap edit apply failed: {:#}", err);
+				} else if let Some(generation) = session.schedule_flush_generation() {
+					Self::schedule_flush(scheduler_tx, buffer_id, generation, now);
 				}
 			}
 			PersistenceRequest::MarkClean { buffer_id, source_path } => {
@@ -319,6 +425,57 @@ impl PersistenceIoState {
 
 		true
 	}
+
+	fn handle_flush_due(
+		buffer_id: BufferId,
+		generation: u64,
+		sessions: &mut HashMap<BufferId, SwapSession>,
+	) -> bool {
+		let Some(session) = sessions.get_mut(&buffer_id) else {
+			return true;
+		};
+		if !session.should_flush_generation(generation) {
+			return true;
+		}
+		if let Err(err) = session.flush_pending() {
+			error!(
+				"swap flush failed: source={} swap={} error={:#}",
+				session.source_path.display(),
+				session.swap_path.display(),
+				err
+			);
+		}
+		true
+	}
+
+	fn schedule_flush(
+		scheduler_tx: &flume::Sender<FlushSchedulerCommand>,
+		buffer_id: BufferId,
+		generation: u64,
+		now: Instant,
+	) {
+		let due_at = now + FLUSH_DEBOUNCE_WINDOW;
+		if let Err(err) = scheduler_tx.send(FlushSchedulerCommand::Schedule { buffer_id, generation, due_at }) {
+			error!("schedule swap flush failed: {}", err);
+		}
+	}
+}
+#[derive(Debug)]
+enum PersistenceWorkerEvent {
+	Request(PersistenceRequest),
+	FlushDue { buffer_id: BufferId, generation: u64 },
+}
+
+#[derive(Debug)]
+enum FlushSchedulerCommand {
+	Schedule { buffer_id: BufferId, generation: u64, due_at: Instant },
+	Shutdown,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FlushSchedule {
+	generation: u64,
+	due_at:     Instant,
 }
 
 #[derive(Debug)]
@@ -367,6 +524,7 @@ enum PersistenceRequest {
 }
 
 struct PersistenceWorkerContext<'a> {
+	scheduler_tx:  &'a flume::Sender<FlushSchedulerCommand>,
 	event_tx:      &'a flume::Sender<AppAction>,
 	swap_dir:      &'a Path,
 	undo_dir:      &'a Path,
@@ -392,6 +550,7 @@ struct SwapSession {
 	logged_ops:         Vec<BufferedSwapOp>,
 	logged_end_offsets: Vec<u64>,
 	pending_ops:        Vec<BufferedSwapOp>,
+	flush_generation:   u64,
 	last_pending_at:    Option<Instant>,
 	last_insert_at:     Option<Instant>,
 	snapshot_ready:     bool,
@@ -435,6 +594,7 @@ impl SwapSession {
 			logged_ops: Vec::new(),
 			logged_end_offsets: Vec::new(),
 			pending_ops: Vec::new(),
+			flush_generation: 0,
 			last_pending_at: None,
 			last_insert_at: None,
 			snapshot_ready: false,
@@ -622,6 +782,19 @@ impl SwapSession {
 		compact_delete_against_insert_tail(&mut self.pending_ops, pos, len) != TailCompaction::None
 	}
 
+	fn schedule_flush_generation(&mut self) -> Option<u64> {
+		if self.pending_ops.is_empty() {
+			return None;
+		}
+		self.flush_generation = self.flush_generation.saturating_add(1);
+		Some(self.flush_generation)
+	}
+
+	fn should_flush_generation(&self, generation: u64) -> bool {
+		!self.pending_ops.is_empty() && self.flush_generation == generation
+	}
+
+	#[cfg(test)]
 	fn flush_if_due(&mut self, now: Instant) -> Result<()> {
 		if self.pending_ops.is_empty() {
 			return Ok(());
@@ -775,8 +948,14 @@ impl Drop for SwapSession {
 
 impl Drop for PersistenceIoState {
 	fn drop(&mut self) {
-		let _ = self.request_tx.send(PersistenceRequest::Shutdown);
+		let _ = self.worker_tx.send(PersistenceWorkerEvent::Request(PersistenceRequest::Shutdown));
+		let _ = self.scheduler_tx.send(FlushSchedulerCommand::Shutdown);
 		if let Ok(mut guard) = self.worker_join.lock()
+			&& let Some(join) = guard.take()
+		{
+			let _ = join.join();
+		}
+		if let Ok(mut guard) = self.scheduler_join.lock()
 			&& let Some(join) = guard.take()
 		{
 			let _ = join.join();
@@ -2288,17 +2467,20 @@ mod tests {
 		state.start();
 
 		state
-			.request_tx
-			.send(PersistenceRequest::Open { buffer_id: BufferId::default(), source_path: source_path.clone() })
+			.worker_tx
+			.send(PersistenceWorkerEvent::Request(PersistenceRequest::Open {
+				buffer_id:   BufferId::default(),
+				source_path: source_path.clone(),
+			}))
 			.expect("send open failed");
 		state
-			.request_tx
-			.send(PersistenceRequest::InitializeBase {
+			.worker_tx
+			.send(PersistenceWorkerEvent::Request(PersistenceRequest::InitializeBase {
 				buffer_id:       BufferId::default(),
 				source_path:     source_path.clone(),
 				base_text:       "hello".to_string(),
 				delete_existing: false,
-			})
+			}))
 			.expect("send initialize base failed");
 		for _ in 0..50 {
 			if swap_path.exists() {
@@ -2322,12 +2504,12 @@ mod tests {
 		state.start();
 
 		state
-			.request_tx
-			.send(PersistenceRequest::Recover {
+			.worker_tx
+			.send(PersistenceWorkerEvent::Request(PersistenceRequest::Recover {
 				buffer_id: BufferId::default(),
 				source_path,
 				base_text: "hello".to_string(),
-			})
+			}))
 			.expect("send recover failed");
 
 		let result = event_rx.recv_timeout(Duration::from_millis(200));

@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, path::{Path, PathBuf}, thread, time::Duration};
+use std::{collections::{HashMap, HashSet}, path::{Path, PathBuf}, thread};
 
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher, event::EventKind};
 use rim_kernel::{action::{AppAction, FileAction}, ports::{FileWatcher, FileWatcherError}, state::BufferId};
@@ -7,9 +7,9 @@ use tracing::error;
 #[derive(dep_inj::DepInj)]
 #[target(FileWatcherImpl)]
 pub struct FileWatcherState {
-	watch_tx: flume::Sender<WatchRequest>,
-	watch_rx: flume::Receiver<WatchRequest>,
-	event_tx: flume::Sender<AppAction>,
+	worker_tx: flume::Sender<WatchWorkerEvent>,
+	worker_rx: flume::Receiver<WatchWorkerEvent>,
+	event_tx:  flume::Sender<AppAction>,
 }
 
 impl AsRef<FileWatcherState> for FileWatcherState {
@@ -20,14 +20,16 @@ impl<Deps> FileWatcher for FileWatcherImpl<Deps>
 where Deps: AsRef<FileWatcherState>
 {
 	fn enqueue_watch(&self, buffer_id: BufferId, path: PathBuf) -> Result<(), FileWatcherError> {
-		self.watch_tx.send(WatchRequest::WatchBufferPath { buffer_id, path }).map_err(|err| {
-			error!("enqueue_watch failed: watch request channel is disconnected: {}", err);
-			FileWatcherError::RequestChannelDisconnected { operation: "watch" }
-		})
+		self.worker_tx.send(WatchWorkerEvent::Command(WatchRequest::WatchBufferPath { buffer_id, path })).map_err(
+			|err| {
+				error!("enqueue_watch failed: watch request channel is disconnected: {}", err);
+				FileWatcherError::RequestChannelDisconnected { operation: "watch" }
+			},
+		)
 	}
 
 	fn enqueue_unwatch(&self, buffer_id: BufferId) -> Result<(), FileWatcherError> {
-		self.watch_tx.send(WatchRequest::UnwatchBuffer { buffer_id }).map_err(|err| {
+		self.worker_tx.send(WatchWorkerEvent::Command(WatchRequest::UnwatchBuffer { buffer_id })).map_err(|err| {
 			error!("enqueue_unwatch failed: watch request channel is disconnected: {}", err);
 			FileWatcherError::RequestChannelDisconnected { operation: "unwatch" }
 		})
@@ -36,21 +38,25 @@ where Deps: AsRef<FileWatcherState>
 
 impl FileWatcherState {
 	pub fn new(event_tx: flume::Sender<AppAction>) -> Self {
-		let (watch_tx, watch_rx) = flume::unbounded();
-		Self { watch_tx, watch_rx, event_tx }
+		let (worker_tx, worker_rx) = flume::unbounded();
+		Self { worker_tx, worker_rx, event_tx }
 	}
 
 	pub fn start(&self) {
-		let watch_rx = self.watch_rx.clone();
+		let worker_rx = self.worker_rx.clone();
+		let worker_tx = self.worker_tx.clone();
 		let event_tx = self.event_tx.clone();
-		thread::spawn(move || Self::run(watch_rx, event_tx));
+		thread::spawn(move || Self::run(worker_rx, worker_tx, event_tx));
 	}
 
-	fn run(watch_rx: flume::Receiver<WatchRequest>, event_tx: flume::Sender<AppAction>) {
-		let (notify_tx, notify_rx) = std::sync::mpsc::channel();
+	fn run(
+		worker_rx: flume::Receiver<WatchWorkerEvent>,
+		worker_tx: flume::Sender<WatchWorkerEvent>,
+		event_tx: flume::Sender<AppAction>,
+	) {
 		let mut watcher = match RecommendedWatcher::new(
-			move |res| {
-				let _ = notify_tx.send(res);
+			move |result| {
+				let _ = worker_tx.send(WatchWorkerEvent::Notify(result));
 			},
 			Config::default(),
 		) {
@@ -65,59 +71,61 @@ impl FileWatcherState {
 		let mut buffer_to_file: HashMap<BufferId, PathBuf> = HashMap::new();
 		let mut watch_target_ref_counts: HashMap<PathBuf, usize> = HashMap::new();
 
-		loop {
-			while let Ok(request) = watch_rx.try_recv() {
-				Self::apply_watch_request(
-					request,
-					&mut watcher,
-					&mut file_to_buffer,
-					&mut buffer_to_file,
-					&mut watch_target_ref_counts,
-				);
-			}
-
-			match watch_rx.recv_timeout(Duration::from_millis(50)) {
-				Ok(request) => Self::apply_watch_request(
-					request,
-					&mut watcher,
-					&mut file_to_buffer,
-					&mut buffer_to_file,
-					&mut watch_target_ref_counts,
-				),
-				Err(flume::RecvTimeoutError::Timeout) => {}
-				Err(flume::RecvTimeoutError::Disconnected) => break,
-			}
-
-			for result in notify_rx.try_iter() {
-				let event = match result {
-					Ok(event) => event,
-					Err(err) => {
-						error!("file watcher event error: {}", err);
-						continue;
-					}
-				};
-				if matches!(event.kind, EventKind::Access(_)) {
-					continue;
+		while let Ok(event) = worker_rx.recv() {
+			match event {
+				WatchWorkerEvent::Command(request) => {
+					Self::apply_watch_request(
+						request,
+						&mut watcher,
+						&mut file_to_buffer,
+						&mut buffer_to_file,
+						&mut watch_target_ref_counts,
+					);
 				}
-
-				let mut affected_buffers = HashSet::new();
-				for path in event.paths {
-					let normalized_path = Self::normalize_watch_path(&path);
-					if let Some(buffer_id) = file_to_buffer.get(&normalized_path) {
-						affected_buffers.insert(*buffer_id);
-					}
-				}
-
-				for buffer_id in affected_buffers {
-					let Some(path) = buffer_to_file.get(&buffer_id).cloned() else {
-						continue;
-					};
-					if event_tx.send(AppAction::File(FileAction::ExternalChangeDetected { buffer_id, path })).is_err() {
+				WatchWorkerEvent::Notify(result) => {
+					if !Self::handle_notify_event(result, &file_to_buffer, &buffer_to_file, &event_tx) {
 						return;
 					}
 				}
 			}
 		}
+	}
+
+	fn handle_notify_event(
+		result: notify::Result<notify::Event>,
+		file_to_buffer: &HashMap<PathBuf, BufferId>,
+		buffer_to_file: &HashMap<BufferId, PathBuf>,
+		event_tx: &flume::Sender<AppAction>,
+	) -> bool {
+		let event = match result {
+			Ok(event) => event,
+			Err(err) => {
+				error!("file watcher event error: {}", err);
+				return true;
+			}
+		};
+		if matches!(event.kind, EventKind::Access(_)) {
+			return true;
+		}
+
+		let mut affected_buffers = HashSet::new();
+		for path in event.paths {
+			let normalized_path = Self::normalize_watch_path(&path);
+			if let Some(buffer_id) = file_to_buffer.get(&normalized_path) {
+				affected_buffers.insert(*buffer_id);
+			}
+		}
+
+		for buffer_id in affected_buffers {
+			let Some(path) = buffer_to_file.get(&buffer_id).cloned() else {
+				continue;
+			};
+			if event_tx.send(AppAction::File(FileAction::ExternalChangeDetected { buffer_id, path })).is_err() {
+				return false;
+			}
+		}
+
+		true
 	}
 
 	fn apply_watch_request(
@@ -238,6 +246,13 @@ impl FileWatcherState {
 	}
 }
 
+#[derive(Debug)]
+enum WatchWorkerEvent {
+	Command(WatchRequest),
+	Notify(notify::Result<notify::Event>),
+}
+
+#[derive(Debug)]
 enum WatchRequest {
 	WatchBufferPath { buffer_id: BufferId, path: PathBuf },
 	UnwatchBuffer { buffer_id: BufferId },

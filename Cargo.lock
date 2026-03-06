@@ -1480,7 +1480,12 @@ dependencies = [
  "rim-infra-persistence",
  "rim-infra-ui",
  "rim-kernel",
+ "rim-paths",
+ "thiserror 2.0.18",
+ "time",
  "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1559,19 +1564,6 @@ dependencies = [
 [[package]]
 name = "rim-paths"
 version = "0.0.1"
-
-[[package]]
-name = "rim-tui"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "rim-app",
- "rim-paths",
- "thiserror 2.0.18",
- "time",
- "tracing-appender",
- "tracing-subscriber",
-]
 
 [[package]]
 name = "ropey"

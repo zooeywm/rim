@@ -21,13 +21,13 @@
 
 - `rim-paths`: shared platform path rules for `logs` / `swp` / `undo`
 - `rim-kernel`: pure core state machine and business logic
-- `rim-app`: the single `App` container
+- `rim-app`: the single `App` container, runtime orchestrator, and TUI entrypoint
 - `rim-infra-file-io`: asynchronous file I/O infrastructure
 - `rim-infra-file-watcher`: file watching infrastructure
 - `rim-infra-persistence`: swap and persistent undo/redo
 - `rim-infra-input`: keyboard input infrastructure
 - `rim-infra-ui`: ratatui rendering
-- `rim-tui`: TUI entrypoint
+- `rim-app`: application container and TUI entrypoint
 
 ## Build And Run
 
@@ -36,10 +36,10 @@
 cargo build
 
 # Run locally
-cargo run -p rim-tui --
+cargo run -p rim-app --
 
 # Start with one or more files opened
-cargo run -p rim-tui -- path/to/a.rs path/to/b.rs
+cargo run -p rim-app -- path/to/a.rs path/to/b.rs
 
 # Checks
 cargo check

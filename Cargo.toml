@@ -8,7 +8,6 @@ members = [
   "rim-infra-input",
   "rim-infra-ui",
   "rim-app",
-  "rim-tui",
 ]
 resolver = "2"
 
