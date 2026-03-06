@@ -19,15 +19,15 @@
 
 ## Workspace Layout
 
-- `crates/rim-paths`: shared platform path rules for `logs` / `swp` / `undo`
-- `crates/rim-kernel`: pure core state machine and business logic
-- `crates/rim-app`: the single `App` container
-- `crates/rim-infra-file-io`: asynchronous file I/O infrastructure
-- `crates/rim-infra-file-watcher`: file watching infrastructure
-- `crates/rim-infra-persistence`: swap and persistent undo/redo
-- `crates/rim-infra-input`: keyboard input infrastructure
-- `crates/rim-infra-ui`: ratatui rendering
-- `crates/rim-tui`: TUI entrypoint
+- `rim-paths`: shared platform path rules for `logs` / `swp` / `undo`
+- `rim-kernel`: pure core state machine and business logic
+- `rim-app`: the single `App` container
+- `rim-infra-file-io`: asynchronous file I/O infrastructure
+- `rim-infra-file-watcher`: file watching infrastructure
+- `rim-infra-persistence`: swap and persistent undo/redo
+- `rim-infra-input`: keyboard input infrastructure
+- `rim-infra-ui`: ratatui rendering
+- `rim-tui`: TUI entrypoint
 
 ## Build And Run
 
@@ -67,7 +67,7 @@ By default, `rim` maintains three runtime directories under the user state root:
 - `swp/`: crash recovery swap files
 - `undo/`: persistent undo/redo history
 
-The root directory is resolved centrally by `crates/rim-paths`.
+The root directory is resolved centrally by `rim-paths`.
 
 Typical locations:
 

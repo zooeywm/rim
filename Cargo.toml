@@ -1,14 +1,14 @@
 [workspace]
 members = [
-  "crates/rim-paths",
-  "crates/rim-kernel",
-  "crates/rim-infra-file-io",
-  "crates/rim-infra-file-watcher",
-  "crates/rim-infra-persistence",
-  "crates/rim-infra-input",
-  "crates/rim-infra-ui",
-  "crates/rim-app",
-  "crates/rim-tui",
+  "rim-paths",
+  "rim-kernel",
+  "rim-infra-file-io",
+  "rim-infra-file-watcher",
+  "rim-infra-persistence",
+  "rim-infra-input",
+  "rim-infra-ui",
+  "rim-app",
+  "rim-tui",
 ]
 resolver = "2"
 
@@ -37,11 +37,11 @@ tracing                = "0.1"
 tracing-appender       = "0.2"
 tracing-subscriber     = { version = "0.3", features = ["env-filter", "fmt", "time"] }
 unicode-width          = "0.2"
-rim-app                = { path = "crates/rim-app" }
-rim-infra-file-io      = { path = "crates/rim-infra-file-io" }
-rim-infra-file-watcher = { path = "crates/rim-infra-file-watcher" }
-rim-infra-input        = { path = "crates/rim-infra-input" }
-rim-infra-persistence  = { path = "crates/rim-infra-persistence" }
-rim-infra-ui           = { path = "crates/rim-infra-ui" }
-rim-kernel             = { path = "crates/rim-kernel" }
-rim-paths              = { path = "crates/rim-paths" }
+rim-app                = { path = "rim-app" }
+rim-infra-file-io      = { path = "rim-infra-file-io" }
+rim-infra-file-watcher = { path = "rim-infra-file-watcher" }
+rim-infra-input        = { path = "rim-infra-input" }
+rim-infra-persistence  = { path = "rim-infra-persistence" }
+rim-infra-ui           = { path = "rim-infra-ui" }
+rim-kernel             = { path = "rim-kernel" }
+rim-paths              = { path = "rim-paths" }
