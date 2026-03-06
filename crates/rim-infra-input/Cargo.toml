@@ -1,10 +1,11 @@
 [package]
-name = "rim-infra-input"
-version = "0.1.0"
-edition = "2024"
+name              = "rim-infra-input"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
 
 [dependencies]
-crossterm = "0.29"
-flume = "0.12"
-tracing = "0.1"
-rim-kernel = { path = "../rim-kernel" }
+crossterm.workspace  = true
+flume.workspace      = true
+tracing.workspace    = true
+rim-kernel.workspace = true

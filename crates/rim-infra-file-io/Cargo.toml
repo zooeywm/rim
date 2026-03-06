@@ -1,14 +1,13 @@
 [package]
-name = "rim-infra-file-io"
-version = "0.1.0"
-edition = "2024"
+name              = "rim-infra-file-io"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
 
 [dependencies]
-anyhow = "1"
-compio = { version = "0.18", features = ["fs", "macros"] }
-flume = "0.12"
-thiserror = "2"
-tracing = "0.1"
-dep-inj = "0.1"
-dep-inj-target = { git = "https://github.com/zooeywm/dep-inj-target.git" }
-rim-kernel = { path = "../rim-kernel" }
+anyhow.workspace     = true
+compio.workspace     = true
+flume.workspace      = true
+tracing.workspace    = true
+dep-inj.workspace    = true
+rim-kernel.workspace = true

@@ -1,12 +1,13 @@
 [package]
-name = "rim-kernel"
-version = "0.1.0"
-edition = "2024"
+name              = "rim-kernel"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
 
 [dependencies]
-anyhow = "1"
-thiserror = "2"
-tracing = "0.1"
-slotmap = "1.0"
-unicode-width = "0.2"
-ropey = "1"
+anyhow.workspace        = true
+thiserror.workspace     = true
+tracing.workspace       = true
+slotmap.workspace       = true
+unicode-width.workspace = true
+ropey.workspace         = true

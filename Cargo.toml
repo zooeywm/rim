@@ -1,13 +1,47 @@
 [workspace]
 members = [
-	"crates/rim-paths",
-	"crates/rim-kernel",
-	"crates/rim-infra-file-io",
-	"crates/rim-infra-file-watcher",
-	"crates/rim-infra-persistence",
-	"crates/rim-infra-input",
-	"crates/rim-infra-ui",
-	"crates/rim-app",
-	"crates/rim-tui",
+  "crates/rim-paths",
+  "crates/rim-kernel",
+  "crates/rim-infra-file-io",
+  "crates/rim-infra-file-watcher",
+  "crates/rim-infra-persistence",
+  "crates/rim-infra-input",
+  "crates/rim-infra-ui",
+  "crates/rim-app",
+  "crates/rim-tui",
 ]
 resolver = "2"
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+authors = ["zooeywm <zooeywm@gmail.com>"]
+
+[workspace.dependencies]
+anyhow                 = "1"
+base64                 = "0.22"
+compio                 = { version = "0.18", features = ["fs", "macros"] }
+crossterm              = "0.29"
+dep-inj                = "0.1"
+derive_more            = { version = "2.1", features = ["as_ref"] }
+flume                  = "0.12"
+notify                 = "8.2"
+ratatui                = "0.30"
+ropey                  = "1.6"
+serde                  = { version = "1", features = ["derive"] }
+serde_json             = "1"
+slotmap                = "1.0"
+thiserror              = "2"
+time                   = { version = "0.3", features = ["formatting", "macros"] }
+tracing                = "0.1"
+tracing-appender       = "0.2"
+tracing-subscriber     = { version = "0.3", features = ["env-filter", "fmt", "time"] }
+unicode-width          = "0.2"
+rim-app                = { path = "crates/rim-app" }
+rim-infra-file-io      = { path = "crates/rim-infra-file-io" }
+rim-infra-file-watcher = { path = "crates/rim-infra-file-watcher" }
+rim-infra-input        = { path = "crates/rim-infra-input" }
+rim-infra-persistence  = { path = "crates/rim-infra-persistence" }
+rim-infra-ui           = { path = "crates/rim-infra-ui" }
+rim-kernel             = { path = "crates/rim-kernel" }
+rim-paths              = { path = "crates/rim-paths" }
