@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use super::{BufferId, BufferState, BufferSwitchDirection, CursorState, RimState};
+use ropey::Rope;
+
+use super::{BufferId, BufferState, BufferSwitchDirection, RimState, rope_line_count};
 
 impl RimState {
 	pub fn find_buffer_by_path(&self, path: &std::path::Path) -> Option<BufferId> {
@@ -12,16 +14,17 @@ impl RimState {
 
 	pub fn create_buffer(&mut self, path: Option<PathBuf>, text: impl Into<String>) -> BufferId {
 		let text = text.into();
+		let rope = Rope::from_str(text.as_str());
 		let name =
 			path.as_deref().and_then(super::buffer_name_from_path).unwrap_or_else(|| "untitled".to_string());
 
 		let id = self.buffers.insert(BufferState {
 			name,
 			path,
-			text,
+			text: rope.clone(),
+			clean_text: rope,
 			dirty: false,
 			externally_modified: false,
-			cursor: CursorState::default(),
 			undo_stack: Vec::new(),
 			redo_stack: Vec::new(),
 		});
@@ -54,6 +57,8 @@ impl RimState {
 			_ => None,
 		};
 		self.buffer_order.retain(|id| *id != target_buffer_id);
+		self.in_flight_internal_saves.remove(&target_buffer_id);
+		self.ignore_external_change_until.remove(&target_buffer_id);
 
 		let _ = self.buffers.remove(target_buffer_id);
 		if fallback.is_none() {
@@ -65,6 +70,9 @@ impl RimState {
 				window.buffer_id = fallback;
 			}
 		}
+		if let Some(fallback_id) = fallback {
+			self.clamp_window_cursors_for_buffer(fallback_id);
+		}
 
 		self.align_active_window_scroll_to_cursor();
 		self.status_bar.message = "buffer closed".to_string();
@@ -75,28 +83,21 @@ impl RimState {
 		let Some(buffer) = self.buffers.get_mut(buffer_id) else {
 			return;
 		};
+		let previous_max_row = rope_line_count(&buffer.text) as u16;
 
-		let prev_max_row = if buffer.text.is_empty() { 1 } else { buffer.text.lines().count() as u16 };
-		let was_at_bottom = buffer.cursor.row >= prev_max_row;
-
-		buffer.text = text;
-		let max_row = if buffer.text.is_empty() { 1 } else { buffer.text.lines().count() as u16 };
-		if was_at_bottom {
-			buffer.cursor.row = max_row;
-		} else {
-			buffer.cursor.row = buffer.cursor.row.min(max_row).max(1);
+		buffer.text = Rope::from_str(text.as_str());
+		let new_max_row = rope_line_count(&buffer.text) as u16;
+		for (_, window) in &mut self.windows {
+			if window.buffer_id != Some(buffer_id) {
+				continue;
+			}
+			if window.cursor.row >= previous_max_row {
+				window.cursor.row = new_max_row;
+			} else {
+				window.cursor = super::clamp_cursor_for_rope(&buffer.text, window.cursor);
+			}
+			window.cursor = super::clamp_cursor_for_rope(&buffer.text, window.cursor);
 		}
-
-		let row_index = buffer.cursor.row.saturating_sub(1) as usize;
-		let max_col = buffer
-			.text
-			.lines()
-			.nth(row_index)
-			.map(|line| line.chars().count() as u16 + 1)
-			.unwrap_or(1)
-			.saturating_sub(1)
-			.max(1);
-		buffer.cursor.col = buffer.cursor.col.min(max_col).max(1);
 
 		if is_active {
 			self.align_active_window_scroll_to_cursor();
@@ -151,6 +152,7 @@ impl RimState {
 		if let Some(window) = self.windows.get_mut(active_window_id) {
 			window.buffer_id = Some(target);
 		}
+		self.clamp_window_cursors_for_buffer(target);
 		self.align_active_window_scroll_to_cursor();
 		if let Some(buffer) = self.buffers.get(target) {
 			self.status_bar.message = format!("buffer {}", buffer.name);

@@ -1,14 +1,14 @@
 use ratatui::{buffer::Buffer, layout::Rect, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Paragraph, Widget}};
-use rim_kernel::state::RimState;
+use rim_kernel::state::{RimState, StatusBarMode};
 
 pub(super) struct StatusBarWidget {
-	mode:        String,
+	mode:        StatusBarMode,
 	status_line: String,
 }
 
 impl StatusBarWidget {
 	pub(super) fn from_state(state: &RimState) -> Self {
-		Self { mode: state.status_bar.mode.clone(), status_line: state.status_line() }
+		Self { mode: state.status_bar.mode, status_line: state.status_line() }
 	}
 }
 

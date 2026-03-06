@@ -1,5 +1,6 @@
 use ratatui::{buffer::{Buffer, Cell}, layout::Rect, style::{Color, Style}, widgets::{Paragraph, Widget}};
 use rim_kernel::state::RimState;
+use ropey::Rope;
 use unicode_width::UnicodeWidthChar;
 
 const TAB_DISPLAY_WIDTH: usize = 4;
@@ -42,6 +43,17 @@ struct SelectionSegment {
 	y:       u16,
 }
 
+#[derive(Clone, Copy)]
+struct VisualSelectionSpec {
+	text_rect:  Rect,
+	scroll_x:   u16,
+	scroll_y:   u16,
+	anchor:     rim_kernel::state::CursorState,
+	cursor:     rim_kernel::state::CursorState,
+	line_wise:  bool,
+	block_wise: bool,
+}
+
 impl WindowAreaWidget {
 	pub(super) fn from_state(state: &RimState, content_area: Rect) -> (Self, Option<(u16, u16)>) {
 		let mut windows = Vec::new();
@@ -71,13 +83,9 @@ impl WindowAreaWidget {
 				continue;
 			}
 
-			let content = window
-				.buffer_id
-				.and_then(|buffer_id| state.buffers.get(buffer_id))
-				.map(|buf| buf.text.as_str())
-				.unwrap_or("");
-			let logical_lines = logical_lines_with_newline_info(content);
-			let total_lines = logical_lines.len().max(1);
+			let buffer_text =
+				window.buffer_id.and_then(|buffer_id| state.buffers.get(buffer_id)).map(|buf| &buf.text);
+			let total_lines = buffer_text.map(rope_display_line_count).unwrap_or(1);
 			let desired_number_col_width = total_lines.to_string().len() as u16 + 1;
 			let number_col_width =
 				if local_rect.width <= desired_number_col_width { 0 } else { desired_number_col_width };
@@ -99,21 +107,19 @@ impl WindowAreaWidget {
 			let line_numbers_text = if number_col_width == 0 {
 				String::new()
 			} else {
-				logical_lines
-					.iter()
-					.enumerate()
-					.skip(scroll_y)
-					.take(visible_rows)
-					.map(|(i, _)| format!("{:>width$} ", i + 1, width = number_col_width.saturating_sub(1) as usize))
+				(scroll_y..scroll_y.saturating_add(visible_rows))
+					.map(|row_idx| {
+						format!("{:>width$} ", row_idx + 1, width = number_col_width.saturating_sub(1) as usize)
+					})
 					.collect::<Vec<_>>()
 					.join("\n")
 			};
-			let text_text = logical_lines
-				.iter()
-				.skip(scroll_y)
-				.take(visible_rows)
-				.map(|line| {
-					let rendered = render_line_for_display(line.text, line.has_newline);
+			let text_text = (scroll_y..scroll_y.saturating_add(visible_rows))
+				.map(|row_idx| {
+					let line = buffer_text
+						.and_then(|text| rope_logical_line(text, row_idx))
+						.unwrap_or_else(empty_owned_logical_line);
+					let rendered = render_line_for_display(line.text.as_str(), line.has_newline);
 					visible_slice_by_display_width(&rendered, scroll_x, text_width as usize)
 				})
 				.collect::<Vec<_>>()
@@ -122,9 +128,12 @@ impl WindowAreaWidget {
 			if state.active_window_id() == window_id {
 				let cursor = state.active_cursor();
 				let line_idx = cursor.row.saturating_sub(1) as usize;
-				let active_line = logical_lines.get(line_idx).map(|line| line.text).unwrap_or("");
+				let active_line = buffer_text
+					.and_then(|text| rope_logical_line(text, line_idx))
+					.map(|line| line.text)
+					.unwrap_or_default();
 				let cursor_col_chars = cursor.col.saturating_sub(1) as usize;
-				let cursor_display_col = display_width_of_char_prefix(active_line, cursor_col_chars);
+				let cursor_display_col = display_width_of_char_prefix(active_line.as_str(), cursor_col_chars);
 				let cursor_line = cursor.row.saturating_sub(1);
 				let row_in_view =
 					cursor_line >= window.scroll_y && cursor_line < window.scroll_y.saturating_add(text_rect.height);
@@ -143,16 +152,17 @@ impl WindowAreaWidget {
 
 				if state.is_visual_mode()
 					&& let Some(anchor) = state.visual_anchor
+					&& let Some(text) = buffer_text
 				{
-					selection_segments.extend(collect_visual_selection_segments(
-						content,
+					selection_segments.extend(collect_visual_selection_segments_rope(text, VisualSelectionSpec {
 						text_rect,
-						window.scroll_x,
-						window.scroll_y,
+						scroll_x: window.scroll_x,
+						scroll_y: window.scroll_y,
 						anchor,
 						cursor,
-						state.is_visual_line_mode(),
-					));
+						line_wise: state.is_visual_line_mode(),
+						block_wise: state.is_visual_block_mode(),
+					}));
 				}
 			}
 
@@ -164,12 +174,24 @@ impl WindowAreaWidget {
 	}
 }
 
+#[derive(Debug, Clone)]
+struct OwnedLogicalLine {
+	text:        String,
+	has_newline: bool,
+}
+
+fn empty_owned_logical_line() -> OwnedLogicalLine {
+	OwnedLogicalLine { text: String::new(), has_newline: false }
+}
+
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 struct LogicalLine<'a> {
 	text:        &'a str,
 	has_newline: bool,
 }
 
+#[cfg(test)]
 fn logical_lines_with_newline_info(content: &str) -> Vec<LogicalLine<'_>> {
 	let mut lines =
 		content.lines().map(|line| LogicalLine { text: line, has_newline: false }).collect::<Vec<_>>();
@@ -187,6 +209,34 @@ fn logical_lines_with_newline_info(content: &str) -> Vec<LogicalLine<'_>> {
 		last.has_newline = true;
 	}
 	lines
+}
+
+fn rope_ends_with_newline(text: &Rope) -> bool {
+	text.len_chars() > 0 && text.char(text.len_chars().saturating_sub(1)) == '\n'
+}
+
+fn rope_display_line_count(text: &Rope) -> usize {
+	let line_count = text.len_lines();
+	if line_count == 0 {
+		return 1;
+	}
+	if rope_ends_with_newline(text) { line_count.saturating_sub(1).max(1) } else { line_count.max(1) }
+}
+
+fn rope_logical_line(text: &Rope, row_idx: usize) -> Option<OwnedLogicalLine> {
+	if row_idx >= rope_display_line_count(text) {
+		return None;
+	}
+	let mut line = text.line(row_idx).to_string();
+	let mut has_newline = false;
+	if line.ends_with('\n') {
+		has_newline = true;
+		line.pop();
+		if line.ends_with('\r') {
+			line.pop();
+		}
+	}
+	Some(OwnedLogicalLine { text: line, has_newline })
 }
 
 fn render_line_for_display(line: &str, has_newline: bool) -> String {
@@ -331,25 +381,32 @@ fn collect_split_lines(state: &RimState, content_area: Rect) -> (Vec<VerticalLin
 	(vertical_lines, horizontal_lines)
 }
 
-fn collect_visual_selection_segments(
-	content: &str,
-	text_rect: Rect,
-	scroll_x: u16,
-	scroll_y: u16,
-	anchor: rim_kernel::state::CursorState,
-	cursor: rim_kernel::state::CursorState,
-	line_wise: bool,
-) -> Vec<SelectionSegment> {
-	let (start, end) =
-		if (anchor.row, anchor.col) <= (cursor.row, cursor.col) { (anchor, cursor) } else { (cursor, anchor) };
+#[cfg(test)]
+fn collect_visual_selection_segments(content: &str, spec: VisualSelectionSpec) -> Vec<SelectionSegment> {
+	let (start, end) = if spec.block_wise {
+		(
+			rim_kernel::state::CursorState {
+				row: spec.anchor.row.min(spec.cursor.row),
+				col: spec.anchor.col.min(spec.cursor.col),
+			},
+			rim_kernel::state::CursorState {
+				row: spec.anchor.row.max(spec.cursor.row),
+				col: spec.anchor.col.max(spec.cursor.col),
+			},
+		)
+	} else if (spec.anchor.row, spec.anchor.col) <= (spec.cursor.row, spec.cursor.col) {
+		(spec.anchor, spec.cursor)
+	} else {
+		(spec.cursor, spec.anchor)
+	};
 	let mut segments = Vec::new();
-	if text_rect.width == 0 || text_rect.height == 0 {
+	if spec.text_rect.width == 0 || spec.text_rect.height == 0 {
 		return segments;
 	}
 
-	let first_visible_row = scroll_y.saturating_add(1);
-	let last_visible_row = scroll_y.saturating_add(text_rect.height);
-	let visible_right_exclusive = scroll_x.saturating_add(text_rect.width);
+	let first_visible_row = spec.scroll_y.saturating_add(1);
+	let last_visible_row = spec.scroll_y.saturating_add(spec.text_rect.height);
+	let visible_right_exclusive = spec.scroll_x.saturating_add(spec.text_rect.width);
 
 	let logical_lines = logical_lines_with_newline_info(content);
 	for row in start.row..=end.row {
@@ -361,13 +418,24 @@ fn collect_visual_selection_segments(
 		};
 		let line = logical_line.text;
 		let line_len = line.chars().count() as u16;
-		let selectable_len = if logical_line.has_newline { line_len.saturating_add(1) } else { line_len };
+		let selectable_len = if spec.block_wise {
+			line_len
+		} else if logical_line.has_newline {
+			line_len.saturating_add(1)
+		} else {
+			line_len
+		};
 		if selectable_len == 0 {
 			continue;
 		}
 
-		let (mut col_start, mut col_end) = if line_wise {
+		let (mut col_start, mut col_end) = if spec.line_wise {
 			(1, selectable_len)
+		} else if spec.block_wise {
+			if start.col > selectable_len {
+				continue;
+			}
+			(start.col, end.col.min(selectable_len))
 		} else if start.row == end.row {
 			(start.col, end.col)
 		} else if row == start.row {
@@ -388,15 +456,106 @@ fn collect_visual_selection_segments(
 			display_width_of_logical_col(line, logical_line.has_newline, col_start.saturating_sub(1) as usize)
 				as u16;
 		let end_display = display_width_of_logical_col(line, logical_line.has_newline, col_end as usize) as u16;
-		let seg_start = start_display.max(scroll_x);
+		let seg_start = start_display.max(spec.scroll_x);
 		let seg_end = end_display.min(visible_right_exclusive);
 		if seg_start >= seg_end {
 			continue;
 		}
 
-		let y = text_rect.y.saturating_add(row.saturating_sub(first_visible_row));
-		let x_start = text_rect.x.saturating_add(seg_start.saturating_sub(scroll_x));
-		let x_end = text_rect.x.saturating_add(seg_end.saturating_sub(scroll_x));
+		let y = spec.text_rect.y.saturating_add(row.saturating_sub(first_visible_row));
+		let x_start = spec.text_rect.x.saturating_add(seg_start.saturating_sub(spec.scroll_x));
+		let x_end = spec.text_rect.x.saturating_add(seg_end.saturating_sub(spec.scroll_x));
+		segments.push(SelectionSegment { x_start, x_end, y });
+	}
+
+	segments
+}
+
+fn collect_visual_selection_segments_rope(
+	content: &Rope,
+	spec: VisualSelectionSpec,
+) -> Vec<SelectionSegment> {
+	let (start, end) = if spec.block_wise {
+		(
+			rim_kernel::state::CursorState {
+				row: spec.anchor.row.min(spec.cursor.row),
+				col: spec.anchor.col.min(spec.cursor.col),
+			},
+			rim_kernel::state::CursorState {
+				row: spec.anchor.row.max(spec.cursor.row),
+				col: spec.anchor.col.max(spec.cursor.col),
+			},
+		)
+	} else if (spec.anchor.row, spec.anchor.col) <= (spec.cursor.row, spec.cursor.col) {
+		(spec.anchor, spec.cursor)
+	} else {
+		(spec.cursor, spec.anchor)
+	};
+	let mut segments = Vec::new();
+	if spec.text_rect.width == 0 || spec.text_rect.height == 0 {
+		return segments;
+	}
+
+	let first_visible_row = spec.scroll_y.saturating_add(1);
+	let last_visible_row = spec.scroll_y.saturating_add(spec.text_rect.height);
+	let visible_right_exclusive = spec.scroll_x.saturating_add(spec.text_rect.width);
+
+	for row in start.row..=end.row {
+		if row < first_visible_row || row > last_visible_row {
+			continue;
+		}
+		let Some(logical_line) = rope_logical_line(content, row.saturating_sub(1) as usize) else {
+			continue;
+		};
+		let line = logical_line.text.as_str();
+		let line_len = line.chars().count() as u16;
+		let selectable_len = if spec.block_wise {
+			line_len
+		} else if logical_line.has_newline {
+			line_len.saturating_add(1)
+		} else {
+			line_len
+		};
+		if selectable_len == 0 {
+			continue;
+		}
+
+		let (mut col_start, mut col_end) = if spec.line_wise {
+			(1, selectable_len)
+		} else if spec.block_wise {
+			if start.col > selectable_len {
+				continue;
+			}
+			(start.col, end.col.min(selectable_len))
+		} else if start.row == end.row {
+			(start.col, end.col)
+		} else if row == start.row {
+			(start.col, selectable_len)
+		} else if row == end.row {
+			(1, end.col)
+		} else {
+			(1, selectable_len)
+		};
+
+		col_start = col_start.max(1).min(selectable_len.max(1));
+		col_end = col_end.max(1).min(selectable_len.max(1));
+		if col_start > col_end {
+			continue;
+		}
+
+		let start_display =
+			display_width_of_logical_col(line, logical_line.has_newline, col_start.saturating_sub(1) as usize)
+				as u16;
+		let end_display = display_width_of_logical_col(line, logical_line.has_newline, col_end as usize) as u16;
+		let seg_start = start_display.max(spec.scroll_x);
+		let seg_end = end_display.min(visible_right_exclusive);
+		if seg_start >= seg_end {
+			continue;
+		}
+
+		let y = spec.text_rect.y.saturating_add(row.saturating_sub(first_visible_row));
+		let x_start = spec.text_rect.x.saturating_add(seg_start.saturating_sub(spec.scroll_x));
+		let x_end = spec.text_rect.x.saturating_add(seg_end.saturating_sub(spec.scroll_x));
 		segments.push(SelectionSegment { x_start, x_end, y });
 	}
 

@@ -1,5 +1,6 @@
-use std::{collections::{BTreeMap, HashMap, HashSet}, path::{Path, PathBuf}};
+use std::{collections::{BTreeMap, HashMap, HashSet}, fmt, path::{Path, PathBuf}, time::{Duration, Instant}};
 
+use ropey::Rope;
 use slotmap::{Key, SlotMap, new_key_type};
 use tracing::error;
 
@@ -18,10 +19,11 @@ pub struct TabId(pub u64);
 pub struct BufferState {
 	pub name:                String,
 	pub path:                Option<PathBuf>,
-	pub text:                String,
+	pub text:                Rope,
+	// This is the last clean snapshot loaded from or saved to disk.
+	pub clean_text:          Rope,
 	pub dirty:               bool,
 	pub externally_modified: bool,
-	pub cursor:              CursorState,
 	pub undo_stack:          Vec<BufferHistoryEntry>,
 	pub redo_stack:          Vec<BufferHistoryEntry>,
 }
@@ -34,7 +36,23 @@ pub struct BufferHistoryEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistedBufferHistory {
+	pub current_text: String,
+	pub cursor:       CursorState,
+	pub undo_stack:   Vec<BufferHistoryEntry>,
+	pub redo_stack:   Vec<BufferHistoryEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BufferEditSnapshot {
+	pub start_byte:    usize,
+	pub deleted_text:  String,
+	pub inserted_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RopeTextDiff {
+	pub start_char:    usize,
 	pub start_byte:    usize,
 	pub deleted_text:  String,
 	pub inserted_text: String,
@@ -43,6 +61,7 @@ pub struct BufferEditSnapshot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WindowState {
 	pub buffer_id: Option<BufferId>,
+	pub cursor:    CursorState,
 	pub scroll_x:  u16,
 	pub scroll_y:  u16,
 	pub x:         u16,
@@ -59,7 +78,7 @@ pub struct TabState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusBarState {
-	pub mode:         String,
+	pub mode:         StatusBarMode,
 	pub message:      String,
 	pub key_sequence: String,
 }
@@ -67,10 +86,36 @@ pub struct StatusBarState {
 impl Default for StatusBarState {
 	fn default() -> Self {
 		Self {
-			mode:         "NORMAL".to_string(),
+			mode:         StatusBarMode::Normal,
 			message:      "new file".to_string(),
 			key_sequence: String::new(),
 		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusBarMode {
+	Normal,
+	Insert,
+	InsertBlock,
+	Command,
+	Visual,
+	VisualLine,
+	VisualBlock,
+}
+
+impl fmt::Display for StatusBarMode {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		let label = match self {
+			Self::Normal => "NORMAL",
+			Self::Insert => "INSERT",
+			Self::InsertBlock => "INSERT BLOCK",
+			Self::Command => "COMMAND",
+			Self::Visual => "VISUAL",
+			Self::VisualLine => "VISUAL LINE",
+			Self::VisualBlock => "VISUAL BLOCK",
+		};
+		f.write_str(label)
 	}
 }
 
@@ -91,6 +136,7 @@ pub enum EditorMode {
 	Command,
 	VisualChar,
 	VisualLine,
+	VisualBlock,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,6 +160,13 @@ pub struct PendingInsertUndoGroup {
 	pub edits:         Vec<BufferEditSnapshot>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingBlockInsert {
+	pub start_row: u16,
+	pub end_row:   u16,
+	pub base_col:  u16,
+}
+
 #[derive(Debug, Clone)]
 pub struct PendingSwapDecision {
 	pub buffer_id:      BufferId,
@@ -125,32 +178,35 @@ pub struct PendingSwapDecision {
 
 #[derive(Debug)]
 pub struct RimState {
-	pub title:                          String,
-	pub active_tab:                     TabId,
-	pub leader_key:                     char,
-	pub mode:                           EditorMode,
-	pub visual_anchor:                  Option<CursorState>,
-	pub command_line:                   String,
-	pub quit_after_save:                bool,
-	pub pending_save_path:              Option<(BufferId, PathBuf)>,
-	pub preferred_col:                  Option<u16>,
-	pub line_slot:                      Option<String>,
-	pub line_slot_line_wise:            bool,
-	pub cursor_scroll_threshold:        u16,
-	pub normal_sequence:                Vec<NormalSequenceKey>,
-	pub visual_g_pending:               bool,
-	pub pending_insert_group:           Option<PendingInsertUndoGroup>,
-	pub pending_swap_decision:          Option<PendingSwapDecision>,
-	pub in_flight_internal_saves:       HashSet<BufferId>,
-	pub last_internal_save_fingerprint: HashMap<BufferId, u64>,
-	pub buffers:                        SlotMap<BufferId, BufferState>,
-	pub buffer_order:                   Vec<BufferId>,
-	pub windows:                        SlotMap<WindowId, WindowState>,
-	pub tabs:                           BTreeMap<TabId, TabState>,
-	pub status_bar:                     StatusBarState,
+	pub title:                        String,
+	pub active_tab:                   TabId,
+	pub leader_key:                   char,
+	pub mode:                         EditorMode,
+	pub visual_anchor:                Option<CursorState>,
+	pub command_line:                 String,
+	pub quit_after_save:              bool,
+	pub pending_save_path:            Option<(BufferId, PathBuf)>,
+	pub preferred_col:                Option<u16>,
+	pub line_slot:                    Option<String>,
+	pub line_slot_line_wise:          bool,
+	pub line_slot_block_wise:         bool,
+	pub cursor_scroll_threshold:      u16,
+	pub normal_sequence:              Vec<NormalSequenceKey>,
+	pub visual_g_pending:             bool,
+	pub pending_insert_group:         Option<PendingInsertUndoGroup>,
+	pub pending_block_insert:         Option<PendingBlockInsert>,
+	pub pending_swap_decision:        Option<PendingSwapDecision>,
+	pub in_flight_internal_saves:     HashSet<BufferId>,
+	pub ignore_external_change_until: HashMap<BufferId, Instant>,
+	pub buffers:                      SlotMap<BufferId, BufferState>,
+	pub buffer_order:                 Vec<BufferId>,
+	pub windows:                      SlotMap<WindowId, WindowState>,
+	pub tabs:                         BTreeMap<TabId, TabState>,
+	pub status_bar:                   StatusBarState,
 }
 
 impl RimState {
+	const INTERNAL_SAVE_WATCHER_IGNORE_WINDOW: Duration = Duration::from_millis(750);
 	const MAX_HISTORY_ENTRIES: usize = 256;
 
 	pub fn new() -> Self {
@@ -175,13 +231,15 @@ impl RimState {
 			preferred_col: None,
 			line_slot: None,
 			line_slot_line_wise: false,
+			line_slot_block_wise: false,
 			cursor_scroll_threshold: 0,
 			normal_sequence: Vec::new(),
 			visual_g_pending: false,
 			pending_insert_group: None,
+			pending_block_insert: None,
 			pending_swap_decision: None,
 			in_flight_internal_saves: HashSet::new(),
-			last_internal_save_fingerprint: HashMap::new(),
+			ignore_external_change_until: HashMap::new(),
 			buffers,
 			buffer_order: Vec::new(),
 			windows,
@@ -207,7 +265,7 @@ impl RimState {
 		let total_rows = self
 			.active_buffer_id()
 			.and_then(|buffer_id| self.buffers.get(buffer_id))
-			.map(|buffer| if buffer.text.is_empty() { 1 } else { buffer.text.lines().count() as u16 })
+			.map(|buffer| rope_line_count(&buffer.text) as u16)
 			.unwrap_or(1);
 		let progress = if cursor.row <= 1 {
 			"Top".to_string()
@@ -223,13 +281,10 @@ impl RimState {
 			return format!(":{} | {}", self.command_line, cursor_pos);
 		}
 		if self.status_bar.key_sequence.is_empty() {
-			return format!("{} | {} | {}", self.status_bar.mode, self.status_bar.message, cursor_pos);
+			return format!("{} | {}", self.status_bar.message, cursor_pos);
 		}
 
-		format!(
-			"{} | {} | keys {} | {}",
-			self.status_bar.mode, self.status_bar.message, self.status_bar.key_sequence, cursor_pos
-		)
+		format!("{} | keys {} | {}", self.status_bar.message, self.status_bar.key_sequence, cursor_pos)
 	}
 
 	pub fn active_buffer_id(&self) -> Option<BufferId> {
@@ -240,6 +295,9 @@ impl RimState {
 		let active_window_id = self.active_window_id();
 		let window = self.windows.get_mut(active_window_id).expect("invariant: active window id must exist");
 		window.buffer_id = Some(buffer_id);
+		if let Some(buffer) = self.buffers.get(buffer_id) {
+			window.cursor = clamp_cursor_for_rope(&buffer.text, window.cursor);
+		}
 	}
 
 	pub fn is_insert_mode(&self) -> bool { self.mode == EditorMode::Insert }
@@ -247,21 +305,36 @@ impl RimState {
 	pub fn is_command_mode(&self) -> bool { self.mode == EditorMode::Command }
 
 	pub fn is_visual_mode(&self) -> bool {
-		matches!(self.mode, EditorMode::VisualChar | EditorMode::VisualLine)
+		matches!(self.mode, EditorMode::VisualChar | EditorMode::VisualLine | EditorMode::VisualBlock)
 	}
 
 	pub fn is_visual_line_mode(&self) -> bool { self.mode == EditorMode::VisualLine }
 
+	pub fn is_visual_block_mode(&self) -> bool { self.mode == EditorMode::VisualBlock }
+
+	pub fn is_block_insert_mode(&self) -> bool {
+		self.mode == EditorMode::Insert && self.pending_block_insert.is_some()
+	}
+
 	pub fn enter_insert_mode(&mut self) {
 		self.mode = EditorMode::Insert;
 		self.visual_anchor = None;
-		self.status_bar.mode = "INSERT".to_string();
+		self.pending_block_insert = None;
+		self.status_bar.mode = StatusBarMode::Insert;
+	}
+
+	pub fn enter_block_insert_mode(&mut self, pending: PendingBlockInsert) {
+		self.mode = EditorMode::Insert;
+		self.visual_anchor = None;
+		self.pending_block_insert = Some(pending);
+		self.status_bar.mode = StatusBarMode::InsertBlock;
 	}
 
 	pub fn exit_insert_mode(&mut self) {
 		self.mode = EditorMode::Normal;
 		self.visual_anchor = None;
-		self.status_bar.mode = "NORMAL".to_string();
+		self.pending_block_insert = None;
+		self.status_bar.mode = StatusBarMode::Normal;
 		self.clamp_cursor_to_navigable_col();
 	}
 
@@ -269,33 +342,43 @@ impl RimState {
 		self.mode = EditorMode::Command;
 		self.visual_anchor = None;
 		self.command_line.clear();
-		self.status_bar.mode = "COMMAND".to_string();
+		self.status_bar.mode = StatusBarMode::Command;
 	}
 
 	pub fn exit_command_mode(&mut self) {
 		self.mode = EditorMode::Normal;
 		self.visual_anchor = None;
 		self.command_line.clear();
-		self.status_bar.mode = "NORMAL".to_string();
+		self.status_bar.mode = StatusBarMode::Normal;
 	}
 
 	pub fn enter_visual_mode(&mut self) {
 		self.mode = EditorMode::VisualChar;
-		self.visual_anchor = Some(self.active_cursor());
-		self.status_bar.mode = "VISUAL".to_string();
+		if self.visual_anchor.is_none() {
+			self.visual_anchor = Some(self.active_cursor());
+		}
+		self.status_bar.mode = StatusBarMode::Visual;
 	}
 
 	pub fn enter_visual_line_mode(&mut self) {
 		let anchor_row = self.visual_anchor.map(|cursor| cursor.row).unwrap_or_else(|| self.active_cursor().row);
 		self.mode = EditorMode::VisualLine;
 		self.visual_anchor = Some(CursorState { row: anchor_row, col: 1 });
-		self.status_bar.mode = "VISUAL LINE".to_string();
+		self.status_bar.mode = StatusBarMode::VisualLine;
+	}
+
+	pub fn enter_visual_block_mode(&mut self) {
+		self.mode = EditorMode::VisualBlock;
+		if self.visual_anchor.is_none() {
+			self.visual_anchor = Some(self.active_cursor());
+		}
+		self.status_bar.mode = StatusBarMode::VisualBlock;
 	}
 
 	pub fn exit_visual_mode(&mut self) {
 		self.mode = EditorMode::Normal;
 		self.visual_anchor = None;
-		self.status_bar.mode = "NORMAL".to_string();
+		self.status_bar.mode = StatusBarMode::Normal;
 	}
 
 	pub fn push_command_char(&mut self, ch: char) { self.command_line.push(ch); }
@@ -318,7 +401,7 @@ impl RimState {
 			Some(path) => path,
 			None => buffer.path.clone().ok_or("buffer has no file path")?,
 		};
-		Ok((buffer_id, path, buffer.text.clone()))
+		Ok((buffer_id, path, buffer.text.to_string()))
 	}
 
 	pub fn active_buffer_load_target(&self) -> Result<(BufferId, PathBuf), &'static str> {
@@ -343,7 +426,7 @@ impl RimState {
 				missing_path = missing_path.saturating_add(1);
 				continue;
 			};
-			snapshots.push((buffer_id, path, buffer.text.clone()));
+			snapshots.push((buffer_id, path, buffer.text.to_string()));
 		}
 
 		snapshots.sort_by_key(|(id, ..)| id.data().as_ffi());
@@ -385,10 +468,49 @@ impl RimState {
 		}
 	}
 
+	pub fn mark_buffer_clean(&mut self, buffer_id: BufferId) {
+		if let Some(buffer) = self.buffers.get_mut(buffer_id) {
+			buffer.clean_text = buffer.text.clone();
+			buffer.dirty = false;
+		}
+	}
+
 	pub fn set_buffer_externally_modified(&mut self, buffer_id: BufferId, externally_modified: bool) {
 		if let Some(buffer) = self.buffers.get_mut(buffer_id) {
 			buffer.externally_modified = externally_modified;
 		}
+	}
+
+	pub fn clear_buffer_history(&mut self, buffer_id: BufferId) {
+		let Some(buffer) = self.buffers.get_mut(buffer_id) else {
+			return;
+		};
+		buffer.undo_stack.clear();
+		buffer.redo_stack.clear();
+		if self.pending_insert_group.as_ref().is_some_and(|group| group.buffer_id == buffer_id) {
+			self.pending_insert_group = None;
+		}
+	}
+
+	pub fn mark_recent_internal_save(&mut self, buffer_id: BufferId) {
+		self
+			.ignore_external_change_until
+			.insert(buffer_id, Instant::now() + Self::INTERNAL_SAVE_WATCHER_IGNORE_WINDOW);
+	}
+
+	pub fn clear_recent_internal_save(&mut self, buffer_id: BufferId) {
+		self.ignore_external_change_until.remove(&buffer_id);
+	}
+
+	pub fn should_ignore_recent_external_change(&mut self, buffer_id: BufferId) -> bool {
+		let Some(deadline) = self.ignore_external_change_until.get(&buffer_id).copied() else {
+			return false;
+		};
+		if Instant::now() <= deadline {
+			return true;
+		}
+		self.ignore_external_change_until.remove(&buffer_id);
+		false
 	}
 
 	pub fn active_buffer_is_externally_modified(&self) -> Option<bool> {
@@ -399,7 +521,13 @@ impl RimState {
 
 	pub fn mark_active_buffer_dirty(&mut self) {
 		if let Some(buffer_id) = self.active_buffer_id() {
-			self.set_buffer_dirty(buffer_id, true);
+			self.refresh_buffer_dirty(buffer_id);
+		}
+	}
+
+	pub fn refresh_buffer_dirty(&mut self, buffer_id: BufferId) {
+		if let Some(buffer) = self.buffers.get_mut(buffer_id) {
+			buffer.dirty = buffer.text != buffer.clean_text;
 		}
 	}
 
@@ -422,6 +550,8 @@ impl RimState {
 			Some(PendingInsertUndoGroup { buffer_id, before_cursor: self.active_cursor(), edits: Vec::new() });
 	}
 
+	pub fn cancel_insert_history_group(&mut self) { self.pending_insert_group = None; }
+
 	pub fn commit_insert_history_group(&mut self) {
 		let Some(group) = self.pending_insert_group.take() else {
 			return;
@@ -429,8 +559,7 @@ impl RimState {
 		if group.edits.is_empty() {
 			return;
 		}
-		let after_cursor =
-			self.buffers.get(group.buffer_id).map(|buffer| buffer.cursor).unwrap_or(group.before_cursor);
+		let after_cursor = self.cursor_for_buffer(group.buffer_id).unwrap_or(group.before_cursor);
 		self.push_buffer_history_entry(group.buffer_id, BufferHistoryEntry {
 			edits: group.edits,
 			before_cursor: group.before_cursor,
@@ -444,6 +573,16 @@ impl RimState {
 		};
 		if group.buffer_id != buffer_id {
 			return false;
+		}
+		if group.edits.is_empty()
+			&& let Some(buffer) = self.buffers.get_mut(buffer_id)
+		{
+			buffer.redo_stack.clear();
+		}
+		if let Some(last_edit) = group.edits.last_mut()
+			&& merge_adjacent_insert_history_edits(last_edit, &edit)
+		{
+			return true;
 		}
 		group.edits.push(edit);
 		true
@@ -475,7 +614,7 @@ impl RimState {
 	pub fn record_history_from_text_diff(
 		&mut self,
 		buffer_id: BufferId,
-		before_text: &str,
+		before_text: &Rope,
 		before_cursor: CursorState,
 		mode_before: EditorMode,
 		skip_history: bool,
@@ -486,10 +625,21 @@ impl RimState {
 		let Some(after_buffer) = self.buffers.get(buffer_id) else {
 			return;
 		};
-		let Some(edit) = build_edit_snapshot_from_text_diff(before_text, after_buffer.text.as_str()) else {
+		let Some(diff) = compute_rope_text_diff(before_text, &after_buffer.text) else {
 			return;
 		};
-		let entry = BufferHistoryEntry { edits: vec![edit], before_cursor, after_cursor: after_buffer.cursor };
+		let edit = BufferEditSnapshot {
+			start_byte:    diff.start_byte,
+			deleted_text:  diff.deleted_text,
+			inserted_text: diff.inserted_text,
+		};
+		let after_cursor =
+			self.windows.values().find(|window| window.buffer_id == Some(buffer_id)).map(|window| window.cursor);
+		let entry = BufferHistoryEntry {
+			edits: vec![edit],
+			before_cursor,
+			after_cursor: after_cursor.unwrap_or(before_cursor),
+		};
 		self.apply_edit_entry(buffer_id, entry, mode_before);
 	}
 
@@ -508,11 +658,85 @@ impl RimState {
 		buffer.redo_stack.clear();
 	}
 
+	pub fn buffer_persisted_history_snapshot(&self, buffer_id: BufferId) -> Option<PersistedBufferHistory> {
+		let buffer = self.buffers.get(buffer_id)?;
+		let mut undo_stack = buffer.undo_stack.clone();
+		if let Some(group) = self.pending_insert_group.as_ref()
+			&& group.buffer_id == buffer_id
+			&& !group.edits.is_empty()
+		{
+			undo_stack.push(BufferHistoryEntry {
+				edits:         group.edits.clone(),
+				before_cursor: group.before_cursor,
+				after_cursor:  self.cursor_for_buffer(buffer_id).unwrap_or(group.before_cursor),
+			});
+			let overflow = undo_stack.len().saturating_sub(Self::MAX_HISTORY_ENTRIES);
+			if overflow > 0 {
+				undo_stack.drain(0..overflow);
+			}
+		}
+
+		Some(PersistedBufferHistory {
+			current_text: buffer.text.to_string(),
+			cursor: self.cursor_for_buffer(buffer_id).unwrap_or_default(),
+			undo_stack,
+			redo_stack: buffer.redo_stack.clone(),
+		})
+	}
+
+	pub fn restore_buffer_persisted_history(
+		&mut self,
+		buffer_id: BufferId,
+		persisted_history: PersistedBufferHistory,
+	) -> bool {
+		let is_active = self.active_buffer_id() == Some(buffer_id);
+		let Some(buffer) = self.buffers.get_mut(buffer_id) else {
+			return false;
+		};
+
+		if buffer.text != persisted_history.current_text.as_str() {
+			return false;
+		}
+
+		buffer.undo_stack = persisted_history.undo_stack;
+		buffer.redo_stack = persisted_history.redo_stack;
+		for (_, window) in &mut self.windows {
+			if window.buffer_id == Some(buffer_id) {
+				window.cursor = clamp_cursor_for_rope(&buffer.text, persisted_history.cursor);
+			}
+		}
+		if self.pending_insert_group.as_ref().is_some_and(|group| group.buffer_id == buffer_id) {
+			self.pending_insert_group = None;
+		}
+
+		if is_active {
+			self.align_active_window_scroll_to_cursor();
+		}
+		true
+	}
+
+	pub fn all_file_backed_persisted_history_snapshots(
+		&self,
+	) -> Vec<(BufferId, PathBuf, PersistedBufferHistory)> {
+		let mut snapshots = self
+			.buffers
+			.iter()
+			.filter_map(|(buffer_id, buffer)| {
+				let path = buffer.path.clone()?;
+				let snapshot = self.buffer_persisted_history_snapshot(buffer_id)?;
+				Some((buffer_id, path, snapshot))
+			})
+			.collect::<Vec<_>>();
+		snapshots.sort_by_key(|(buffer_id, ..)| buffer_id.data().as_ffi());
+		snapshots
+	}
+
 	pub fn undo_active_buffer_edit(&mut self) {
 		let Some(buffer_id) = self.active_buffer_id() else {
 			self.status_bar.message = "undo failed: no active buffer".to_string();
 			return;
 		};
+		let active_window_id = self.active_window_id();
 		let Some(buffer) = self.buffers.get_mut(buffer_id) else {
 			self.status_bar.message = "undo failed: active buffer missing".to_string();
 			return;
@@ -525,12 +749,14 @@ impl RimState {
 		for edit in previous_entry.edits.iter().rev() {
 			apply_text_delta_undo(&mut buffer.text, edit);
 		}
-		buffer.cursor = previous_entry.before_cursor;
+		if let Some(window) = self.windows.get_mut(active_window_id) {
+			window.cursor = previous_entry.before_cursor;
+		}
 		buffer.redo_stack.push(previous_entry);
 		if buffer.redo_stack.len() > Self::MAX_HISTORY_ENTRIES {
 			buffer.redo_stack.remove(0);
 		}
-		buffer.dirty = true;
+		buffer.dirty = buffer.text != buffer.clean_text;
 
 		self.align_active_window_scroll_to_cursor();
 		self.status_bar.message = "undo".to_string();
@@ -541,6 +767,7 @@ impl RimState {
 			self.status_bar.message = "redo failed: no active buffer".to_string();
 			return;
 		};
+		let active_window_id = self.active_window_id();
 		let Some(buffer) = self.buffers.get_mut(buffer_id) else {
 			self.status_bar.message = "redo failed: active buffer missing".to_string();
 			return;
@@ -553,18 +780,49 @@ impl RimState {
 		for edit in &next_entry.edits {
 			apply_text_delta_redo(&mut buffer.text, edit);
 		}
-		buffer.cursor = next_entry.after_cursor;
+		if let Some(window) = self.windows.get_mut(active_window_id) {
+			window.cursor = next_entry.after_cursor;
+		}
 		buffer.undo_stack.push(next_entry);
 		if buffer.undo_stack.len() > Self::MAX_HISTORY_ENTRIES {
 			buffer.undo_stack.remove(0);
 		}
-		buffer.dirty = true;
+		buffer.dirty = buffer.text != buffer.clean_text;
 
 		self.align_active_window_scroll_to_cursor();
 		self.status_bar.message = "redo".to_string();
 	}
 
 	pub fn has_dirty_buffers(&self) -> bool { self.buffers.values().any(|buffer| buffer.dirty) }
+
+	pub fn active_buffer_rope(&self) -> Option<&Rope> {
+		let buffer_id = self.active_buffer_id()?;
+		self.buffers.get(buffer_id).map(|buffer| &buffer.text)
+	}
+
+	pub(crate) fn clamp_window_cursors_for_buffer(&mut self, buffer_id: BufferId) {
+		let Some(buffer) = self.buffers.get(buffer_id) else {
+			return;
+		};
+		let text = &buffer.text;
+		for (_, window) in &mut self.windows {
+			if window.buffer_id == Some(buffer_id) {
+				window.cursor = clamp_cursor_for_rope(text, window.cursor);
+			}
+		}
+	}
+
+	pub(crate) fn cursor_for_buffer(&self, buffer_id: BufferId) -> Option<CursorState> {
+		self.windows.values().find(|window| window.buffer_id == Some(buffer_id)).map(|window| window.cursor)
+	}
+
+	pub fn active_buffer_text_string(&self) -> Option<String> {
+		self.active_buffer_rope().map(ToString::to_string)
+	}
+
+	pub fn buffer_text_string(&self, buffer_id: BufferId) -> Option<String> {
+		self.buffers.get(buffer_id).map(|buffer| buffer.text.to_string())
+	}
 }
 
 impl Default for RimState {
@@ -575,45 +833,112 @@ fn buffer_name_from_path(path: &Path) -> Option<String> {
 	path.file_name().map(|name| name.to_string_lossy().to_string())
 }
 
-fn apply_text_delta_undo(text: &mut String, delta: &BufferEditSnapshot) {
-	let undo_end = delta.start_byte.saturating_add(delta.inserted_text.len());
-	text.replace_range(delta.start_byte..undo_end, &delta.deleted_text);
+pub(crate) fn rope_line_count(text: &Rope) -> usize {
+	let line_count = text.len_lines();
+	if line_count == 0 {
+		return 1;
+	}
+	if rope_ends_with_newline(text) { line_count.saturating_sub(1).max(1) } else { line_count.max(1) }
 }
 
-fn apply_text_delta_redo(text: &mut String, delta: &BufferEditSnapshot) {
-	let redo_end = delta.start_byte.saturating_add(delta.deleted_text.len());
-	text.replace_range(delta.start_byte..redo_end, &delta.inserted_text);
+pub(crate) fn rope_is_empty(text: &Rope) -> bool { text.len_chars() == 0 }
+
+pub(crate) fn rope_line_without_newline(text: &Rope, row_index: usize) -> Option<String> {
+	if row_index >= rope_line_count(text) {
+		return None;
+	}
+	let mut line = text.line(row_index).to_string();
+	if line.ends_with('\n') {
+		line.pop();
+		if line.ends_with('\r') {
+			line.pop();
+		}
+	}
+	Some(line)
 }
 
-fn build_edit_snapshot_from_text_diff(before: &str, after: &str) -> Option<BufferEditSnapshot> {
+pub(crate) fn rope_line_len_chars(text: &Rope, row_index: usize) -> usize {
+	rope_line_without_newline(text, row_index).map(|line| line.chars().count()).unwrap_or(0)
+}
+
+pub(crate) fn rope_ends_with_newline(text: &Rope) -> bool {
+	text.len_chars() > 0 && text.char(text.len_chars().saturating_sub(1)) == '\n'
+}
+
+pub(crate) fn clamp_cursor_for_rope(text: &Rope, cursor: CursorState) -> CursorState {
+	let max_row = rope_line_count(text) as u16;
+	let row = cursor.row.min(max_row).max(1);
+	let row_index = row.saturating_sub(1) as usize;
+	let max_col = rope_line_len_chars(text, row_index).max(1) as u16;
+	let col = cursor.col.min(max_col).max(1);
+	CursorState { row, col }
+}
+
+fn apply_text_delta_undo(text: &mut Rope, delta: &BufferEditSnapshot) {
+	let start_char = text.byte_to_char(delta.start_byte.min(text.len_bytes()));
+	let inserted_end_byte = delta.start_byte.saturating_add(delta.inserted_text.len()).min(text.len_bytes());
+	let end_char = text.byte_to_char(inserted_end_byte);
+	text.remove(start_char..end_char);
+	text.insert(start_char, delta.deleted_text.as_str());
+}
+
+fn apply_text_delta_redo(text: &mut Rope, delta: &BufferEditSnapshot) {
+	let start_char = text.byte_to_char(delta.start_byte.min(text.len_bytes()));
+	let deleted_end_byte = delta.start_byte.saturating_add(delta.deleted_text.len()).min(text.len_bytes());
+	let end_char = text.byte_to_char(deleted_end_byte);
+	text.remove(start_char..end_char);
+	text.insert(start_char, delta.inserted_text.as_str());
+}
+
+fn merge_adjacent_insert_history_edits(
+	last_edit: &mut BufferEditSnapshot,
+	next_edit: &BufferEditSnapshot,
+) -> bool {
+	if !last_edit.deleted_text.is_empty() || !next_edit.deleted_text.is_empty() {
+		return false;
+	}
+	let expected_start = last_edit.start_byte.saturating_add(last_edit.inserted_text.len());
+	if next_edit.start_byte != expected_start {
+		return false;
+	}
+	last_edit.inserted_text.push_str(next_edit.inserted_text.as_str());
+	true
+}
+
+pub(crate) fn compute_rope_text_diff(before: &Rope, after: &Rope) -> Option<RopeTextDiff> {
 	if before == after {
 		return None;
 	}
 
+	let mut common_prefix_chars = 0usize;
 	let mut common_prefix_bytes = 0usize;
 	for (before_ch, after_ch) in before.chars().zip(after.chars()) {
 		if before_ch != after_ch {
 			break;
 		}
+		common_prefix_chars = common_prefix_chars.saturating_add(1);
 		common_prefix_bytes = common_prefix_bytes.saturating_add(before_ch.len_utf8());
 	}
 
-	let before_tail = &before[common_prefix_bytes..];
-	let after_tail = &after[common_prefix_bytes..];
-	let mut common_suffix_bytes = 0usize;
-	for (before_ch, after_ch) in before_tail.chars().rev().zip(after_tail.chars().rev()) {
-		if before_ch != after_ch {
+	let before_len_chars = before.len_chars();
+	let after_len_chars = after.len_chars();
+	let mut common_suffix_chars = 0usize;
+	let mut before_mid_end = before_len_chars;
+	let mut after_mid_end = after_len_chars;
+	while before_mid_end > common_prefix_chars && after_mid_end > common_prefix_chars {
+		if before.char(before_mid_end.saturating_sub(1)) != after.char(after_mid_end.saturating_sub(1)) {
 			break;
 		}
-		common_suffix_bytes = common_suffix_bytes.saturating_add(before_ch.len_utf8());
+		common_suffix_chars = common_suffix_chars.saturating_add(1);
+		before_mid_end = before_mid_end.saturating_sub(1);
+		after_mid_end = after_mid_end.saturating_sub(1);
 	}
 
-	let before_mid_end = before.len().saturating_sub(common_suffix_bytes);
-	let after_mid_end = after.len().saturating_sub(common_suffix_bytes);
-	Some(BufferEditSnapshot {
+	Some(RopeTextDiff {
+		start_char:    common_prefix_chars,
 		start_byte:    common_prefix_bytes,
-		deleted_text:  before[common_prefix_bytes..before_mid_end].to_string(),
-		inserted_text: after[common_prefix_bytes..after_mid_end].to_string(),
+		deleted_text:  before.slice(common_prefix_chars..before_mid_end).to_string(),
+		inserted_text: after.slice(common_prefix_chars..after_mid_end).to_string(),
 	})
 }
 

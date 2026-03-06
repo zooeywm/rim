@@ -1438,22 +1438,10 @@ dependencies = [
  "rim-infra-file-io",
  "rim-infra-file-watcher",
  "rim-infra-input",
- "rim-infra-swap",
+ "rim-infra-persistence",
  "rim-infra-ui",
  "rim-kernel",
  "tracing",
-]
-
-[[package]]
-name = "rim-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "rim-app",
- "thiserror 2.0.18",
- "time",
- "tracing-appender",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -1494,7 +1482,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rim-infra-swap"
+name = "rim-infra-persistence"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1503,7 +1491,9 @@ dependencies = [
  "dep-inj-target",
  "flume",
  "rim-kernel",
+ "rim-paths",
  "ropey",
+ "serde",
  "serde_json",
  "tracing",
 ]
@@ -1515,6 +1505,7 @@ dependencies = [
  "crossterm",
  "ratatui",
  "rim-kernel",
+ "ropey",
  "thiserror 2.0.18",
  "unicode-width",
 ]
@@ -1524,10 +1515,28 @@ name = "rim-kernel"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ropey",
  "slotmap",
  "thiserror 2.0.18",
  "tracing",
  "unicode-width",
+]
+
+[[package]]
+name = "rim-paths"
+version = "0.1.0"
+
+[[package]]
+name = "rim-tui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rim-app",
+ "rim-paths",
+ "thiserror 2.0.18",
+ "time",
+ "tracing-appender",
+ "tracing-subscriber",
 ]
 
 [[package]]

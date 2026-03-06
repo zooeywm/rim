@@ -70,9 +70,11 @@ impl TerminalSession {
 	pub fn sync_cursor_style(&mut self, mode: EditorMode) -> Result<(), TerminalSessionError> {
 		let style = match mode {
 			EditorMode::Insert => SetCursorStyle::SteadyBar,
-			EditorMode::Normal | EditorMode::Command | EditorMode::VisualChar | EditorMode::VisualLine => {
-				SetCursorStyle::SteadyBlock
-			}
+			EditorMode::Normal
+			| EditorMode::Command
+			| EditorMode::VisualChar
+			| EditorMode::VisualLine
+			| EditorMode::VisualBlock => SetCursorStyle::SteadyBlock,
 		};
 		execute!(self.terminal.backend_mut(), style)
 			.map_err(|source| TerminalSessionError::SetCursorStyle { source })?;

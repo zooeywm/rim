@@ -13,6 +13,6 @@ dep-inj-target = { git = "https://github.com/zooeywm/dep-inj-target.git" }
 rim-kernel = { path = "../rim-kernel" }
 rim-infra-file-io = { path = "../rim-infra-file-io" }
 rim-infra-file-watcher = { path = "../rim-infra-file-watcher" }
-rim-infra-swap = { path = "../rim-infra-swap" }
+rim-infra-persistence = { path = "../rim-infra-persistence" }
 rim-infra-input = { path = "../rim-infra-input" }
 rim-infra-ui = { path = "../rim-infra-ui" }

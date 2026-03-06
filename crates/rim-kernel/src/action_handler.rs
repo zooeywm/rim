@@ -1,9 +1,10 @@
-use std::{hash::{Hash, Hasher}, ops::ControlFlow, path::{Path, PathBuf}};
+use std::{ops::ControlFlow, path::{Path, PathBuf}};
 
+use ropey::Rope;
 use thiserror::Error;
 use tracing::{error, info};
 
-use crate::{action::{AppAction, BufferAction, EditorAction, FileAction, FileLoadSource, KeyCode, KeyEvent, KeyModifiers, LayoutAction, SwapConflictInfo, SystemAction, TabAction, WindowAction}, ports::{FileIo, FileIoError, FileWatcher, FileWatcherError, SwapEditOp, SwapIo, SwapIoError}, state::{BufferId, BufferSwitchDirection, EditorMode, FocusDirection, NormalSequenceKey, PendingSwapDecision, RimState, SplitAxis}};
+use crate::{action::{AppAction, BufferAction, EditorAction, FileAction, FileLoadSource, KeyCode, KeyEvent, KeyModifiers, LayoutAction, SwapConflictInfo, SystemAction, TabAction, WindowAction}, ports::{FileIo, FileIoError, FileWatcher, FileWatcherError, PersistenceIo, PersistenceIoError, SwapEditOp}, state::{BufferId, BufferSwitchDirection, EditorMode, FocusDirection, NormalSequenceKey, PendingSwapDecision, PersistedBufferHistory, RimState, SplitAxis, compute_rope_text_diff}};
 
 type NormalKey = NormalSequenceKey;
 
@@ -17,7 +18,7 @@ enum SequenceMatch {
 #[derive(Debug, Clone)]
 struct BufferTextSnapshot {
 	buffer_id: BufferId,
-	text:      String,
+	text:      Rope,
 	cursor:    crate::state::CursorState,
 }
 
@@ -63,82 +64,69 @@ enum ActionHandlerError {
 		#[source]
 		source: FileIoError,
 	},
-	#[error("enqueue swap open failed")]
-	SwapOpen {
+	#[error("enqueue persistence open failed")]
+	PersistenceOpen {
 		#[source]
-		source: SwapIoError,
+		source: PersistenceIoError,
 	},
-	#[error("enqueue swap edit failed")]
-	SwapEdit {
+	#[error("enqueue persistence swap edit failed")]
+	PersistenceSwapEdit {
 		#[source]
-		source: SwapIoError,
+		source: PersistenceIoError,
 	},
-	#[error("enqueue swap mark clean failed")]
-	SwapMarkClean {
+	#[error("enqueue persistence swap mark clean failed")]
+	PersistenceSwapMarkClean {
 		#[source]
-		source: SwapIoError,
+		source: PersistenceIoError,
 	},
-	#[error("enqueue swap recover failed")]
-	SwapRecover {
+	#[error("enqueue persistence swap recover failed")]
+	PersistenceSwapRecover {
 		#[source]
-		source: SwapIoError,
+		source: PersistenceIoError,
 	},
-	#[error("enqueue swap conflict detect failed")]
-	SwapDetectConflict {
+	#[error("enqueue persistence swap conflict detect failed")]
+	PersistenceSwapDetectConflict {
 		#[source]
-		source: SwapIoError,
+		source: PersistenceIoError,
 	},
-	#[error("enqueue swap base initialization failed")]
-	SwapInitializeBase {
+	#[error("enqueue persistence swap base initialization failed")]
+	PersistenceSwapInitializeBase {
 		#[source]
-		source: SwapIoError,
+		source: PersistenceIoError,
 	},
-	#[error("enqueue swap close failed")]
-	SwapClose {
+	#[error("enqueue persistence swap close failed")]
+	PersistenceSwapClose {
 		#[source]
-		source: SwapIoError,
+		source: PersistenceIoError,
+	},
+	#[error("enqueue persistence history load failed")]
+	PersistenceHistoryLoad {
+		#[source]
+		source: PersistenceIoError,
+	},
+	#[error("enqueue persistence history save failed")]
+	PersistenceHistorySave {
+		#[source]
+		source: PersistenceIoError,
 	},
 }
 
 impl RimState {
 	pub fn apply_action<P>(&mut self, ports: &P, action: AppAction) -> ControlFlow<()>
-	where P: FileIo + FileWatcher + SwapIo {
+	where P: FileIo + FileWatcher + PersistenceIo {
 		Self::dispatch_internal(ports, self, action)
 	}
 }
 
 impl RimState {
-	fn text_fingerprint(text: &str) -> u64 {
-		let mut hasher = std::collections::hash_map::DefaultHasher::new();
-		text.hash(&mut hasher);
-		hasher.finish()
-	}
-
-	fn mark_internal_save(state: &mut RimState, buffer_id: BufferId, text: &str) {
-		state.last_internal_save_fingerprint.insert(buffer_id, Self::text_fingerprint(text));
-	}
-
-	fn should_ignore_external_reload(state: &mut RimState, buffer_id: BufferId, text: &str) -> bool {
-		let incoming = Self::text_fingerprint(text);
-		let Some(expected) = state.last_internal_save_fingerprint.get(&buffer_id).copied() else {
-			return false;
-		};
-		if expected == incoming {
-			state.last_internal_save_fingerprint.remove(&buffer_id);
-			return true;
-		}
-		state.last_internal_save_fingerprint.remove(&buffer_id);
-		false
-	}
-
 	fn capture_active_buffer_text_snapshot(state: &RimState) -> Option<BufferTextSnapshot> {
 		let buffer_id = state.active_buffer_id()?;
 		let buffer = state.buffers.get(buffer_id)?;
-		Some(BufferTextSnapshot { buffer_id, text: buffer.text.clone(), cursor: buffer.cursor })
+		Some(BufferTextSnapshot { buffer_id, text: buffer.text.clone(), cursor: state.active_cursor() })
 	}
 
 	fn enqueue_swap_ops<P>(ports: &P, state: &RimState, buffer_id: BufferId, ops: Vec<SwapEditOp>)
-	where P: SwapIo {
+	where P: PersistenceIo {
 		if ops.is_empty() {
 			return;
 		}
@@ -147,62 +135,78 @@ impl RimState {
 		};
 		for op in ops {
 			if let Err(source) = ports.enqueue_edit(buffer_id, source_path.clone(), op) {
-				let err = ActionHandlerError::SwapEdit { source };
-				error!("swap worker unavailable while enqueueing swap edit: {}", err);
+				let err = ActionHandlerError::PersistenceSwapEdit { source };
+				error!("persistence worker unavailable while enqueueing swap edit: {}", err);
 				break;
 			}
 		}
 	}
 
-	fn swap_ops_from_text_diff(before: &str, after: &str) -> Vec<SwapEditOp> {
-		if before == after {
+	fn swap_ops_from_text_diff(before: &Rope, after: &Rope) -> Vec<SwapEditOp> {
+		if let Some(ops) = Self::swap_ops_from_linewise_text_diff(before, after) {
+			return ops;
+		}
+
+		let Some(diff) = compute_rope_text_diff(before, after) else {
 			return Vec::new();
-		}
-
-		let mut common_prefix_bytes = 0usize;
-		for (before_ch, after_ch) in before.chars().zip(after.chars()) {
-			if before_ch != after_ch {
-				break;
-			}
-			common_prefix_bytes = common_prefix_bytes.saturating_add(before_ch.len_utf8());
-		}
-
-		let before_tail = &before[common_prefix_bytes..];
-		let after_tail = &after[common_prefix_bytes..];
-		let mut common_suffix_bytes = 0usize;
-		for (before_ch, after_ch) in before_tail.chars().rev().zip(after_tail.chars().rev()) {
-			if before_ch != after_ch {
-				break;
-			}
-			common_suffix_bytes = common_suffix_bytes.saturating_add(before_ch.len_utf8());
-		}
-
-		let before_mid_end = before.len().saturating_sub(common_suffix_bytes);
-		let after_mid_end = after.len().saturating_sub(common_suffix_bytes);
-		let deleted_text = &before[common_prefix_bytes..before_mid_end];
-		let inserted_text = &after[common_prefix_bytes..after_mid_end];
-		let pos = before[..common_prefix_bytes].chars().count();
-		let delete_len = deleted_text.chars().count();
+		};
+		let delete_len = diff.deleted_text.chars().count();
 
 		let mut ops = Vec::new();
 		if delete_len > 0 {
-			ops.push(SwapEditOp::Delete { pos, len: delete_len });
+			ops.push(SwapEditOp::Delete { pos: diff.start_char, len: delete_len });
 		}
-		if !inserted_text.is_empty() {
-			ops.push(SwapEditOp::Insert { pos, text: inserted_text.to_string() });
+		if !diff.inserted_text.is_empty() {
+			ops.push(SwapEditOp::Insert { pos: diff.start_char, text: diff.inserted_text });
 		}
 		ops
 	}
 
+	fn swap_ops_from_linewise_text_diff(before: &Rope, after: &Rope) -> Option<Vec<SwapEditOp>> {
+		if before == after || before.len_lines() != after.len_lines() {
+			return None;
+		}
+
+		let mut ops = Vec::new();
+		let mut prior_rows_char_delta = 0isize;
+
+		for row_idx in 0..before.len_lines() {
+			let before_line = rope_line_text_without_newline(before, row_idx);
+			let after_line = rope_line_text_without_newline(after, row_idx);
+			if before_line == after_line {
+				continue;
+			}
+
+			let Some(line_diff) = compute_text_diff(before_line.as_str(), after_line.as_str()) else {
+				continue;
+			};
+			let base_pos = before.line_to_char(row_idx).saturating_add(line_diff.start_char);
+			let pos = apply_char_delta(base_pos, prior_rows_char_delta);
+			let delete_len = line_diff.deleted_text.chars().count();
+			let insert_len = line_diff.inserted_text.chars().count();
+
+			if delete_len > 0 {
+				ops.push(SwapEditOp::Delete { pos, len: delete_len });
+			}
+			if !line_diff.inserted_text.is_empty() {
+				ops.push(SwapEditOp::Insert { pos, text: line_diff.inserted_text });
+			}
+
+			prior_rows_char_delta += insert_len as isize - delete_len as isize;
+		}
+
+		Some(ops)
+	}
+
 	fn enqueue_swap_ops_from_text_diff<P>(ports: &P, state: &RimState, before: Option<BufferTextSnapshot>)
-	where P: SwapIo {
+	where P: PersistenceIo {
 		let Some(before) = before else {
 			return;
 		};
 		let Some(after_buffer) = state.buffers.get(before.buffer_id) else {
 			return;
 		};
-		let ops = Self::swap_ops_from_text_diff(before.text.as_str(), after_buffer.text.as_str());
+		let ops = Self::swap_ops_from_text_diff(&before.text, &after_buffer.text);
 		Self::enqueue_swap_ops(ports, state, before.buffer_id, ops);
 	}
 
@@ -217,11 +221,58 @@ impl RimState {
 	}
 
 	fn enqueue_swap_recover<P>(ports: &P, buffer_id: BufferId, source_path: PathBuf, base_text: String)
-	where P: SwapIo {
+	where P: PersistenceIo {
 		if let Err(source) = ports.enqueue_recover(buffer_id, source_path, base_text) {
-			let err = ActionHandlerError::SwapRecover { source };
-			error!("swap worker unavailable while enqueueing swap recover: {}", err);
+			let err = ActionHandlerError::PersistenceSwapRecover { source };
+			error!("persistence worker unavailable while enqueueing swap recover: {}", err);
 		}
+	}
+
+	fn enqueue_history_load<P>(ports: &P, buffer_id: BufferId, source_path: PathBuf, expected_text: String)
+	where P: PersistenceIo {
+		if let Err(source) = ports.enqueue_load_history(buffer_id, source_path, expected_text) {
+			let err = ActionHandlerError::PersistenceHistoryLoad { source };
+			error!("persistence worker unavailable while enqueueing history load: {}", err);
+		}
+	}
+
+	fn enqueue_history_save<P>(
+		ports: &P,
+		buffer_id: BufferId,
+		source_path: PathBuf,
+		history: PersistedBufferHistory,
+	) where
+		P: PersistenceIo,
+	{
+		if let Err(source) = ports.enqueue_save_history(buffer_id, source_path, history) {
+			let err = ActionHandlerError::PersistenceHistorySave { source };
+			error!("persistence worker unavailable while enqueueing history save: {}", err);
+		}
+	}
+
+	fn enqueue_history_load_for_buffer<P>(ports: &P, state: &RimState, buffer_id: BufferId)
+	where P: PersistenceIo {
+		let Some(buffer) = state.buffers.get(buffer_id) else {
+			return;
+		};
+		let Some(source_path) = buffer.path.clone() else {
+			return;
+		};
+		Self::enqueue_history_load(ports, buffer_id, source_path, buffer.text.to_string());
+	}
+
+	fn enqueue_history_save_for_buffer<P>(ports: &P, state: &RimState, buffer_id: BufferId)
+	where P: PersistenceIo {
+		let Some(buffer) = state.buffers.get(buffer_id) else {
+			return;
+		};
+		let Some(source_path) = buffer.path.clone() else {
+			return;
+		};
+		let Some(history) = state.buffer_persisted_history_snapshot(buffer_id) else {
+			return;
+		};
+		Self::enqueue_history_save(ports, buffer_id, source_path, history);
 	}
 
 	fn swap_conflict_prompt_message(conflict: &SwapConflictInfo) -> String {
@@ -232,7 +283,7 @@ impl RimState {
 	}
 
 	fn handle_pending_swap_decision_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
-	where P: FileIo + FileWatcher + SwapIo {
+	where P: FileIo + FileWatcher + PersistenceIo {
 		state.normal_sequence.clear();
 		state.status_bar.key_sequence.clear();
 
@@ -277,8 +328,8 @@ impl RimState {
 				if let Err(source) =
 					ports.enqueue_initialize_base(pending.buffer_id, pending.source_path, pending.base_text, true)
 				{
-					let err = ActionHandlerError::SwapInitializeBase { source };
-					error!("swap worker unavailable while enqueueing base init: {}", err);
+					let err = ActionHandlerError::PersistenceSwapInitializeBase { source };
+					error!("persistence worker unavailable while enqueueing base init: {}", err);
 					state.status_bar.message = "swap delete failed: swap worker unavailable".to_string();
 				} else {
 					state.status_bar.message = "swap deleted".to_string();
@@ -288,8 +339,8 @@ impl RimState {
 				if let Err(source) =
 					ports.enqueue_initialize_base(pending.buffer_id, pending.source_path, pending.base_text, false)
 				{
-					let err = ActionHandlerError::SwapInitializeBase { source };
-					error!("swap worker unavailable while enqueueing base init: {}", err);
+					let err = ActionHandlerError::PersistenceSwapInitializeBase { source };
+					error!("persistence worker unavailable while enqueueing base init: {}", err);
 					state.status_bar.message = "swap ignore failed: swap worker unavailable".to_string();
 				} else {
 					state.status_bar.message = "editing without swap recovery".to_string();
@@ -302,8 +353,8 @@ impl RimState {
 					error!("watch worker unavailable while enqueueing file unwatch: {}", err);
 				}
 				if let Err(source) = ports.enqueue_close(pending.buffer_id) {
-					let err = ActionHandlerError::SwapClose { source };
-					error!("swap worker unavailable while enqueueing swap close: {}", err);
+					let err = ActionHandlerError::PersistenceSwapClose { source };
+					error!("persistence worker unavailable while enqueueing swap close: {}", err);
 				}
 				state.status_bar.message = format!("open aborted: {}", pending.source_path.display());
 			}
@@ -314,7 +365,7 @@ impl RimState {
 	}
 
 	fn dispatch_internal<P>(ports: &P, state: &mut RimState, action: AppAction) -> ControlFlow<()>
-	where P: FileIo + FileWatcher + SwapIo {
+	where P: FileIo + FileWatcher + PersistenceIo {
 		match action {
 			AppAction::Editor(EditorAction::KeyPressed(key)) => {
 				return Self::handle_key(ports, state, key);
@@ -357,7 +408,7 @@ impl RimState {
 					let Some((source_path, base_text)) = state
 						.buffers
 						.get(buffer_id)
-						.and_then(|buffer| buffer.path.clone().map(|path| (path, buffer.text.clone())))
+						.and_then(|buffer| buffer.path.clone().map(|path| (path, buffer.text.to_string())))
 					else {
 						error!("swap conflict detected for unknown buffer path: buffer_id={:?}", buffer_id);
 						return ControlFlow::Continue(());
@@ -377,7 +428,7 @@ impl RimState {
 					let Some((source_path, base_text)) = state
 						.buffers
 						.get(buffer_id)
-						.and_then(|buffer| buffer.path.clone().map(|path| (path, buffer.text.clone())))
+						.and_then(|buffer| buffer.path.clone().map(|path| (path, buffer.text.to_string())))
 					else {
 						error!("swap conflict check returned for unknown buffer path: buffer_id={:?}", buffer_id);
 						return ControlFlow::Continue(());
@@ -392,8 +443,10 @@ impl RimState {
 			AppAction::File(FileAction::SwapRecoverCompleted { buffer_id, result }) => match result {
 				Ok(Some(recovered_text)) => {
 					state.replace_buffer_text_preserving_cursor(buffer_id, recovered_text);
-					state.set_buffer_dirty(buffer_id, true);
+					state.clear_buffer_history(buffer_id);
+					state.refresh_buffer_dirty(buffer_id);
 					state.set_buffer_externally_modified(buffer_id, false);
+					Self::enqueue_history_load_for_buffer(ports, state, buffer_id);
 					state.status_bar.message = "swap recovered: unsaved edits restored".to_string();
 				}
 				Ok(None) => {
@@ -404,71 +457,82 @@ impl RimState {
 					error!("swap recover failed: buffer_id={:?}, error={}", buffer_id, err);
 				}
 			},
-			AppAction::File(FileAction::LoadCompleted { buffer_id, source, result }) => {
-				match (source, result) {
-					(FileLoadSource::Open, Ok(text)) => {
-						if let Some(buffer) = state.buffers.get_mut(buffer_id) {
-							buffer.text = text.clone();
-						} else {
-							error!("load completed for unknown buffer: buffer_id={:?}", buffer_id);
-						}
-						state.set_buffer_dirty(buffer_id, false);
-						state.set_buffer_externally_modified(buffer_id, false);
-						state.status_bar.message = "file loaded".to_string();
-						if let Some(source_path) = state.buffers.get(buffer_id).and_then(|buffer| buffer.path.clone())
-							&& let Err(source) = ports.enqueue_detect_conflict(buffer_id, source_path)
-						{
-							let err = ActionHandlerError::SwapDetectConflict { source };
-							error!("swap worker unavailable while enqueueing swap conflict check: {}", err);
-						}
-					}
-					(FileLoadSource::Open, Err(err)) => {
-						error!("file load failed: buffer_id={:?}, error={}", buffer_id, err);
-						state.status_bar.message = format!("load failed: {}", err);
-					}
-					(FileLoadSource::External, Ok(text)) => {
-						let is_active = state.active_buffer_id() == Some(buffer_id);
-						let Some((current_fingerprint, is_dirty, name)) = state.buffers.get(buffer_id).map(|buffer| {
-							(Self::text_fingerprint(buffer.text.as_str()), buffer.dirty, buffer.name.clone())
-						}) else {
-							error!("external changed for unknown buffer: buffer_id={:?}", buffer_id);
-							return ControlFlow::Continue(());
-						};
-						let incoming_fingerprint = Self::text_fingerprint(&text);
-						if current_fingerprint == incoming_fingerprint {
-							state.set_buffer_externally_modified(buffer_id, false);
-							if is_active && state.status_bar.message.starts_with("reloading ") {
-								state.status_bar.message = "file saved".to_string();
-							}
-							return ControlFlow::Continue(());
-						}
-						if is_dirty {
-							state.set_buffer_externally_modified(buffer_id, true);
-							if is_active {
-								state.status_bar.message =
-									"file changed externally; use :w! to overwrite or :e! to reload".to_string();
-							}
-							return ControlFlow::Continue(());
-						}
-						if Self::should_ignore_external_reload(state, buffer_id, &text) {
-							state.set_buffer_externally_modified(buffer_id, false);
-							if is_active {
-								state.status_bar.message = "file saved".to_string();
-							}
-							return ControlFlow::Continue(());
-						}
-						state.replace_buffer_text_preserving_cursor(buffer_id, text);
-						state.set_buffer_dirty(buffer_id, false);
-						state.set_buffer_externally_modified(buffer_id, false);
-						if is_active {
-							state.status_bar.message = format!("reloaded {}", name);
+			AppAction::File(FileAction::UndoHistoryLoaded { buffer_id, source_path, expected_text, result }) => {
+				let Some(is_still_current) = state
+					.buffers
+					.get(buffer_id)
+					.map(|buffer| buffer.path.as_ref() == Some(&source_path) && buffer.text == expected_text.as_str())
+				else {
+					return ControlFlow::Continue(());
+				};
+				if !is_still_current {
+					return ControlFlow::Continue(());
+				}
+
+				match result {
+					Ok(Some(history)) => {
+						if !state.restore_buffer_persisted_history(buffer_id, history) {
+							error!("restore persisted history failed: buffer_id={:?}", buffer_id);
 						}
 					}
-					(FileLoadSource::External, Err(err)) => {
-						error!("external change reload failed: buffer_id={:?}, error={}", buffer_id, err);
+					Ok(None) => {}
+					Err(err) => {
+						error!("history load failed: buffer_id={:?}, error={}", buffer_id, err);
 					}
 				}
 			}
+			AppAction::File(FileAction::LoadCompleted { buffer_id, source, result }) => match (source, result) {
+				(FileLoadSource::Open, Ok(text)) => {
+					if let Some(buffer) = state.buffers.get_mut(buffer_id) {
+						buffer.text = text.into();
+					} else {
+						error!("load completed for unknown buffer: buffer_id={:?}", buffer_id);
+					}
+					state.clear_buffer_history(buffer_id);
+					state.mark_buffer_clean(buffer_id);
+					state.set_buffer_externally_modified(buffer_id, false);
+					Self::enqueue_history_load_for_buffer(ports, state, buffer_id);
+					state.status_bar.message = "file loaded".to_string();
+					if let Some(source_path) = state.buffers.get(buffer_id).and_then(|buffer| buffer.path.clone())
+						&& let Err(source) = ports.enqueue_detect_conflict(buffer_id, source_path)
+					{
+						let err = ActionHandlerError::PersistenceSwapDetectConflict { source };
+						error!("persistence worker unavailable while enqueueing swap conflict check: {}", err);
+					}
+				}
+				(FileLoadSource::Open, Err(err)) => {
+					error!("file load failed: buffer_id={:?}, error={}", buffer_id, err);
+					state.status_bar.message = format!("load failed: {}", err);
+				}
+				(FileLoadSource::External, Ok(text)) => {
+					let is_active = state.active_buffer_id() == Some(buffer_id);
+					let Some((is_dirty, name)) =
+						state.buffers.get(buffer_id).map(|buffer| (buffer.dirty, buffer.name.clone()))
+					else {
+						error!("external changed for unknown buffer: buffer_id={:?}", buffer_id);
+						return ControlFlow::Continue(());
+					};
+					if is_dirty {
+						state.set_buffer_externally_modified(buffer_id, true);
+						if is_active {
+							state.status_bar.message =
+								"file changed externally; use :w! to overwrite or :e! to reload".to_string();
+						}
+						return ControlFlow::Continue(());
+					}
+					state.replace_buffer_text_preserving_cursor(buffer_id, text);
+					state.clear_buffer_history(buffer_id);
+					state.mark_buffer_clean(buffer_id);
+					state.set_buffer_externally_modified(buffer_id, false);
+					Self::enqueue_history_load_for_buffer(ports, state, buffer_id);
+					if is_active {
+						state.status_bar.message = format!("reloaded {}", name);
+					}
+				}
+				(FileLoadSource::External, Err(err)) => {
+					error!("external change reload failed: buffer_id={:?}, error={}", buffer_id, err);
+				}
+			},
 			AppAction::File(FileAction::OpenRequested { path }) => {
 				info!("open_file: {}", path.display());
 				let normalized_path = normalize_file_path(path.as_path());
@@ -480,8 +544,8 @@ impl RimState {
 				let buffer_id = state.create_buffer(Some(normalized_path.clone()), String::new());
 				state.bind_buffer_to_active_window(buffer_id);
 				if let Err(source) = ports.enqueue_open(buffer_id, normalized_path.clone()) {
-					let err = ActionHandlerError::SwapOpen { source };
-					error!("swap worker unavailable while enqueueing swap open: {}", err);
+					let err = ActionHandlerError::PersistenceOpen { source };
+					error!("persistence worker unavailable while enqueueing swap open: {}", err);
 				}
 				if let Err(source) = ports.enqueue_watch(buffer_id, normalized_path.clone()) {
 					let err = ActionHandlerError::OpenFileWatch { source };
@@ -497,6 +561,10 @@ impl RimState {
 			}
 			AppAction::File(FileAction::ExternalChangeDetected { buffer_id, path }) => {
 				if state.in_flight_internal_saves.contains(&buffer_id) {
+					return ControlFlow::Continue(());
+				}
+				if state.should_ignore_recent_external_change(buffer_id) {
+					state.set_buffer_externally_modified(buffer_id, false);
 					return ControlFlow::Continue(());
 				}
 				let Some(buffer) = state.buffers.get(buffer_id) else {
@@ -523,12 +591,7 @@ impl RimState {
 			AppAction::File(FileAction::SaveCompleted { buffer_id, result }) => match result {
 				Ok(()) => {
 					state.in_flight_internal_saves.remove(&buffer_id);
-					if !state.last_internal_save_fingerprint.contains_key(&buffer_id) {
-						let text = state.buffers.get(buffer_id).map(|buffer| buffer.text.clone());
-						if let Some(text) = text {
-							Self::mark_internal_save(state, buffer_id, &text);
-						}
-					}
+					state.mark_recent_internal_save(buffer_id);
 					state.apply_pending_save_path_if_matches(buffer_id);
 					if let Some(path) = state.buffers.get(buffer_id).and_then(|buffer| buffer.path.clone()) {
 						if let Err(source) = ports.enqueue_watch(buffer_id, path.clone()) {
@@ -536,12 +599,13 @@ impl RimState {
 							error!("watch worker unavailable while enqueueing file watch: {}", err);
 						}
 						if let Err(source) = ports.enqueue_mark_clean(buffer_id, path) {
-							let err = ActionHandlerError::SwapMarkClean { source };
-							error!("swap worker unavailable while enqueueing swap mark clean: {}", err);
+							let err = ActionHandlerError::PersistenceSwapMarkClean { source };
+							error!("persistence worker unavailable while enqueueing swap mark clean: {}", err);
 						}
 					}
-					state.set_buffer_dirty(buffer_id, false);
+					state.mark_buffer_clean(buffer_id);
 					state.set_buffer_externally_modified(buffer_id, false);
+					Self::enqueue_history_save_for_buffer(ports, state, buffer_id);
 					state.status_bar.message = "file saved".to_string();
 					if state.quit_after_save {
 						state.quit_after_save = false;
@@ -550,20 +614,25 @@ impl RimState {
 				}
 				Err(err) => {
 					state.in_flight_internal_saves.remove(&buffer_id);
-					state.last_internal_save_fingerprint.remove(&buffer_id);
+					state.clear_recent_internal_save(buffer_id);
 					state.quit_after_save = false;
 					state.clear_pending_save_path_if_matches(buffer_id);
 					error!("file save failed: buffer_id={:?} error={}", buffer_id, err);
 					state.status_bar.message = format!("save failed: {}", err);
 				}
 			},
-			AppAction::System(SystemAction::Quit) => return ControlFlow::Break(()),
+			AppAction::System(SystemAction::Quit) => {
+				for (buffer_id, path, history) in state.all_file_backed_persisted_history_snapshots() {
+					Self::enqueue_history_save(ports, buffer_id, path, history);
+				}
+				return ControlFlow::Break(());
+			}
 		}
 		ControlFlow::Continue(())
 	}
 
 	fn handle_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
-	where P: FileIo + FileWatcher + SwapIo {
+	where P: FileIo + FileWatcher + PersistenceIo {
 		if state.pending_swap_decision.is_some() {
 			return Self::handle_pending_swap_decision_key(ports, state, key);
 		}
@@ -607,7 +676,7 @@ impl RimState {
 		if let Some(snapshot) = pre_text_snapshot.as_ref() {
 			state.record_history_from_text_diff(
 				snapshot.buffer_id,
-				snapshot.text.as_str(),
+				&snapshot.text,
 				snapshot.cursor,
 				mode_before,
 				skip_history,
@@ -616,13 +685,18 @@ impl RimState {
 		if mode_before == EditorMode::Insert && state.mode != EditorMode::Insert {
 			state.commit_insert_history_group();
 		}
-		Self::enqueue_swap_ops_from_text_diff(ports, state, pre_text_snapshot);
+		Self::enqueue_swap_ops_from_text_diff(ports, state, pre_text_snapshot.clone());
+		if let Some(snapshot) = pre_text_snapshot
+			&& state.buffers.get(snapshot.buffer_id).is_some_and(|buffer| buffer.text != snapshot.text)
+		{
+			Self::enqueue_history_save_for_buffer(ports, state, snapshot.buffer_id);
+		}
 
 		flow
 	}
 
 	fn handle_normal_mode_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
-	where P: FileIo + FileWatcher + SwapIo {
+	where P: FileIo + FileWatcher + PersistenceIo {
 		let Some(normal_key) = Self::to_normal_key(state, key) else {
 			state.normal_sequence.clear();
 			state.status_bar.key_sequence.clear();
@@ -723,6 +797,7 @@ impl RimState {
 			[K::Char(':')] => SequenceMatch::Action(AppAction::Editor(EditorAction::EnterCommandMode)),
 			[K::Char('v')] => SequenceMatch::Action(AppAction::Editor(EditorAction::EnterVisualMode)),
 			[K::Char('V')] => SequenceMatch::Action(AppAction::Editor(EditorAction::EnterVisualLineMode)),
+			[K::Ctrl('v')] => SequenceMatch::Action(AppAction::Editor(EditorAction::EnterVisualBlockMode)),
 			[K::Char('u')] => SequenceMatch::Action(AppAction::Editor(EditorAction::Undo)),
 			[K::Char('h')] => SequenceMatch::Action(AppAction::Editor(EditorAction::MoveLeft)),
 			[K::Char('0')] => SequenceMatch::Action(AppAction::Editor(EditorAction::MoveLineStart)),
@@ -767,7 +842,7 @@ impl RimState {
 	}
 
 	fn apply_editor_action<P>(ports: &P, state: &mut RimState, action: EditorAction)
-	where P: FileIo + FileWatcher + SwapIo {
+	where P: FileIo + FileWatcher + PersistenceIo {
 		match action {
 			EditorAction::KeyPressed(_) => {}
 			EditorAction::EnterInsert => {
@@ -792,6 +867,7 @@ impl RimState {
 			EditorAction::EnterCommandMode => state.enter_command_mode(),
 			EditorAction::EnterVisualMode => state.enter_visual_mode(),
 			EditorAction::EnterVisualLineMode => state.enter_visual_line_mode(),
+			EditorAction::EnterVisualBlockMode => state.enter_visual_block_mode(),
 			EditorAction::MoveLeft => state.move_cursor_left(),
 			EditorAction::MoveLineStart => state.move_cursor_line_start(),
 			EditorAction::MoveLineEnd => state.move_cursor_line_end(),
@@ -812,6 +888,9 @@ impl RimState {
 			EditorAction::DeleteCurrentLineToSlot => state.delete_current_line_to_slot(),
 			EditorAction::CloseActiveBuffer => {
 				let closed_buffer_id = state.active_buffer_id();
+				if let Some(buffer_id) = closed_buffer_id {
+					Self::enqueue_history_save_for_buffer(ports, state, buffer_id);
+				}
 				state.close_active_buffer();
 				if let Some(buffer_id) = closed_buffer_id
 					&& let Err(source) = ports.enqueue_unwatch(buffer_id)
@@ -822,8 +901,8 @@ impl RimState {
 				if let Some(buffer_id) = closed_buffer_id
 					&& let Err(source) = ports.enqueue_close(buffer_id)
 				{
-					let err = ActionHandlerError::SwapClose { source };
-					error!("swap worker unavailable while enqueueing swap close: {}", err);
+					let err = ActionHandlerError::PersistenceSwapClose { source };
+					error!("persistence worker unavailable while enqueueing swap close: {}", err);
 				}
 			}
 			EditorAction::NewEmptyBuffer => {
@@ -833,6 +912,10 @@ impl RimState {
 	}
 
 	fn handle_insert_mode_key(state: &mut RimState, key: KeyEvent) -> ControlFlow<()> {
+		if state.is_block_insert_mode() {
+			return Self::handle_block_insert_mode_key(state, key);
+		}
+
 		if key.modifiers.contains(KeyModifiers::CONTROL) {
 			return ControlFlow::Continue(());
 		}
@@ -860,6 +943,24 @@ impl RimState {
 		ControlFlow::Continue(())
 	}
 
+	fn handle_block_insert_mode_key(state: &mut RimState, key: KeyEvent) -> ControlFlow<()> {
+		if key.modifiers.contains(KeyModifiers::CONTROL) {
+			return ControlFlow::Continue(());
+		}
+
+		match key.code {
+			KeyCode::Esc => state.exit_insert_mode(),
+			KeyCode::Backspace => state.backspace_at_block_cursor(),
+			KeyCode::Tab => state.insert_char_at_block_cursor('\t'),
+			KeyCode::Char(ch) => state.insert_char_at_block_cursor(ch),
+			KeyCode::Enter | KeyCode::Left | KeyCode::Down | KeyCode::Up | KeyCode::Right => {
+				state.status_bar.message = "block insert supports text, tab, backspace, esc only".to_string();
+			}
+		}
+
+		ControlFlow::Continue(())
+	}
+
 	fn handle_visual_mode_key(state: &mut RimState, key: KeyEvent) -> ControlFlow<()> {
 		if key.modifiers.contains(KeyModifiers::CONTROL) {
 			state.visual_g_pending = false;
@@ -868,6 +969,7 @@ impl RimState {
 				KeyCode::Char('y') => state.scroll_view_up_one_line(),
 				KeyCode::Char('d') => state.scroll_view_down_half_page(),
 				KeyCode::Char('u') => state.scroll_view_up_half_page(),
+				KeyCode::Char('v') => state.enter_visual_block_mode(),
 				_ => {}
 			}
 			return ControlFlow::Continue(());
@@ -878,11 +980,25 @@ impl RimState {
 				state.visual_g_pending = false;
 				state.exit_visual_mode();
 			}
-			KeyCode::Char('v') => state.enter_visual_line_mode(),
+			KeyCode::Char('v') => state.enter_visual_mode(),
 			KeyCode::Char('V') => state.enter_visual_line_mode(),
-			KeyCode::Char('d') => state.delete_visual_selection_to_slot(),
+			KeyCode::Char('c') => state.change_visual_selection_to_insert_mode(),
+			KeyCode::Char('d') => {
+				let _ = state.delete_visual_selection_to_slot();
+			}
+			KeyCode::Char('x') => {
+				let _ = state.delete_visual_selection_to_slot();
+			}
 			KeyCode::Char('y') => state.yank_visual_selection_to_slot(),
 			KeyCode::Char('p') => state.replace_visual_selection_with_slot(),
+			KeyCode::Char('I') if state.is_visual_block_mode() => {
+				state.begin_insert_history_group();
+				state.begin_visual_block_insert(false);
+			}
+			KeyCode::Char('A') if state.is_visual_block_mode() => {
+				state.begin_insert_history_group();
+				state.begin_visual_block_insert(true);
+			}
 			KeyCode::Char('h') => {
 				if state.is_visual_line_mode() {
 					state.move_cursor_left();
@@ -918,7 +1034,7 @@ impl RimState {
 	}
 
 	fn handle_command_mode_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
-	where P: FileIo + FileWatcher + SwapIo {
+	where P: FileIo + FileWatcher + PersistenceIo {
 		if key.modifiers.contains(KeyModifiers::CONTROL) {
 			return ControlFlow::Continue(());
 		}
@@ -1038,7 +1154,7 @@ impl RimState {
 		force_overwrite: bool,
 		path_override: Option<PathBuf>,
 	) where
-		P: FileIo + FileWatcher + SwapIo,
+		P: FileIo + FileWatcher + PersistenceIo,
 	{
 		if !force_overwrite
 			&& path_override.is_none()
@@ -1060,14 +1176,13 @@ impl RimState {
 			}
 		};
 
-		Self::mark_internal_save(state, buffer_id, &text);
 		state.in_flight_internal_saves.insert(buffer_id);
 		if let Err(source) = ports.enqueue_save(buffer_id, path, text) {
 			let err = ActionHandlerError::Save { source };
 			error!("io worker unavailable while enqueueing file save: {}", err);
 			state.status_bar.message = "save failed: io worker unavailable".to_string();
 			state.in_flight_internal_saves.remove(&buffer_id);
-			state.last_internal_save_fingerprint.remove(&buffer_id);
+			state.clear_recent_internal_save(buffer_id);
 			state.quit_after_save = false;
 			return;
 		}
@@ -1082,7 +1197,7 @@ impl RimState {
 	}
 
 	fn enqueue_reload_active_buffer<P>(ports: &P, state: &mut RimState, force_reload: bool)
-	where P: FileIo + FileWatcher + SwapIo {
+	where P: FileIo + FileWatcher + PersistenceIo {
 		let active_is_dirty = state
 			.active_buffer_id()
 			.and_then(|id| state.buffers.get(id))
@@ -1111,7 +1226,7 @@ impl RimState {
 	}
 
 	fn enqueue_save_all_buffers<P>(ports: &P, state: &mut RimState)
-	where P: FileIo + FileWatcher + SwapIo {
+	where P: FileIo + FileWatcher + PersistenceIo {
 		let (snapshots, missing_path) = state.all_buffer_save_snapshots();
 		if snapshots.is_empty() {
 			if missing_path > 0 {
@@ -1124,14 +1239,13 @@ impl RimState {
 
 		let mut enqueued = 0usize;
 		for (buffer_id, path, text) in snapshots {
-			Self::mark_internal_save(state, buffer_id, &text);
 			state.in_flight_internal_saves.insert(buffer_id);
 			if let Err(source) = ports.enqueue_save(buffer_id, path, text) {
 				let err = ActionHandlerError::SaveAll { source };
 				error!("io worker unavailable while enqueueing file save: {}", err);
 				state.status_bar.message = "save failed: io worker unavailable".to_string();
 				state.in_flight_internal_saves.remove(&buffer_id);
-				state.last_internal_save_fingerprint.remove(&buffer_id);
+				state.clear_recent_internal_save(buffer_id);
 				state.quit_after_save = false;
 				return;
 			}
@@ -1156,12 +1270,69 @@ fn normalize_file_path(path: &Path) -> PathBuf {
 	std::fs::canonicalize(&absolute).unwrap_or(absolute)
 }
 
+#[derive(Debug)]
+struct TextDiff {
+	start_char:    usize,
+	deleted_text:  String,
+	inserted_text: String,
+}
+
+fn compute_text_diff(before: &str, after: &str) -> Option<TextDiff> {
+	if before == after {
+		return None;
+	}
+
+	let before_chars = before.chars().collect::<Vec<_>>();
+	let after_chars = after.chars().collect::<Vec<_>>();
+
+	let mut common_prefix = 0usize;
+	while common_prefix < before_chars.len()
+		&& common_prefix < after_chars.len()
+		&& before_chars[common_prefix] == after_chars[common_prefix]
+	{
+		common_prefix = common_prefix.saturating_add(1);
+	}
+
+	let mut before_mid_end = before_chars.len();
+	let mut after_mid_end = after_chars.len();
+	while before_mid_end > common_prefix
+		&& after_mid_end > common_prefix
+		&& before_chars[before_mid_end.saturating_sub(1)] == after_chars[after_mid_end.saturating_sub(1)]
+	{
+		before_mid_end = before_mid_end.saturating_sub(1);
+		after_mid_end = after_mid_end.saturating_sub(1);
+	}
+
+	Some(TextDiff {
+		start_char:    common_prefix,
+		deleted_text:  before_chars[common_prefix..before_mid_end].iter().collect(),
+		inserted_text: after_chars[common_prefix..after_mid_end].iter().collect(),
+	})
+}
+
+fn rope_line_text_without_newline(text: &Rope, row_idx: usize) -> String {
+	let mut line = text.line(row_idx).to_string();
+	if line.ends_with('\n') {
+		line.pop();
+		if line.ends_with('\r') {
+			line.pop();
+		}
+	}
+	line
+}
+
+fn apply_char_delta(pos: usize, delta: isize) -> usize {
+	if delta >= 0 { pos.saturating_add(delta as usize) } else { pos.saturating_sub(delta.unsigned_abs()) }
+}
+
 #[cfg(test)]
 mod tests {
-	use std::{cell::RefCell, ops::ControlFlow, path::{Path, PathBuf}};
+	use std::{cell::RefCell, ops::ControlFlow, path::{Path, PathBuf}, time::{Duration, Instant}};
+
+	use ropey::Rope;
 
 	use super::{NormalKey, SequenceMatch};
-	use crate::{action::{AppAction, BufferAction, EditorAction, FileAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, SwapConflictInfo, TabAction}, ports::{FileIo, FileIoError, FileWatcher, FileWatcherError, SwapEditOp, SwapIo, SwapIoError}, state::{BufferId, PendingSwapDecision, RimState}};
+	use crate::{action::{AppAction, BufferAction, EditorAction, FileAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, SwapConflictInfo, TabAction}, ports::{FileIo, FileIoError, FileWatcher, FileWatcherError, PersistenceIo, PersistenceIoError, SwapEditOp}, state::{BufferEditSnapshot, BufferHistoryEntry, BufferId, CursorState, PendingSwapDecision, PersistedBufferHistory, RimState}};
 
 	struct TestPorts;
 
@@ -1183,14 +1354,16 @@ mod tests {
 		fn enqueue_unwatch(&self, _buffer_id: BufferId) -> Result<(), FileWatcherError> { Ok(()) }
 	}
 
-	impl SwapIo for TestPorts {
-		fn enqueue_open(&self, _buffer_id: BufferId, _source_path: PathBuf) -> Result<(), SwapIoError> { Ok(()) }
+	impl PersistenceIo for TestPorts {
+		fn enqueue_open(&self, _buffer_id: BufferId, _source_path: PathBuf) -> Result<(), PersistenceIoError> {
+			Ok(())
+		}
 
 		fn enqueue_detect_conflict(
 			&self,
 			_buffer_id: BufferId,
 			_source_path: PathBuf,
-		) -> Result<(), SwapIoError> {
+		) -> Result<(), PersistenceIoError> {
 			Ok(())
 		}
 
@@ -1199,11 +1372,15 @@ mod tests {
 			_buffer_id: BufferId,
 			_source_path: PathBuf,
 			_op: SwapEditOp,
-		) -> Result<(), SwapIoError> {
+		) -> Result<(), PersistenceIoError> {
 			Ok(())
 		}
 
-		fn enqueue_mark_clean(&self, _buffer_id: BufferId, _source_path: PathBuf) -> Result<(), SwapIoError> {
+		fn enqueue_mark_clean(
+			&self,
+			_buffer_id: BufferId,
+			_source_path: PathBuf,
+		) -> Result<(), PersistenceIoError> {
 			Ok(())
 		}
 
@@ -1213,7 +1390,7 @@ mod tests {
 			_source_path: PathBuf,
 			_base_text: String,
 			_delete_existing: bool,
-		) -> Result<(), SwapIoError> {
+		) -> Result<(), PersistenceIoError> {
 			Ok(())
 		}
 
@@ -1222,11 +1399,29 @@ mod tests {
 			_buffer_id: BufferId,
 			_source_path: PathBuf,
 			_base_text: String,
-		) -> Result<(), SwapIoError> {
+		) -> Result<(), PersistenceIoError> {
 			Ok(())
 		}
 
-		fn enqueue_close(&self, _buffer_id: BufferId) -> Result<(), SwapIoError> { Ok(()) }
+		fn enqueue_load_history(
+			&self,
+			_buffer_id: BufferId,
+			_source_path: PathBuf,
+			_expected_text: String,
+		) -> Result<(), PersistenceIoError> {
+			Ok(())
+		}
+
+		fn enqueue_save_history(
+			&self,
+			_buffer_id: BufferId,
+			_source_path: PathBuf,
+			_history: PersistedBufferHistory,
+		) -> Result<(), PersistenceIoError> {
+			Ok(())
+		}
+
+		fn enqueue_close(&self, _buffer_id: BufferId) -> Result<(), PersistenceIoError> { Ok(()) }
 	}
 
 	fn dispatch_test_action(state: &mut RimState, action: AppAction) -> ControlFlow<()> {
@@ -1236,7 +1431,10 @@ mod tests {
 
 	#[derive(Default)]
 	struct RecordingPorts {
-		file_loads: RefCell<Vec<(BufferId, PathBuf)>>,
+		file_loads:     RefCell<Vec<(BufferId, PathBuf)>>,
+		external_loads: RefCell<Vec<(BufferId, PathBuf)>>,
+		swap_edits:     RefCell<Vec<(BufferId, PathBuf, SwapEditOp)>>,
+		history_saves:  RefCell<Vec<(BufferId, PathBuf, PersistedBufferHistory)>>,
 	}
 
 	impl FileIo for RecordingPorts {
@@ -1249,7 +1447,8 @@ mod tests {
 			Ok(())
 		}
 
-		fn enqueue_external_load(&self, _buffer_id: BufferId, _path: PathBuf) -> Result<(), FileIoError> {
+		fn enqueue_external_load(&self, buffer_id: BufferId, path: PathBuf) -> Result<(), FileIoError> {
+			self.external_loads.borrow_mut().push((buffer_id, path));
 			Ok(())
 		}
 	}
@@ -1260,27 +1459,34 @@ mod tests {
 		fn enqueue_unwatch(&self, _buffer_id: BufferId) -> Result<(), FileWatcherError> { Ok(()) }
 	}
 
-	impl SwapIo for RecordingPorts {
-		fn enqueue_open(&self, _buffer_id: BufferId, _source_path: PathBuf) -> Result<(), SwapIoError> { Ok(()) }
+	impl PersistenceIo for RecordingPorts {
+		fn enqueue_open(&self, _buffer_id: BufferId, _source_path: PathBuf) -> Result<(), PersistenceIoError> {
+			Ok(())
+		}
 
 		fn enqueue_detect_conflict(
 			&self,
 			_buffer_id: BufferId,
 			_source_path: PathBuf,
-		) -> Result<(), SwapIoError> {
+		) -> Result<(), PersistenceIoError> {
 			Ok(())
 		}
 
 		fn enqueue_edit(
 			&self,
-			_buffer_id: BufferId,
-			_source_path: PathBuf,
-			_op: SwapEditOp,
-		) -> Result<(), SwapIoError> {
+			buffer_id: BufferId,
+			source_path: PathBuf,
+			op: SwapEditOp,
+		) -> Result<(), PersistenceIoError> {
+			self.swap_edits.borrow_mut().push((buffer_id, source_path, op));
 			Ok(())
 		}
 
-		fn enqueue_mark_clean(&self, _buffer_id: BufferId, _source_path: PathBuf) -> Result<(), SwapIoError> {
+		fn enqueue_mark_clean(
+			&self,
+			_buffer_id: BufferId,
+			_source_path: PathBuf,
+		) -> Result<(), PersistenceIoError> {
 			Ok(())
 		}
 
@@ -1290,7 +1496,7 @@ mod tests {
 			_source_path: PathBuf,
 			_base_text: String,
 			_delete_existing: bool,
-		) -> Result<(), SwapIoError> {
+		) -> Result<(), PersistenceIoError> {
 			Ok(())
 		}
 
@@ -1299,11 +1505,30 @@ mod tests {
 			_buffer_id: BufferId,
 			_source_path: PathBuf,
 			_base_text: String,
-		) -> Result<(), SwapIoError> {
+		) -> Result<(), PersistenceIoError> {
 			Ok(())
 		}
 
-		fn enqueue_close(&self, _buffer_id: BufferId) -> Result<(), SwapIoError> { Ok(()) }
+		fn enqueue_load_history(
+			&self,
+			_buffer_id: BufferId,
+			_source_path: PathBuf,
+			_expected_text: String,
+		) -> Result<(), PersistenceIoError> {
+			Ok(())
+		}
+
+		fn enqueue_save_history(
+			&self,
+			buffer_id: BufferId,
+			source_path: PathBuf,
+			history: PersistedBufferHistory,
+		) -> Result<(), PersistenceIoError> {
+			self.history_saves.borrow_mut().push((buffer_id, source_path, history));
+			Ok(())
+		}
+
+		fn enqueue_close(&self, _buffer_id: BufferId) -> Result<(), PersistenceIoError> { Ok(()) }
 	}
 
 	#[derive(Default)]
@@ -1336,10 +1561,16 @@ mod tests {
 		}
 	}
 
-	impl SwapIo for SwapDecisionPorts {
-		fn enqueue_open(&self, _buffer_id: BufferId, _source_path: PathBuf) -> Result<(), SwapIoError> { Ok(()) }
+	impl PersistenceIo for SwapDecisionPorts {
+		fn enqueue_open(&self, _buffer_id: BufferId, _source_path: PathBuf) -> Result<(), PersistenceIoError> {
+			Ok(())
+		}
 
-		fn enqueue_detect_conflict(&self, buffer_id: BufferId, source_path: PathBuf) -> Result<(), SwapIoError> {
+		fn enqueue_detect_conflict(
+			&self,
+			buffer_id: BufferId,
+			source_path: PathBuf,
+		) -> Result<(), PersistenceIoError> {
 			self.swap_conflict_detects.borrow_mut().push((buffer_id, source_path));
 			Ok(())
 		}
@@ -1349,11 +1580,15 @@ mod tests {
 			_buffer_id: BufferId,
 			_source_path: PathBuf,
 			_op: SwapEditOp,
-		) -> Result<(), SwapIoError> {
+		) -> Result<(), PersistenceIoError> {
 			Ok(())
 		}
 
-		fn enqueue_mark_clean(&self, _buffer_id: BufferId, _source_path: PathBuf) -> Result<(), SwapIoError> {
+		fn enqueue_mark_clean(
+			&self,
+			_buffer_id: BufferId,
+			_source_path: PathBuf,
+		) -> Result<(), PersistenceIoError> {
 			Ok(())
 		}
 
@@ -1363,7 +1598,7 @@ mod tests {
 			source_path: PathBuf,
 			base_text: String,
 			delete_existing: bool,
-		) -> Result<(), SwapIoError> {
+		) -> Result<(), PersistenceIoError> {
 			self.swap_inits.borrow_mut().push((buffer_id, source_path, base_text, delete_existing));
 			Ok(())
 		}
@@ -1373,12 +1608,30 @@ mod tests {
 			buffer_id: BufferId,
 			source_path: PathBuf,
 			base_text: String,
-		) -> Result<(), SwapIoError> {
+		) -> Result<(), PersistenceIoError> {
 			self.swap_recovers.borrow_mut().push((buffer_id, source_path, base_text));
 			Ok(())
 		}
 
-		fn enqueue_close(&self, buffer_id: BufferId) -> Result<(), SwapIoError> {
+		fn enqueue_load_history(
+			&self,
+			_buffer_id: BufferId,
+			_source_path: PathBuf,
+			_expected_text: String,
+		) -> Result<(), PersistenceIoError> {
+			Ok(())
+		}
+
+		fn enqueue_save_history(
+			&self,
+			_buffer_id: BufferId,
+			_source_path: PathBuf,
+			_history: PersistedBufferHistory,
+		) -> Result<(), PersistenceIoError> {
+			Ok(())
+		}
+
+		fn enqueue_close(&self, buffer_id: BufferId) -> Result<(), PersistenceIoError> {
 			self.swap_closes.borrow_mut().push(buffer_id);
 			Ok(())
 		}
@@ -1502,6 +1755,13 @@ mod tests {
 	}
 
 	#[test]
+	fn resolve_normal_sequence_should_map_ctrl_v_to_enter_visual_block_mode() {
+		let seq = vec![NormalKey::Ctrl('v')];
+		let resolved = resolve_keys(&seq);
+		assert!(matches!(resolved, SequenceMatch::Action(AppAction::Editor(EditorAction::EnterVisualBlockMode))));
+	}
+
+	#[test]
 	fn resolve_normal_sequence_should_map_u_to_undo() {
 		let seq = vec![NormalKey::Char('u')];
 		let resolved = resolve_keys(&seq);
@@ -1605,96 +1865,80 @@ mod tests {
 	}
 
 	#[test]
-	fn external_changed_should_be_ignored_when_it_matches_internal_save_fingerprint() {
+	fn external_change_detected_should_be_ignored_briefly_after_save() {
 		let mut state = RimState::new();
-		let buffer_id = state.create_buffer(Some(PathBuf::from("a.txt")), "old");
+		let ports = RecordingPorts::default();
+		let path = PathBuf::from("a.txt");
+		let buffer_id = state.create_buffer(Some(path.clone()), "old");
 		state.bind_buffer_to_active_window(buffer_id);
 
-		let _ = dispatch_test_action(
-			&mut state,
+		let _ = state.apply_action(
+			&ports,
 			AppAction::File(crate::action::FileAction::SaveCompleted { buffer_id, result: Ok(()) }),
 		);
-
-		let _ = dispatch_test_action(
-			&mut state,
-			AppAction::File(crate::action::FileAction::LoadCompleted {
-				buffer_id,
-				source: crate::action::FileLoadSource::External,
-				result: Ok("old".to_string()),
-			}),
+		let _ = state.apply_action(
+			&ports,
+			AppAction::File(crate::action::FileAction::ExternalChangeDetected { buffer_id, path }),
 		);
 
+		assert!(ports.external_loads.borrow().is_empty());
 		assert_eq!(state.status_bar.message, "file saved");
-		assert_eq!(state.buffers.get(buffer_id).expect("buffer exists").text, "old");
 	}
 
 	#[test]
-	fn external_changed_should_reload_when_content_differs_from_internal_save_fingerprint() {
+	fn external_change_detected_should_reload_after_ignore_window_expires() {
 		let mut state = RimState::new();
-		let buffer_id = state.create_buffer(Some(PathBuf::from("a.txt")), "old");
+		let ports = RecordingPorts::default();
+		let path = PathBuf::from("a.txt");
+		let buffer_id = state.create_buffer(Some(path.clone()), "old");
 		state.bind_buffer_to_active_window(buffer_id);
+		state.ignore_external_change_until.insert(buffer_id, Instant::now() - Duration::from_millis(1));
 
-		let _ = dispatch_test_action(
-			&mut state,
-			AppAction::File(crate::action::FileAction::SaveCompleted { buffer_id, result: Ok(()) }),
+		let _ = state.apply_action(
+			&ports,
+			AppAction::File(crate::action::FileAction::ExternalChangeDetected { buffer_id, path: path.clone() }),
 		);
 
-		let _ = dispatch_test_action(
-			&mut state,
-			AppAction::File(crate::action::FileAction::LoadCompleted {
-				buffer_id,
-				source: crate::action::FileLoadSource::External,
-				result: Ok("new".to_string()),
-			}),
-		);
-
-		assert_eq!(state.buffers.get(buffer_id).expect("buffer exists").text, "new");
+		assert_eq!(ports.external_loads.borrow().as_slice(), &[(buffer_id, path)]);
 	}
 
 	#[test]
 	fn internal_save_echo_should_not_leave_reloading_message() {
 		let mut state = RimState::new();
+		let ports = RecordingPorts::default();
 		let path = PathBuf::from("a.txt");
 		let buffer_id = state.create_buffer(Some(path.clone()), "old");
 		state.bind_buffer_to_active_window(buffer_id);
 
-		let _ = dispatch_test_action(
-			&mut state,
+		let _ = state.apply_action(
+			&ports,
 			AppAction::File(crate::action::FileAction::SaveCompleted { buffer_id, result: Ok(()) }),
 		);
 		assert_eq!(state.status_bar.message, "file saved");
 
-		let _ = dispatch_test_action(
-			&mut state,
+		let _ = state.apply_action(
+			&ports,
 			AppAction::File(crate::action::FileAction::ExternalChangeDetected { buffer_id, path }),
 		);
 		assert_eq!(state.status_bar.message, "file saved");
-
-		let _ = dispatch_test_action(
-			&mut state,
-			AppAction::File(crate::action::FileAction::LoadCompleted {
-				buffer_id,
-				source: crate::action::FileLoadSource::External,
-				result: Ok("old".to_string()),
-			}),
-		);
-		assert_eq!(state.status_bar.message, "file saved");
+		assert!(ports.external_loads.borrow().is_empty());
 	}
 
 	#[test]
 	fn external_change_detected_should_be_ignored_while_internal_save_in_flight() {
 		let mut state = RimState::new();
+		let ports = RecordingPorts::default();
 		let path = PathBuf::from("a.txt");
 		let buffer_id = state.create_buffer(Some(path.clone()), "old");
 		state.bind_buffer_to_active_window(buffer_id);
 		state.in_flight_internal_saves.insert(buffer_id);
 
-		let _ = dispatch_test_action(
-			&mut state,
+		let _ = state.apply_action(
+			&ports,
 			AppAction::File(crate::action::FileAction::ExternalChangeDetected { buffer_id, path }),
 		);
 
-		assert_ne!(state.status_bar.message, "reloading a.txt");
+		assert!(ports.external_loads.borrow().is_empty());
 	}
 
 	#[test]
@@ -1768,7 +2012,7 @@ mod tests {
 
 		assert!(matches!(flow, ControlFlow::Continue(())));
 		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-		assert_eq!(buffer.text, "new");
+		assert_eq!(buffer.text.to_string(), "new");
 		assert!(!buffer.dirty);
 	}
 
@@ -1790,7 +2034,7 @@ mod tests {
 
 		assert!(matches!(flow, ControlFlow::Continue(())));
 		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-		assert_eq!(buffer.text, "old");
+		assert_eq!(buffer.text.to_string(), "old");
 		assert!(buffer.dirty);
 		assert!(buffer.externally_modified);
 		assert_eq!(state.status_bar.message, "file changed externally; use :w! to overwrite or :e! to reload");
@@ -2006,14 +2250,53 @@ mod tests {
 			let _ = dispatch_test_action(&mut state, AppAction::Editor(EditorAction::KeyPressed(key)));
 		}
 		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-		assert_eq!(buffer.text, "cd");
+		assert_eq!(buffer.text.to_string(), "cd");
 
 		let _ = dispatch_test_action(
 			&mut state,
 			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE))),
 		);
 		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-		assert_eq!(buffer.text, "abcd");
+		assert_eq!(buffer.text.to_string(), "abcd");
+	}
+
+	#[test]
+	fn visual_x_should_delete_selection_to_slot() {
+		let mut state = RimState::new();
+		let buffer_id = state.create_buffer(None, "abcd");
+		state.bind_buffer_to_active_window(buffer_id);
+
+		for key in [
+			KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
+			KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+			KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+		] {
+			let _ = dispatch_test_action(&mut state, AppAction::Editor(EditorAction::KeyPressed(key)));
+		}
+
+		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+		assert_eq!(buffer.text.to_string(), "cd");
+		assert_eq!(state.line_slot, Some("ab".to_string()));
+	}
+
+	#[test]
+	fn visual_c_should_delete_selection_and_enter_insert_mode() {
+		let mut state = RimState::new();
+		let buffer_id = state.create_buffer(None, "abcd");
+		state.bind_buffer_to_active_window(buffer_id);
+
+		for key in [
+			KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
+			KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+			KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+		] {
+			let _ = dispatch_test_action(&mut state, AppAction::Editor(EditorAction::KeyPressed(key)));
+		}
+
+		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+		assert_eq!(buffer.text.to_string(), "cd");
+		assert_eq!(state.line_slot, Some("ab".to_string()));
+		assert_eq!(state.mode, crate::state::EditorMode::Insert);
 	}
 
 	#[test]
@@ -2023,6 +2306,7 @@ mod tests {
 		state.bind_buffer_to_active_window(buffer_id);
 		state.line_slot = Some("XY".to_string());
 		state.line_slot_line_wise = false;
+		state.line_slot_block_wise = false;
 
 		for key in [
 			KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
@@ -2032,14 +2316,167 @@ mod tests {
 			let _ = dispatch_test_action(&mut state, AppAction::Editor(EditorAction::KeyPressed(key)));
 		}
 		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-		assert_eq!(buffer.text, "XYcd");
+		assert_eq!(buffer.text.to_string(), "XYcd");
 
 		let _ = dispatch_test_action(
 			&mut state,
 			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE))),
 		);
 		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-		assert_eq!(buffer.text, "abcd");
+		assert_eq!(buffer.text.to_string(), "abcd");
+	}
+
+	#[test]
+	fn visual_c_typing_should_be_undoable_with_single_u() {
+		let mut state = RimState::new();
+		let buffer_id = state.create_buffer(None, "abcd");
+		state.bind_buffer_to_active_window(buffer_id);
+
+		for key in [
+			KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
+			KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+			KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+			KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT),
+			KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::SHIFT),
+			KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+		] {
+			let _ = dispatch_test_action(&mut state, AppAction::Editor(EditorAction::KeyPressed(key)));
+		}
+		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+		assert_eq!(buffer.text.to_string(), "XYcd");
+
+		let _ = dispatch_test_action(
+			&mut state,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE))),
+		);
+		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+		assert_eq!(buffer.text.to_string(), "abcd");
+	}
+
+	#[test]
+	fn visual_block_insert_before_should_be_undoable_with_single_u() {
+		let mut state = RimState::new();
+		let buffer_id = state.create_buffer(None, "abc\ndef\nghi");
+		state.bind_buffer_to_active_window(buffer_id);
+
+		for key in [
+			KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+			KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+			KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+			KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+			KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT),
+			KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT),
+			KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::SHIFT),
+			KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+		] {
+			let _ = dispatch_test_action(&mut state, AppAction::Editor(EditorAction::KeyPressed(key)));
+		}
+		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+		assert_eq!(buffer.text.to_string(), "aXYbc\ndXYef\ngXYhi");
+
+		let _ = dispatch_test_action(
+			&mut state,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE))),
+		);
+		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+		assert_eq!(buffer.text.to_string(), "abc\ndef\nghi");
+	}
+
+	#[test]
+	fn visual_block_append_should_insert_after_block_on_each_selected_row() {
+		let mut state = RimState::new();
+		let buffer_id = state.create_buffer(None, "abc\ndef\nghi");
+		state.bind_buffer_to_active_window(buffer_id);
+
+		for key in [
+			KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+			KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+			KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+			KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+			KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT),
+			KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT),
+			KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::SHIFT),
+			KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+		] {
+			let _ = dispatch_test_action(&mut state, AppAction::Editor(EditorAction::KeyPressed(key)));
+		}
+
+		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+		assert_eq!(buffer.text.to_string(), "abXYc\ndeXYf\nghXYi");
+	}
+
+	#[test]
+	fn visual_block_c_should_change_block_and_be_undoable_with_single_u() {
+		let mut state = RimState::new();
+		let buffer_id = state.create_buffer(None, "abcd\nefgh\nijkl");
+		state.bind_buffer_to_active_window(buffer_id);
+
+		for key in [
+			KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+			KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+			KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+			KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+			KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+			KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT),
+			KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+		] {
+			let _ = dispatch_test_action(&mut state, AppAction::Editor(EditorAction::KeyPressed(key)));
+		}
+
+		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+		assert_eq!(buffer.text.to_string(), "Xcd\nXgh\nXkl");
+
+		let _ = dispatch_test_action(
+			&mut state,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE))),
+		);
+		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+		assert_eq!(buffer.text.to_string(), "abcd\nefgh\nijkl");
+	}
+
+	#[test]
+	fn swap_ops_from_text_diff_should_split_multiline_block_insert_into_multiple_inserts() {
+		let before = Rope::from_str("abc\ndef");
+		let after = Rope::from_str("aXbc\ndXef");
+
+		let ops = RimState::swap_ops_from_text_diff(&before, &after);
+
+		assert_eq!(ops, vec![SwapEditOp::Insert { pos: 1, text: "X".to_string() }, SwapEditOp::Insert {
+			pos:  6,
+			text: "X".to_string(),
+		},]);
+	}
+
+	#[test]
+	fn visual_block_insert_should_enqueue_multiple_swap_insert_ops() {
+		let mut state = RimState::new();
+		let ports = RecordingPorts::default();
+		let path = normalize_test_path("block_swap_ops.txt");
+		let buffer_id = state.create_buffer(Some(path.clone()), "abc\ndef");
+		state.bind_buffer_to_active_window(buffer_id);
+
+		for key in [
+			KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+			KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+			KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+			KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT),
+			KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT),
+		] {
+			let _ = state.apply_action(&ports, AppAction::Editor(EditorAction::KeyPressed(key)));
+		}
+
+		let ops = ports
+			.swap_edits
+			.borrow()
+			.iter()
+			.filter(|(id, ..)| *id == buffer_id)
+			.map(|(_, _, op)| op.clone())
+			.collect::<Vec<_>>();
+
+		assert_eq!(ops, vec![SwapEditOp::Insert { pos: 1, text: "X".to_string() }, SwapEditOp::Insert {
+			pos:  6,
+			text: "X".to_string(),
+		},]);
 	}
 
 	#[test]
@@ -2049,20 +2486,47 @@ mod tests {
 		state.bind_buffer_to_active_window(buffer_id);
 		state.line_slot = Some("b".to_string());
 		state.line_slot_line_wise = true;
+		state.line_slot_block_wise = false;
 
 		let _ = dispatch_test_action(
 			&mut state,
 			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE))),
 		);
 		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-		assert_eq!(buffer.text, "a\nb\nc");
+		assert_eq!(buffer.text.to_string(), "a\nb\nc");
 
 		let _ = dispatch_test_action(
 			&mut state,
 			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE))),
 		);
 		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-		assert_eq!(buffer.text, "a\nc");
+		assert_eq!(buffer.text.to_string(), "a\nc");
+	}
+
+	#[test]
+	fn visual_block_delete_should_be_undoable_with_single_u() {
+		let mut state = RimState::new();
+		let buffer_id = state.create_buffer(None, "abcd\nefgh\nijkl");
+		state.bind_buffer_to_active_window(buffer_id);
+
+		for key in [
+			KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+			KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+			KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+			KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+			KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+		] {
+			let _ = dispatch_test_action(&mut state, AppAction::Editor(EditorAction::KeyPressed(key)));
+		}
+		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+		assert_eq!(buffer.text.to_string(), "cd\ngh\nkl");
+
+		let _ = dispatch_test_action(
+			&mut state,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE))),
+		);
+		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+		assert_eq!(buffer.text.to_string(), "abcd\nefgh\nijkl");
 	}
 
 	#[test]
@@ -2081,19 +2545,25 @@ mod tests {
 			let _ = dispatch_test_action(&mut state, AppAction::Editor(EditorAction::KeyPressed(key)));
 		}
 
+		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+		assert_eq!(buffer.undo_stack.len(), 1);
+		assert_eq!(buffer.undo_stack[0].edits.len(), 1);
+		assert_eq!(buffer.undo_stack[0].edits[0].inserted_text, "use");
+		assert!(buffer.undo_stack[0].edits[0].deleted_text.is_empty());
+
 		let _ = dispatch_test_action(
 			&mut state,
 			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE))),
 		);
 		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-		assert_eq!(buffer.text, "");
+		assert_eq!(buffer.text.to_string(), "");
 
 		let _ = dispatch_test_action(
 			&mut state,
 			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL))),
 		);
 		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-		assert_eq!(buffer.text, "use");
+		assert_eq!(buffer.text.to_string(), "use");
 	}
 
 	#[test]
@@ -2113,14 +2583,14 @@ mod tests {
 		}
 
 		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-		assert_eq!(buffer.text, "a\nuse");
+		assert_eq!(buffer.text.to_string(), "a\nuse");
 
 		let _ = dispatch_test_action(
 			&mut state,
 			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE))),
 		);
 		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-		assert_eq!(buffer.text, "a");
+		assert_eq!(buffer.text.to_string(), "a");
 	}
 
 	#[test]
@@ -2140,14 +2610,14 @@ mod tests {
 		}
 
 		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-		assert_eq!(buffer.text, "use\na");
+		assert_eq!(buffer.text.to_string(), "use\na");
 
 		let _ = dispatch_test_action(
 			&mut state,
 			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE))),
 		);
 		let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-		assert_eq!(buffer.text, "a");
+		assert_eq!(buffer.text.to_string(), "a");
 	}
 
 	#[test]
@@ -2159,6 +2629,51 @@ mod tests {
 		let _ = state.apply_action(&ports, AppAction::File(crate::action::FileAction::OpenRequested { path }));
 
 		assert_eq!(ports.file_loads.borrow().len(), 1);
+	}
+
+	#[test]
+	fn undo_history_loaded_should_restore_buffer_history_when_text_matches() {
+		let mut state = RimState::new();
+		let path = normalize_test_path("undo_restore.txt");
+		let buffer_id = state.create_buffer(Some(path.clone()), "abc");
+		state.bind_buffer_to_active_window(buffer_id);
+		let history = PersistedBufferHistory {
+			current_text: "abc".to_string(),
+			cursor:       CursorState { row: 1, col: 2 },
+			undo_stack:   vec![BufferHistoryEntry {
+				edits:         vec![BufferEditSnapshot {
+					start_byte:    1,
+					deleted_text:  String::new(),
+					inserted_text: "x".to_string(),
+				}],
+				before_cursor: CursorState { row: 1, col: 2 },
+				after_cursor:  CursorState { row: 1, col: 3 },
+			}],
+			redo_stack:   vec![BufferHistoryEntry {
+				edits:         vec![BufferEditSnapshot {
+					start_byte:    1,
+					deleted_text:  "x".to_string(),
+					inserted_text: String::new(),
+				}],
+				before_cursor: CursorState { row: 1, col: 3 },
+				after_cursor:  CursorState { row: 1, col: 2 },
+			}],
+		};
+
+		let _ = dispatch_test_action(
+			&mut state,
+			AppAction::File(FileAction::UndoHistoryLoaded {
+				buffer_id,
+				source_path: path,
+				expected_text: "abc".to_string(),
+				result: Ok(Some(history.clone())),
+			}),
+		);
+
+		let buffer = state.buffers.get(buffer_id).expect("buffer should exist");
+		assert_eq!(buffer.undo_stack, history.undo_stack);
+		assert_eq!(buffer.redo_stack, history.redo_stack);
+		assert_eq!(state.active_cursor(), history.cursor);
 	}
 
 	#[test]

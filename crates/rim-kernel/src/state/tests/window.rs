@@ -34,6 +34,32 @@ fn vertical_split_should_half_height_for_two_windows() {
 }
 
 #[test]
+fn split_should_center_existing_window_when_cursor_becomes_invisible() {
+	let mut state = test_state();
+	let tall_text = (1..=30).map(|n| format!("line-{n}")).collect::<Vec<_>>().join("\n");
+	super::common::set_active_buffer_text(&mut state, tall_text.as_str());
+	state.update_active_tab_layout(100, 20);
+	{
+		let active_window_id = state.active_window_id();
+		let window = state.windows.get_mut(active_window_id).expect("window should exist");
+		window.cursor.row = 15;
+		window.cursor.col = 1;
+		window.scroll_y = 0;
+	}
+
+	state.split_active_window(SplitAxis::Vertical);
+
+	let window_ids = state.active_tab_window_ids();
+	let top_window = window_ids
+		.iter()
+		.filter_map(|id| state.windows.get(*id))
+		.find(|window| window.y == 0)
+		.expect("top window should exist");
+	assert_eq!(top_window.cursor.row, 15);
+	assert_eq!(top_window.scroll_y, 9);
+}
+
+#[test]
 fn nested_split_should_only_affect_active_cell() {
 	let mut state = test_state();
 	state.update_active_tab_layout(100, 20);

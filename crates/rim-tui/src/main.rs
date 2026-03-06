@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use rim_app::app::App;
-use rim_cli::logging;
+use rim_tui::logging;
 
 fn main() {
 	// Keep process-level failure handling centralized in one place.

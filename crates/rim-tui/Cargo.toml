@@ -1,7 +1,11 @@
 [package]
-name = "rim-cli"
+name = "rim-tui"
 version = "0.1.0"
 edition = "2024"
+
+[[bin]]
+name = "rim"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
@@ -10,3 +14,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "time"]
 tracing-appender = "0.2"
 time = { version = "0.3", features = ["formatting", "macros"] }
 rim-app = { path = "../rim-app" }
+rim-paths = { path = "../rim-paths" }

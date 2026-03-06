@@ -98,6 +98,8 @@ impl RimState {
 		if let Some(window) = self.windows.get_mut(new_window_id) {
 			*window = new_window_layout;
 		}
+		self.center_window_on_cursor_if_hidden(active_window_id);
+		self.center_window_on_cursor_if_hidden(new_window_id);
 
 		let tab = self.tabs.get_mut(&tab_id).expect("invariant: active tab must exist");
 		tab.windows.push(new_window_id);

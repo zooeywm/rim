@@ -1,5 +1,4 @@
-use std::path::PathBuf;
-
+use rim_paths::user_log_dir;
 use thiserror::Error;
 use time::macros::format_description;
 use tracing_subscriber::fmt::time::UtcTime;
@@ -37,39 +36,4 @@ pub fn init_logging() -> Result<(), LoggingError> {
 		.map_err(|source| LoggingError::InitSubscriber { source })?;
 
 	Ok(())
-}
-
-fn user_log_dir() -> PathBuf {
-	#[cfg(target_os = "windows")]
-	{
-		std::env::var_os("LOCALAPPDATA")
-			.map(PathBuf::from)
-			.unwrap_or_else(std::env::temp_dir)
-			.join("rim")
-			.join("logs")
-	}
-
-	#[cfg(target_os = "macos")]
-	{
-		std::env::var_os("HOME")
-			.map(PathBuf::from)
-			.unwrap_or_else(std::env::temp_dir)
-			.join("Library")
-			.join("Logs")
-			.join("rim")
-	}
-
-	#[cfg(all(unix, not(target_os = "macos")))]
-	{
-		if let Some(state_home) = std::env::var_os("XDG_STATE_HOME").map(PathBuf::from) {
-			return state_home.join("rim").join("logs");
-		}
-		std::env::var_os("HOME")
-			.map(PathBuf::from)
-			.unwrap_or_else(std::env::temp_dir)
-			.join(".local")
-			.join("state")
-			.join("rim")
-			.join("logs")
-	}
 }

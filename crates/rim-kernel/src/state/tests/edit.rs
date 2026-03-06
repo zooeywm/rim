@@ -285,7 +285,7 @@ fn visual_mode_should_set_anchor_and_status_mode() {
 
 	assert!(state.is_visual_mode());
 	assert_eq!(state.visual_anchor, Some(cursor));
-	assert_eq!(state.status_bar.mode, "VISUAL");
+	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::Visual);
 }
 
 #[test]
@@ -296,7 +296,7 @@ fn visual_mode_exit_should_clear_anchor_and_restore_normal_mode() {
 
 	assert!(!state.is_visual_mode());
 	assert_eq!(state.visual_anchor, None);
-	assert_eq!(state.status_bar.mode, "NORMAL");
+	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::Normal);
 }
 
 #[test]
@@ -308,7 +308,60 @@ fn visual_line_mode_should_set_line_anchor_and_status_mode() {
 
 	assert!(state.is_visual_line_mode());
 	assert_eq!(state.visual_anchor, Some(CursorState { row: 1, col: 1 }));
-	assert_eq!(state.status_bar.mode, "VISUAL LINE");
+	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::VisualLine);
+}
+
+#[test]
+fn visual_block_mode_should_set_anchor_and_status_mode() {
+	let mut state = test_state();
+	state.move_cursor_right();
+	let cursor = state.active_cursor();
+	state.enter_visual_block_mode();
+
+	assert!(state.is_visual_block_mode());
+	assert_eq!(state.visual_anchor, Some(cursor));
+	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::VisualBlock);
+}
+
+#[test]
+fn visual_block_insert_should_enter_insert_block_mode_and_mirror_chars() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abc\ndef\nghi");
+	state.move_cursor_right();
+	state.enter_visual_block_mode();
+	state.move_cursor_down();
+	state.move_cursor_down();
+
+	state.begin_visual_block_insert(false);
+	state.insert_char_at_block_cursor('X');
+	state.insert_char_at_block_cursor('Y');
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "aXYbc\ndXYef\ngXYhi");
+	assert!(state.is_block_insert_mode());
+	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::InsertBlock);
+	assert_eq!(state.active_cursor(), CursorState { row: 1, col: 4 });
+}
+
+#[test]
+fn visual_block_backspace_should_remove_mirrored_inserted_chars() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abc\ndef\nghi");
+	state.move_cursor_right();
+	state.enter_visual_block_mode();
+	state.move_cursor_down();
+	state.move_cursor_down();
+	state.begin_visual_block_insert(false);
+	state.insert_char_at_block_cursor('X');
+	state.insert_char_at_block_cursor('Y');
+
+	state.backspace_at_block_cursor();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "aXbc\ndXef\ngXhi");
+	assert_eq!(state.active_cursor(), CursorState { row: 1, col: 3 });
 }
 
 #[test]
@@ -323,10 +376,11 @@ fn visual_delete_should_remove_selected_chars_in_single_line() {
 
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-	assert_eq!(buffer.text, "aef");
+	assert_eq!(buffer.text.to_string(), "aef");
 	assert_eq!(state.line_slot, Some("bcd".to_string()));
+	assert!(!state.line_slot_block_wise);
 	assert!(!state.is_visual_mode());
-	assert_eq!(state.status_bar.mode, "NORMAL");
+	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::Normal);
 }
 
 #[test]
@@ -342,10 +396,11 @@ fn visual_delete_should_remove_selected_chars_across_lines() {
 
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-	assert_eq!(buffer.text, "a");
+	assert_eq!(buffer.text.to_string(), "a");
 	assert_eq!(state.line_slot, Some("bc\ndef\nghi".to_string()));
-	assert_eq!(buffer.cursor.row, 1);
-	assert_eq!(buffer.cursor.col, 2);
+	assert!(!state.line_slot_block_wise);
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 2);
 }
 
 #[test]
@@ -361,7 +416,7 @@ fn visual_paste_should_replace_selection_in_single_line() {
 
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-	assert_eq!(buffer.text, "aXYef");
+	assert_eq!(buffer.text.to_string(), "aXYef");
 	assert!(!state.is_visual_mode());
 }
 
@@ -379,7 +434,7 @@ fn visual_paste_should_replace_selection_across_lines() {
 
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-	assert_eq!(buffer.text, "aZ");
+	assert_eq!(buffer.text.to_string(), "aZ");
 	assert!(!state.is_visual_mode());
 }
 
@@ -394,8 +449,65 @@ fn visual_line_delete_should_remove_whole_lines() {
 
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-	assert_eq!(buffer.text, "c");
+	assert_eq!(buffer.text.to_string(), "c");
 	assert_eq!(state.line_slot, Some("a\nb".to_string()));
+	assert!(!state.line_slot_block_wise);
+	assert!(!state.is_visual_mode());
+}
+
+#[test]
+fn visual_block_yank_should_store_rectangular_selection() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abcd\nefgh\nijkl");
+	state.move_cursor_right();
+	state.enter_visual_block_mode();
+	state.move_cursor_down();
+	state.move_cursor_down();
+	state.move_cursor_right();
+	state.yank_visual_selection_to_slot();
+
+	assert_eq!(state.line_slot, Some("bc\nfg\njk".to_string()));
+	assert!(state.line_slot_block_wise);
+	assert!(!state.line_slot_line_wise);
+	assert!(!state.is_visual_mode());
+}
+
+#[test]
+fn visual_block_delete_should_remove_rectangular_selection() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abcd\nefgh\nijkl");
+	state.move_cursor_right();
+	state.enter_visual_block_mode();
+	state.move_cursor_down();
+	state.move_cursor_down();
+	state.move_cursor_right();
+	state.delete_visual_selection_to_slot();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "ad\neh\nil");
+	assert_eq!(state.line_slot, Some("bc\nfg\njk".to_string()));
+	assert!(state.line_slot_block_wise);
+	assert_eq!(state.active_cursor(), CursorState { row: 1, col: 2 });
+}
+
+#[test]
+fn visual_block_paste_should_replace_rectangular_selection() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abcd\nefgh\nijkl");
+	state.line_slot = Some("XY\nZ\n12".to_string());
+	state.line_slot_line_wise = false;
+	state.line_slot_block_wise = true;
+	state.move_cursor_right();
+	state.enter_visual_block_mode();
+	state.move_cursor_down();
+	state.move_cursor_down();
+	state.move_cursor_right();
+	state.replace_visual_selection_with_slot();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "aXYd\neZh\ni12l");
 	assert!(!state.is_visual_mode());
 }
 
@@ -408,9 +520,9 @@ fn open_line_below_at_cursor_should_insert_empty_line_and_move_cursor_to_line_st
 
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-	assert_eq!(buffer.text, "abc\n\ndef");
-	assert_eq!(buffer.cursor.row, 2);
-	assert_eq!(buffer.cursor.col, 1);
+	assert_eq!(buffer.text.to_string(), "abc\n\ndef");
+	assert_eq!(state.active_cursor().row, 2);
+	assert_eq!(state.active_cursor().col, 1);
 }
 
 #[test]
@@ -423,9 +535,9 @@ fn open_line_above_at_cursor_should_insert_empty_line_and_keep_cursor_on_current
 
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-	assert_eq!(buffer.text, "abc\n\ndef");
-	assert_eq!(buffer.cursor.row, 2);
-	assert_eq!(buffer.cursor.col, 1);
+	assert_eq!(buffer.text.to_string(), "abc\n\ndef");
+	assert_eq!(state.active_cursor().row, 2);
+	assert_eq!(state.active_cursor().col, 1);
 }
 
 #[test]
@@ -437,9 +549,9 @@ fn backspace_at_line_start_should_join_with_previous_line() {
 
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-	assert_eq!(buffer.text, "abcdef");
-	assert_eq!(buffer.cursor.row, 1);
-	assert_eq!(buffer.cursor.col, 4);
+	assert_eq!(buffer.text.to_string(), "abcdef");
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 4);
 }
 
 #[test]
@@ -451,9 +563,9 @@ fn join_line_below_at_cursor_should_merge_current_and_next_line() {
 
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-	assert_eq!(buffer.text, "abc def\nghi");
-	assert_eq!(buffer.cursor.row, 1);
-	assert_eq!(buffer.cursor.col, 2);
+	assert_eq!(buffer.text.to_string(), "abc def\nghi");
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 2);
 }
 
 #[test]
@@ -466,9 +578,9 @@ fn join_line_below_at_cursor_on_last_line_should_do_nothing() {
 
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-	assert_eq!(buffer.text, "abc\ndef");
-	assert_eq!(buffer.cursor.row, 2);
-	assert_eq!(buffer.cursor.col, 1);
+	assert_eq!(buffer.text.to_string(), "abc\ndef");
+	assert_eq!(state.active_cursor().row, 2);
+	assert_eq!(state.active_cursor().col, 1);
 }
 
 #[test]
@@ -531,7 +643,7 @@ fn cut_current_char_to_slot_should_remove_char_and_store_it() {
 
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-	assert_eq!(buffer.text, "acd");
+	assert_eq!(buffer.text.to_string(), "acd");
 	assert_eq!(state.line_slot, Some("b".to_string()));
 }
 
@@ -546,9 +658,9 @@ fn paste_slot_at_cursor_should_insert_slot_text_after_cursor() {
 
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-	assert_eq!(buffer.text, "adbc");
-	assert_eq!(buffer.cursor.row, 1);
-	assert_eq!(buffer.cursor.col, 4);
+	assert_eq!(buffer.text.to_string(), "adbc");
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 4);
 }
 
 #[test]
@@ -562,9 +674,25 @@ fn paste_slot_at_cursor_should_insert_line_wise_slot_as_new_line_below() {
 
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-	assert_eq!(buffer.text, "a\nb\nc");
-	assert_eq!(buffer.cursor.row, 2);
-	assert_eq!(buffer.cursor.col, 1);
+	assert_eq!(buffer.text.to_string(), "a\nb\nc");
+	assert_eq!(state.active_cursor().row, 2);
+	assert_eq!(state.active_cursor().col, 1);
+}
+
+#[test]
+fn paste_slot_at_cursor_should_insert_block_wise_slot_on_successive_rows() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "ad\neh\nil");
+	state.line_slot = Some("bc\nfg\njk".to_string());
+	state.line_slot_line_wise = false;
+	state.line_slot_block_wise = true;
+	state.paste_slot_at_cursor();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "abcd\nefgh\nijkl");
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 3);
 }
 
 #[test]
@@ -577,9 +705,9 @@ fn delete_current_line_to_slot_should_remove_line_and_store_it() {
 
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-	assert_eq!(buffer.text, "a\nc");
-	assert_eq!(buffer.cursor.row, 2);
-	assert_eq!(buffer.cursor.col, 1);
+	assert_eq!(buffer.text.to_string(), "a\nc");
+	assert_eq!(state.active_cursor().row, 2);
+	assert_eq!(state.active_cursor().col, 1);
 	assert_eq!(state.line_slot, Some("b".to_string()));
 }
 
@@ -592,9 +720,9 @@ fn delete_current_line_to_slot_should_keep_one_empty_line_when_last_line_deleted
 
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-	assert_eq!(buffer.text, "");
-	assert_eq!(buffer.cursor.row, 1);
-	assert_eq!(buffer.cursor.col, 1);
+	assert_eq!(buffer.text.to_string(), "");
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 1);
 	assert_eq!(state.line_slot, Some("only".to_string()));
 }
 
@@ -609,9 +737,9 @@ fn delete_current_line_to_slot_should_clamp_cursor_when_text_has_trailing_newlin
 
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-	assert_eq!(buffer.text, "a\n");
-	assert_eq!(buffer.cursor.row, 1);
-	assert_eq!(buffer.cursor.col, 1);
+	assert_eq!(buffer.text.to_string(), "a\n");
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 1);
 }
 
 #[test]
@@ -649,8 +777,8 @@ fn undo_active_buffer_edit_should_restore_previous_text_and_cursor() {
 
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-	assert_eq!(buffer.text, "ab");
-	assert_eq!(buffer.cursor, CursorState { row: 1, col: 2 });
+	assert_eq!(buffer.text.to_string(), "ab");
+	assert_eq!(state.active_cursor(), CursorState { row: 1, col: 2 });
 }
 
 #[test]
@@ -675,6 +803,6 @@ fn redo_active_buffer_edit_should_reapply_last_undone_change() {
 
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-	assert_eq!(buffer.text, "axb");
-	assert_eq!(buffer.cursor, CursorState { row: 1, col: 3 });
+	assert_eq!(buffer.text.to_string(), "axb");
+	assert_eq!(state.active_cursor(), CursorState { row: 1, col: 3 });
 }

@@ -3,15 +3,15 @@ use super::common::{set_active_buffer_text, test_state};
 #[test]
 fn insert_mode_should_toggle_status_mode_text() {
 	let mut state = test_state();
-	assert_eq!(state.status_bar.mode, "NORMAL");
+	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::Normal);
 	assert!(!state.is_insert_mode());
 
 	state.enter_insert_mode();
-	assert_eq!(state.status_bar.mode, "INSERT");
+	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::Insert);
 	assert!(state.is_insert_mode());
 
 	state.exit_insert_mode();
-	assert_eq!(state.status_bar.mode, "NORMAL");
+	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::Normal);
 	assert!(!state.is_insert_mode());
 }
 
@@ -36,13 +36,13 @@ fn command_mode_should_toggle_and_show_prompt_in_status_line() {
 	state.enter_command_mode();
 	state.push_command_char('q');
 	assert!(state.is_command_mode());
-	assert_eq!(state.status_bar.mode, "COMMAND");
+	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::Command);
 	assert!(state.status_line().contains(":q"));
 	assert!(state.status_line().contains("1:1"));
 
 	state.exit_command_mode();
 	assert!(!state.is_command_mode());
-	assert_eq!(state.status_bar.mode, "NORMAL");
+	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::Normal);
 }
 
 #[test]
@@ -80,5 +80,5 @@ fn take_command_line_should_return_trimmed_text_and_leave_command_mode() {
 	let cmd = state.take_command_line();
 	assert_eq!(cmd, "q");
 	assert!(!state.is_command_mode());
-	assert_eq!(state.status_bar.mode, "NORMAL");
+	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::Normal);
 }

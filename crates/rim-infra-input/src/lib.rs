@@ -1,6 +1,6 @@
 use std::thread;
 
-use crossterm::{event, event::{Event, KeyCode as CrosstermKeyCode, KeyEvent as CrosstermKeyEvent, KeyModifiers as CrosstermKeyModifiers}};
+use crossterm::{event, event::{Event, KeyCode as CrosstermKeyCode, KeyEvent as CrosstermKeyEvent, KeyEventKind as CrosstermKeyEventKind, KeyModifiers as CrosstermKeyModifiers}};
 use rim_kernel::action::{AppAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction};
 use tracing::error;
 
@@ -21,6 +21,13 @@ impl InputHandler {
 	}
 
 	fn map_key(event: CrosstermKeyEvent) -> Option<KeyEvent> {
+		// Ignore key releases so one physical keypress does not get dispatched twice on
+		// terminals that emit both Press and Release events (notably Windows consoles).
+		match event.kind {
+			CrosstermKeyEventKind::Press | CrosstermKeyEventKind::Repeat => {}
+			CrosstermKeyEventKind::Release => return None,
+		}
+
 		let code = match event.code {
 			CrosstermKeyCode::Backspace => KeyCode::Backspace,
 			CrosstermKeyCode::Enter => KeyCode::Enter,
@@ -86,6 +93,62 @@ impl Drop for InputPumpService {
 			&& join_handle.is_finished()
 		{
 			let _ = join_handle.join();
+		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use crossterm::event::{Event, KeyCode as CrosstermKeyCode, KeyEvent as CrosstermKeyEvent, KeyEventKind as CrosstermKeyEventKind, KeyEventState as CrosstermKeyEventState, KeyModifiers as CrosstermKeyModifiers};
+	use rim_kernel::action::{AppAction, EditorAction, KeyCode, KeyModifiers, LayoutAction};
+
+	use super::InputHandler;
+
+	fn make_key_event(kind: CrosstermKeyEventKind) -> CrosstermKeyEvent {
+		CrosstermKeyEvent {
+			code: CrosstermKeyCode::Char('a'),
+			modifiers: CrosstermKeyModifiers::NONE,
+			kind,
+			state: CrosstermKeyEventState::NONE,
+		}
+	}
+
+	#[test]
+	fn should_map_key_press_event() {
+		let input_handler = InputHandler;
+
+		let action = input_handler.action(&Event::Key(make_key_event(CrosstermKeyEventKind::Press)));
+
+		match action {
+			Some(AppAction::Editor(EditorAction::KeyPressed(key))) => {
+				assert!(matches!(key.code, KeyCode::Char('a')));
+				assert_eq!(key.modifiers, KeyModifiers::NONE);
+			}
+			_ => panic!("expected mapped key press action"),
+		}
+	}
+
+	#[test]
+	fn should_ignore_key_release_event() {
+		let input_handler = InputHandler;
+
+		let action = input_handler.action(&Event::Key(make_key_event(CrosstermKeyEventKind::Release)));
+
+		assert!(action.is_none());
+	}
+
+	#[test]
+	fn should_map_resize_event() {
+		let input_handler = InputHandler;
+
+		let action = input_handler.action(&Event::Resize(120, 40));
+
+		match action {
+			Some(AppAction::Layout(LayoutAction::ViewportResized { width, height })) => {
+				assert_eq!(width, 120);
+				assert_eq!(height, 40);
+			}
+			_ => panic!("expected resize action"),
 		}
 	}
 }

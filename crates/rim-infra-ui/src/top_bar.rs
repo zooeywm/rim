@@ -27,8 +27,12 @@ impl TopBarWidget {
 			let Some(buffer) = state.buffers.get(*id) else {
 				continue;
 			};
+			let mut label = buffer.name.clone();
+			if buffer.dirty {
+				label.push('*');
+			}
 			buffer_spans.push(Span::styled(" ", style));
-			buffer_spans.push(Span::styled(buffer.name.clone(), style));
+			buffer_spans.push(Span::styled(label, style));
 			buffer_spans.push(Span::styled(" ", style));
 			if idx + 1 != buffer_ids.len() {
 				buffer_spans.push(Span::raw(" "));
@@ -73,5 +77,36 @@ impl Widget for TopBarWidget {
 		} else {
 			Paragraph::new(Line::from(self.buffer_spans)).render(area, buf);
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use std::path::PathBuf;
+
+	use rim_kernel::state::RimState;
+
+	use super::TopBarWidget;
+
+	#[test]
+	fn dirty_buffer_should_show_star_in_top_bar_label() {
+		let mut state = RimState::new();
+		let clean = state.create_buffer(Some(PathBuf::from("clean.rs")), "");
+		let dirty = state.create_buffer(Some(PathBuf::from("dirty.rs")), "");
+		state.bind_buffer_to_active_window(clean);
+		state.set_buffer_dirty(dirty, true);
+
+		let widget = TopBarWidget::from_state(&state);
+		let labels = widget
+			.buffer_spans
+			.iter()
+			.filter_map(|span| match span.content.as_ref() {
+				" " => None,
+				content => Some(content.to_string()),
+			})
+			.collect::<Vec<_>>();
+
+		assert!(labels.iter().any(|label| label == "clean.rs"));
+		assert!(labels.iter().any(|label| label == "dirty.rs*"));
 	}
 }

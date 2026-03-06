@@ -1,12 +1,13 @@
 [workspace]
 members = [
+	"crates/rim-paths",
 	"crates/rim-kernel",
 	"crates/rim-infra-file-io",
 	"crates/rim-infra-file-watcher",
-	"crates/rim-infra-swap",
+	"crates/rim-infra-persistence",
 	"crates/rim-infra-input",
 	"crates/rim-infra-ui",
 	"crates/rim-app",
-	"crates/rim-cli",
+	"crates/rim-tui",
 ]
 resolver = "2"

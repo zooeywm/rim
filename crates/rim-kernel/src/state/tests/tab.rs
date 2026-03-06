@@ -53,7 +53,7 @@ fn open_new_tab_should_create_default_window_with_untitled_buffer() {
 	let buffer = state.buffers.get(buffer_id).expect("buffer should exist");
 	assert_eq!(buffer.name, "untitled");
 	assert_eq!(buffer.path, None);
-	assert_eq!(buffer.text, "");
+	assert_eq!(buffer.text.to_string(), "");
 	assert_eq!(tab.active_window, window_id);
 }
 

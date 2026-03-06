@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-use crate::state::BufferId;
+use crate::state::{BufferId, PersistedBufferHistory};
 
 /// Error contract for the file I/O port.
 #[derive(Debug, Error)]
@@ -38,36 +38,52 @@ pub enum SwapEditOp {
 	Delete { pos: usize, len: usize },
 }
 
-/// Error contract for the swap log I/O port.
+/// Error contract for the persistence I/O port.
 #[derive(Debug, Error)]
-pub enum SwapIoError {
-	#[error("swap request channel disconnected while enqueueing {operation}")]
+pub enum PersistenceIoError {
+	#[error("persistence request channel disconnected while enqueueing {operation}")]
 	RequestChannelDisconnected { operation: &'static str },
 }
 
-/// Outbound port for async swap log lifecycle and recovery callbacks.
-pub trait SwapIo {
-	fn enqueue_open(&self, buffer_id: BufferId, source_path: PathBuf) -> Result<(), SwapIoError>;
-	fn enqueue_detect_conflict(&self, buffer_id: BufferId, source_path: PathBuf) -> Result<(), SwapIoError>;
+/// Outbound port for async swap/undofile lifecycle and recovery callbacks.
+pub trait PersistenceIo {
+	fn enqueue_open(&self, buffer_id: BufferId, source_path: PathBuf) -> Result<(), PersistenceIoError>;
+	fn enqueue_detect_conflict(
+		&self,
+		buffer_id: BufferId,
+		source_path: PathBuf,
+	) -> Result<(), PersistenceIoError>;
 	fn enqueue_edit(
 		&self,
 		buffer_id: BufferId,
 		source_path: PathBuf,
 		op: SwapEditOp,
-	) -> Result<(), SwapIoError>;
-	fn enqueue_mark_clean(&self, buffer_id: BufferId, source_path: PathBuf) -> Result<(), SwapIoError>;
+	) -> Result<(), PersistenceIoError>;
+	fn enqueue_mark_clean(&self, buffer_id: BufferId, source_path: PathBuf) -> Result<(), PersistenceIoError>;
 	fn enqueue_initialize_base(
 		&self,
 		buffer_id: BufferId,
 		source_path: PathBuf,
 		base_text: String,
 		delete_existing: bool,
-	) -> Result<(), SwapIoError>;
+	) -> Result<(), PersistenceIoError>;
 	fn enqueue_recover(
 		&self,
 		buffer_id: BufferId,
 		source_path: PathBuf,
 		base_text: String,
-	) -> Result<(), SwapIoError>;
-	fn enqueue_close(&self, buffer_id: BufferId) -> Result<(), SwapIoError>;
+	) -> Result<(), PersistenceIoError>;
+	fn enqueue_load_history(
+		&self,
+		buffer_id: BufferId,
+		source_path: PathBuf,
+		expected_text: String,
+	) -> Result<(), PersistenceIoError>;
+	fn enqueue_save_history(
+		&self,
+		buffer_id: BufferId,
+		source_path: PathBuf,
+		history: PersistedBufferHistory,
+	) -> Result<(), PersistenceIoError>;
+	fn enqueue_close(&self, buffer_id: BufferId) -> Result<(), PersistenceIoError>;
 }

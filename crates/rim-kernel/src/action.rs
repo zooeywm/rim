@@ -1,6 +1,6 @@
 use std::{ops::{BitOr, BitOrAssign}, path::PathBuf};
 
-use crate::state::BufferId;
+use crate::state::{BufferId, PersistedBufferHistory};
 
 /// Facility-agnostic key code used by the kernel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -73,6 +73,7 @@ pub enum EditorAction {
 	EnterCommandMode,
 	EnterVisualMode,
 	EnterVisualLineMode,
+	EnterVisualBlockMode,
 	MoveLeft,
 	MoveLineStart,
 	MoveLineEnd,
@@ -132,12 +133,36 @@ pub enum TabAction {
 /// File-side actions include requests and async completion callbacks.
 #[derive(Debug)]
 pub enum FileAction {
-	OpenRequested { path: PathBuf },
-	ExternalChangeDetected { buffer_id: BufferId, path: PathBuf },
-	SwapConflictDetected { buffer_id: BufferId, result: anyhow::Result<Option<SwapConflictInfo>> },
-	SwapRecoverCompleted { buffer_id: BufferId, result: anyhow::Result<Option<String>> },
-	LoadCompleted { buffer_id: BufferId, source: FileLoadSource, result: anyhow::Result<String> },
-	SaveCompleted { buffer_id: BufferId, result: anyhow::Result<()> },
+	OpenRequested {
+		path: PathBuf,
+	},
+	ExternalChangeDetected {
+		buffer_id: BufferId,
+		path:      PathBuf,
+	},
+	SwapConflictDetected {
+		buffer_id: BufferId,
+		result:    anyhow::Result<Option<SwapConflictInfo>>,
+	},
+	SwapRecoverCompleted {
+		buffer_id: BufferId,
+		result:    anyhow::Result<Option<String>>,
+	},
+	UndoHistoryLoaded {
+		buffer_id:     BufferId,
+		source_path:   PathBuf,
+		expected_text: String,
+		result:        anyhow::Result<Option<PersistedBufferHistory>>,
+	},
+	LoadCompleted {
+		buffer_id: BufferId,
+		source:    FileLoadSource,
+		result:    anyhow::Result<String>,
+	},
+	SaveCompleted {
+		buffer_id: BufferId,
+		result:    anyhow::Result<()>,
+	},
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

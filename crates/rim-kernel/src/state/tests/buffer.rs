@@ -1,34 +1,30 @@
 use std::path::PathBuf;
 
 use super::common::{set_active_buffer_text, test_state};
-use crate::state::{BufferSwitchDirection, FocusDirection, RimState, SplitAxis};
+use crate::state::{BufferEditSnapshot, BufferHistoryEntry, BufferSwitchDirection, CursorState, RimState, SplitAxis};
 
 #[test]
-fn same_buffer_in_different_windows_should_share_cursor_position() {
+fn same_buffer_in_different_windows_should_keep_separate_cursor_positions() {
 	let mut state = test_state();
 	set_active_buffer_text(&mut state, "a\nb\nc");
 	state.update_active_tab_layout(100, 20);
 	state.split_active_window(SplitAxis::Vertical);
+	let window_ids = state.active_tab_window_ids();
+	assert_eq!(window_ids.len(), 2);
+	let inactive_window_id =
+		window_ids.into_iter().find(|id| *id != state.active_window_id()).expect("inactive window should exist");
 
 	state.move_cursor_down();
 	state.move_cursor_down();
 	assert_eq!(state.active_cursor().row, 3);
 	assert_eq!(state.active_cursor().col, 1);
 
-	state.focus_window(FocusDirection::Up);
-	assert_eq!(state.active_cursor().row, 3);
-	assert_eq!(state.active_cursor().col, 1);
-	state.move_cursor_right();
-	assert_eq!(state.active_cursor().row, 3);
-	assert_eq!(state.active_cursor().col, 1);
-
-	state.focus_window(FocusDirection::Down);
-	assert_eq!(state.active_cursor().row, 3);
-	assert_eq!(state.active_cursor().col, 1);
+	let inactive_window = state.windows.get(inactive_window_id).expect("inactive window exists");
+	assert_eq!(inactive_window.cursor, CursorState { row: 1, col: 1 });
 }
 
 #[test]
-fn different_buffers_should_keep_separate_cursor_positions() {
+fn switching_buffers_in_same_window_should_keep_window_cursor_position() {
 	let mut state = test_state();
 	let b1 = state.active_buffer_id().expect("active buffer exists");
 	let b2 = state.create_buffer(Some(PathBuf::from("b2.rs")), "x\ny\nz");
@@ -41,11 +37,11 @@ fn different_buffers_should_keep_separate_cursor_positions() {
 
 	state.switch_active_window_buffer(BufferSwitchDirection::Next);
 	assert_eq!(state.active_buffer_id(), Some(b2));
-	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().row, 3);
 	assert_eq!(state.active_cursor().col, 1);
 
 	state.move_cursor_down();
-	assert_eq!(state.active_cursor().row, 2);
+	assert_eq!(state.active_cursor().row, 3);
 
 	state.switch_active_window_buffer(BufferSwitchDirection::Prev);
 	assert_eq!(state.active_buffer_id(), Some(b1));
@@ -117,7 +113,7 @@ fn visual_yank_should_copy_selection_without_modifying_buffer() {
 
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-	assert_eq!(buffer.text, "abcdef");
+	assert_eq!(buffer.text.to_string(), "abcdef");
 	assert_eq!(state.line_slot, Some("bcd".to_string()));
 	assert!(!state.is_visual_mode());
 }
@@ -206,7 +202,7 @@ fn close_active_buffer_should_create_untitled_when_last_buffer_closed() {
 	let buffer = state.buffers.get(rebound).expect("buffer exists");
 	assert_eq!(buffer.name, "untitled");
 	assert_eq!(buffer.path, None);
-	assert_eq!(buffer.text, "");
+	assert_eq!(buffer.text.to_string(), "");
 }
 
 #[test]
@@ -235,7 +231,7 @@ fn create_untitled_buffer_should_bind_new_untitled_to_active_window() {
 	let buffer = state.buffers.get(new_buffer_id).expect("buffer exists");
 	assert_eq!(buffer.name, "untitled");
 	assert_eq!(buffer.path, None);
-	assert_eq!(buffer.text, "");
+	assert_eq!(buffer.text.to_string(), "");
 }
 
 #[test]
@@ -272,6 +268,45 @@ fn editing_active_buffer_should_mark_dirty() {
 }
 
 #[test]
+fn editing_back_to_clean_text_should_clear_dirty() {
+	let mut state = test_state();
+	let buffer_id = state.active_buffer_id().expect("active buffer exists");
+	set_active_buffer_text(&mut state, "ab");
+
+	state.insert_char_at_cursor('x');
+	assert!(state.buffers.get(buffer_id).expect("buffer exists").dirty);
+
+	state.backspace_at_cursor();
+
+	assert!(!state.buffers.get(buffer_id).expect("buffer exists").dirty);
+}
+
+#[test]
+fn undo_back_to_clean_text_should_clear_dirty() {
+	let mut state = test_state();
+	let buffer_id = state.active_buffer_id().expect("active buffer exists");
+	set_active_buffer_text(&mut state, "ab");
+	state.insert_char_at_cursor('x');
+	state.push_buffer_history_entry(buffer_id, BufferHistoryEntry {
+		edits:         vec![BufferEditSnapshot {
+			start_byte:    0,
+			deleted_text:  String::new(),
+			inserted_text: "x".to_string(),
+		}],
+		before_cursor: CursorState { row: 1, col: 1 },
+		after_cursor:  CursorState { row: 1, col: 2 },
+	});
+
+	assert!(state.buffers.get(buffer_id).expect("buffer exists").dirty);
+
+	state.undo_active_buffer_edit();
+
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "ab");
+	assert!(!buffer.dirty);
+}
+
+#[test]
 fn replace_buffer_text_preserving_cursor_should_keep_bottom_when_file_grows() {
 	let mut state = test_state();
 	let buffer_id = state.active_buffer_id().expect("active buffer exists");
@@ -281,7 +316,6 @@ fn replace_buffer_text_preserving_cursor_should_keep_bottom_when_file_grows() {
 
 	state.replace_buffer_text_preserving_cursor(buffer_id, "a\nb\nc\nd".to_string());
 
-	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
-	assert_eq!(buffer.cursor.row, 4);
-	assert_eq!(buffer.cursor.col, 1);
+	assert_eq!(state.active_cursor().row, 4);
+	assert_eq!(state.active_cursor().col, 1);
 }
