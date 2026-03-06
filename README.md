@@ -1,95 +1,97 @@
 # rim
 
-`rim` 是一个终端优先的编辑器原型，核心采用状态驱动架构：
+`rim` is a terminal-first editor prototype built around a state-driven architecture:
 
-- 主 buffer 使用 `ropey::Rope`
-- 内核与设施分离，设施通过 workspace 中的独立 crate 接入
-- 文件监视、swap 恢复、持久化 undo/redo 都走统一事件流
+- The primary text buffer uses `ropey::Rope`
+- The kernel is separated from infrastructure, and each infrastructure concern lives in its own workspace crate
+- File watching, swap recovery, and persistent undo/redo all flow through the same event pipeline
 
-## 当前功能总览
+## Current Feature Set
 
-- 普通编辑：移动、插入、删除、粘贴、撤销、重做
-- 三种 visual 模式：`VISUAL`、`VISUAL LINE`、`VISUAL BLOCK`
-- 多 buffer、多 window、多 tab
-- 命令行：保存、另存为、重载、打开文件、退出
-- 文件监视：外部改动自动重载
-- swap 恢复：崩溃后恢复未保存文本
-- 持久化 undo/redo：重新打开文件后恢复历史
-- Windows MSVC 交叉编译：`cargo win-release`
+- Core editing: movement, insert, delete, paste, undo, redo
+- Three visual modes: `VISUAL`, `VISUAL LINE`, `VISUAL BLOCK`
+- Multiple buffers, windows, and tabs
+- Command line: save, save as, reload, open file, quit
+- File watching: automatic reload after external changes
+- Swap recovery: restore unsaved text after a crash
+- Persistent undo/redo: reopen a file and restore history
+- Windows MSVC cross compilation: `cargo win-release`
 
-## 工作空间结构
+## Workspace Layout
 
-- `crates/rim-paths`：共享平台目录规则（`logs` / `swp` / `undo` 根路径）
-- `crates/rim-kernel`：纯业务核心与状态机
-- `crates/rim-app`：唯一容器 `App`
-- `crates/rim-infra-file-io`：异步文件读写设施
-- `crates/rim-infra-file-watcher`：文件监视设施
-- `crates/rim-infra-persistence`：swap 与持久化 undo/redo
-- `crates/rim-infra-input`：键盘输入设施
-- `crates/rim-infra-ui`：ratatui 渲染
-- `crates/rim-tui`：TUI 入口
+- `crates/rim-paths`: shared platform path rules for `logs` / `swp` / `undo`
+- `crates/rim-kernel`: pure core state machine and business logic
+- `crates/rim-app`: the single `App` container
+- `crates/rim-infra-file-io`: asynchronous file I/O infrastructure
+- `crates/rim-infra-file-watcher`: file watching infrastructure
+- `crates/rim-infra-persistence`: swap and persistent undo/redo
+- `crates/rim-infra-input`: keyboard input infrastructure
+- `crates/rim-infra-ui`: ratatui rendering
+- `crates/rim-tui`: TUI entrypoint
 
-## 构建与运行
+## Build And Run
 
 ```bash
-# 本机构建
+# Build locally
 cargo build
 
-# 本地运行
+# Run locally
 cargo run -p rim-tui --
 
-# 打开一个或多个文件启动
+# Start with one or more files opened
 cargo run -p rim-tui -- path/to/a.rs path/to/b.rs
 
-# 检查
+# Checks
 cargo check
 cargo test
 cargo clippy
 
-# Windows MSVC 目标 clippy
+# Windows MSVC target clippy
 cargo win-clippy
 
-# 从 Linux/macOS 主机构建 Windows MSVC release 二进制
+# Build a Windows MSVC release binary from Linux/macOS
 cargo win-release
 ```
 
-Windows release 产物路径：
+Windows release artifact:
 
 ```text
 target/x86_64-pc-windows-msvc/release/rim.exe
 ```
 
-## 运行时文件
+## Runtime Files
 
-默认会在用户状态目录下维护三类运行时文件：
+By default, `rim` maintains three runtime directories under the user state root:
 
-- `logs/`：运行日志
-- `swp/`：崩溃恢复用 swap 文件
-- `undo/`：持久化 undo/redo 历史文件
+- `logs/`: runtime logs
+- `swp/`: crash recovery swap files
+- `undo/`: persistent undo/redo history
 
-目录根路径由 `crates/rim-paths` 统一决定。
+The root directory is resolved centrally by `crates/rim-paths`.
 
-在 Linux 上通常位于：
+Typical locations:
+
+Linux:
 
 ```text
 $XDG_STATE_HOME/rim
-# 或
+# or
 ~/.local/state/rim
 ```
 
-在 Windows 上通常位于：
+Windows:
 
 ```text
 %LOCALAPPDATA%\rim
 ```
 
-在 macOS 上通常位于：
+macOS:
 
 ```text
 ~/Library/Logs/rim
 ```
 
-目录结构如下：
+Directory layout:
 
 ```text
 rim/
@@ -103,24 +105,24 @@ rim/
     └── _home_zooeywm_a.txt.undo.meta
 ```
 
-文件命名规则：
+File naming rules:
 
-- 源文件绝对路径会被平铺成单个文件名，不创建嵌套目录
-- 路径语法字符 `/ \ : ? * " < > |` 会压成 `_`
-- 字面下划线 `_` 会编码为 `__`
-- 例如：
-  - Linux：`/home/zooeywm/a.txt` -> `_home_zooeywm_a.txt`
-  - Windows：`C:\Users\zooey\a.txt` -> `C_Users_zooey_a.txt`
+- The absolute source path is flattened into a single file name; no nested directories are created
+- Path syntax characters `/ \\ : ? * " < > |` are collapsed into `_`
+- A literal underscore `_` is encoded as `__`
+- Examples:
+  - Linux: `/home/zooeywm/a.txt` -> `_home_zooeywm_a.txt`
+  - Windows: `C:\Users\zooey\a.txt` -> `C_Users_zooey_a.txt`
 
-## UI 约定
+## UI Conventions
 
-- 顶部栏显示当前 buffer 名称
-- dirty buffer 会在标题后显示 `*`
-- 底部状态栏显示当前模式、消息和待完成按键序列
+- The top bar shows the current buffer name
+- A dirty buffer displays `*` after the title
+- The bottom status bar shows the current mode, messages, and any pending key sequence
 
-## 模式
+## Modes
 
-当前实现的编辑模式：
+The editor currently implements these modes:
 
 - `NORMAL`
 - `INSERT`
@@ -128,128 +130,128 @@ rim/
 - `VISUAL`
 - `VISUAL LINE`
 - `VISUAL BLOCK`
-- `INSERT BLOCK`（由 visual block 的 `I` / `A` 进入）
+- `INSERT BLOCK` (entered from visual block `I` / `A`)
 
-## 普通模式
+## Normal Mode
 
-### 光标与滚动
+### Cursor And Scrolling
 
-- `h` `j` `k` `l`：左 / 下 / 上 / 右移动
-- `0`：跳到行首
-- `$`：跳到行尾
-- `gg`：跳到文件开头
-- `G`：跳到文件结尾
-- `Ctrl+e`：视图下滚一行
-- `Ctrl+y`：视图上滚一行
-- `Ctrl+d`：视图下滚半页
-- `Ctrl+u`：视图上滚半页
+- `h` `j` `k` `l`: move left / down / up / right
+- `0`: jump to the beginning of the line
+- `$`: jump to the end of the line
+- `gg`: jump to the beginning of the file
+- `G`: jump to the end of the file
+- `Ctrl+e`: scroll the view down by one line
+- `Ctrl+y`: scroll the view up by one line
+- `Ctrl+d`: scroll the view down by half a page
+- `Ctrl+u`: scroll the view up by half a page
 
-### 进入其他模式
+### Enter Other Modes
 
-- `i`：在光标处进入插入模式
-- `a`：光标右移后进入插入模式
-- `o`：在下方新开一行并进入插入模式
-- `O`：在上方新开一行并进入插入模式
-- `:`：进入命令模式
-- `v`：进入 `VISUAL`
-- `V`：进入 `VISUAL LINE`
-- `Ctrl+v`：进入 `VISUAL BLOCK`
+- `i`: enter insert mode at the cursor
+- `a`: move right, then enter insert mode
+- `o`: open a new line below and enter insert mode
+- `O`: open a new line above and enter insert mode
+- `:`: enter command mode
+- `v`: enter `VISUAL`
+- `V`: enter `VISUAL LINE`
+- `Ctrl+v`: enter `VISUAL BLOCK`
 
-### 编辑
+### Editing
 
-- `x`：删除当前字符到单一 slot
-- `dd`：删除当前行到单一 slot
-- `p`：在光标后粘贴 slot 内容
-- `J`：将当前行与下一行拼接
-- `u`：undo
-- `Ctrl+r`：redo
+- `x`: delete the current character into the single slot
+- `dd`: delete the current line into the single slot
+- `p`: paste the slot content after the cursor
+- `J`: join the current line with the next line
+- `u`: undo
+- `Ctrl+r`: redo
 
-### buffer / window / tab
+### Buffer / Window / Tab
 
-- `H` / `L`：切换到上一个 / 下一个 buffer
-- `{` / `}`：切换到上一个 / 下一个 buffer
-- `Ctrl+h` `Ctrl+j` `Ctrl+k` `Ctrl+l`：切换焦点到左 / 下 / 上 / 右侧 window
+- `H` / `L`: switch to the previous / next buffer
+- `{` / `}`: switch to the previous / next buffer
+- `Ctrl+h` `Ctrl+j` `Ctrl+k` `Ctrl+l`: move focus to the left / down / up / right window
 
-Leader key 默认是空格 `Space`。
+The default leader key is `Space`.
 
-Leader 序列：
+Leader sequences:
 
-- `<leader> w v`：垂直分屏
-- `<leader> w h`：水平分屏
-- `<leader> <Tab> n`：新建 tab
-- `<leader> <Tab> d`：关闭当前 tab
-- `<leader> <Tab> [`：切换到上一个 tab
-- `<leader> <Tab> ]`：切换到下一个 tab
-- `<leader> b n`：新建并绑定一个空 `untitled` buffer
-- `<leader> b d`：关闭当前 buffer
+- `<leader> w v`: vertical split
+- `<leader> w h`: horizontal split
+- `<leader> <Tab> n`: create a new tab
+- `<leader> <Tab> d`: close the current tab
+- `<leader> <Tab> [`: switch to the previous tab
+- `<leader> <Tab> ]`: switch to the next tab
+- `<leader> b n`: create and bind a new empty `untitled` buffer
+- `<leader> b d`: close the current buffer
 
-## 插入模式
+## Insert Mode
 
-- `Esc`：回到普通模式
-- `Enter`：插入换行
-- `Backspace`：向后删除
-- `Tab`：插入制表符
-- `Left` `Right` `Up` `Down`：移动光标
-- 普通字符输入：插入文本
+- `Esc`: return to normal mode
+- `Enter`: insert a newline
+- `Backspace`: delete backward
+- `Tab`: insert a tab character
+- `Left` `Right` `Up` `Down`: move the cursor
+- Printable characters: insert text
 
-说明：
+Notes:
 
-- 一次连续 insert 输入会归并成一个 undo 步骤
-- 连续相邻纯插入会归并成一条 history edit，因此持久化 undo 文件不会把 `aaaa` 记成四条独立插入
+- A continuous insert session is grouped into a single undo step
+- Consecutive adjacent pure inserts are merged into a single history edit, so persistent undo does not store `aaaa` as four separate inserts
 
-## Visual 模式
+## Visual Mode
 
-### 通用行为
+### Common Behavior
 
-- `Esc`：退出 visual
-- `h` `j` `k` `l`：移动选择端点
-- `0` / `$`：跳到行首 / 行尾
-- `gg` / `G`：跳到文件开头 / 结尾
-- `Ctrl+e` / `Ctrl+y`：视图下滚 / 上滚一行
-- `Ctrl+d` / `Ctrl+u`：视图下滚 / 上滚半页
-- `v`：切换到 `VISUAL`
-- `V`：切换到 `VISUAL LINE`
-- `Ctrl+v`：切换到 `VISUAL BLOCK`
+- `Esc`: leave visual mode
+- `h` `j` `k` `l`: move the selection endpoint
+- `0` / `$`: jump to the beginning / end of the line
+- `gg` / `G`: jump to the beginning / end of the file
+- `Ctrl+e` / `Ctrl+y`: scroll the view down / up by one line
+- `Ctrl+d` / `Ctrl+u`: scroll the view down / up by half a page
+- `v`: switch to `VISUAL`
+- `V`: switch to `VISUAL LINE`
+- `Ctrl+v`: switch to `VISUAL BLOCK`
 
-### 选择操作
+### Selection Operations
 
-- `y`：复制选区到 slot
-- `d`：删除选区到 slot
-- `x`：删除选区到 slot
-- `p`：用 slot 内容替换当前选区
-- `c`：删除当前选区并进入插入模式
+- `y`: yank the selection into the slot
+- `d`: delete the selection into the slot
+- `x`: delete the selection into the slot
+- `p`: replace the current selection with the slot content
+- `c`: delete the current selection and enter insert mode
 
-## Visual Block 模式
+## Visual Block Mode
 
-除通用 visual 行为外，还支持：
+In addition to the common visual behavior, visual block also supports:
 
-- `I`：在矩形左边界进入块插入
-- `A`：在矩形右边界进入块插入
+- `I`: enter block insert at the left edge of the rectangle
+- `A`: enter block insert at the right edge of the rectangle
 
-块插入模式下当前支持：
+Block insert currently supports:
 
-- 普通字符输入：对块内所有行同步插入
-- `Tab`：对块内所有行同步插入 tab
-- `Backspace`：对块内所有行同步回删
-- `Esc`：退出块插入
+- Printable characters: insert into every selected row at the same column
+- `Tab`: insert a tab into every selected row
+- `Backspace`: delete backward in every selected row
+- `Esc`: leave block insert
 
-当前不支持的块插入键：
+Block insert currently does not support:
 
 - `Enter`
-- 方向键
+- Arrow keys
 
-对应状态栏会提示：`block insert supports text, tab, backspace, esc only`
+The status bar will show: `block insert supports text, tab, backspace, esc only`
 
-## Command 模式
+## Command Mode
 
-### 基本按键
+### Basic Keys
 
-- `Esc`：退出命令模式
-- `Enter`：执行命令
-- `Backspace`：删除命令行字符
-- 普通字符输入：编辑命令行
+- `Esc`: leave command mode
+- `Enter`: execute the command
+- `Backspace`: delete one command-line character
+- Printable characters: edit the command line
 
-### 已实现命令
+### Implemented Commands
 
 - `:q`
 - `:quit`
@@ -269,105 +271,106 @@ Leader 序列：
 - `:wq <path>`
 - `:wq! <path>`
 
-### 命令语义
+### Command Semantics
 
 - `:q`
-  - 若任意 buffer dirty，则阻止退出并提示使用 `:q!`
-  - 若当前 tab 有多个 window，则关闭当前 window
-  - 否则若有多个 tab，则关闭当前 tab
-  - 否则退出程序
+  - If any buffer is dirty, quitting is blocked and `:q!` is suggested
+  - If the current tab has multiple windows, close the current window
+  - Otherwise, if there are multiple tabs, close the current tab
+  - Otherwise, quit the application
 - `:q!`
-  - 忽略 dirty 检查，沿用与 `:q` 相同的 window / tab / app 关闭顺序
+  - Ignore dirty checks and use the same window / tab / app closing order as `:q`
 - `:qa`
-  - 立即退出程序
+  - Quit the application immediately
 - `:w`
-  - 保存当前 buffer
+  - Save the current buffer
 - `:w!`
-  - 强制保存当前 buffer
+  - Force-save the current buffer
 - `:wa`
-  - 保存所有文件型 buffer
+  - Save all file-backed buffers
 - `:wq`
-  - 保存当前 buffer 后退出当前关闭层级
+  - Save the current buffer, then close the current closing scope
 - `:wq!`
-  - 强制保存后退出当前关闭层级
+  - Force-save, then close the current closing scope
 - `:e`
-  - 重新加载当前 buffer 对应文件
+  - Reload the file bound to the current buffer
 - `:e!`
-  - 强制重新加载当前 buffer，对 dirty buffer 也生效
+  - Force-reload the current buffer, including a dirty buffer
 - `:e <path>`
-  - 打开指定路径，路径会先规范化为绝对路径
+  - Open the given path after normalizing it to an absolute path
 - `:w <path>` / `:w! <path>`
-  - 另存当前 buffer 到指定路径
+  - Save the current buffer to the given path
 - `:wq <path>` / `:wq! <path>`
-  - 另存后退出当前关闭层级
+  - Save to the given path, then close the current closing scope
 
-## 文件与 buffer 行为
+## File And Buffer Behavior
 
-- 打开文件时，内部使用规范化绝对路径去重
-- 同一个文件再次打开时，会复用已有 buffer，而不是创建重复 buffer
-- 新建空 buffer 时使用 `untitled` 命名
-- 文件型 buffer 支持 watch / reload / 持久化历史
-- 关闭 buffer 时会停止 watch，并关闭对应持久化会话
+- Opened files are deduplicated by normalized absolute path
+- Reopening the same file reuses the existing buffer instead of creating a duplicate
+- New empty buffers are named `untitled`
+- File-backed buffers support watch / reload / persistent history
+- Closing a buffer stops file watching and closes the corresponding persistence session
 
-## dirty 语义
+## Dirty Semantics
 
-dirty 不是“发生过编辑”而是“当前文本是否偏离 clean 基线”。
+Dirty does not mean “this buffer was edited before”. It means “the current text differs from the clean baseline”.
 
-clean 基线会在这些时机更新：
+The clean baseline is updated when:
 
-- 成功打开文件
-- 成功外部重载
-- 成功保存
-- 新建 buffer 初始化时
+- A file is opened successfully
+- An external reload succeeds
+- A save succeeds
+- A new buffer is initialized
 
-因此：
+As a result:
 
-- 改动后 `dirty = true`
-- 手动改回到打开或保存时的文本后，`dirty` 会自动恢复为 `false`
-- undo / redo 回到 clean 文本时，也会自动清除 dirty
+- After an edit, `dirty = true`
+- If you manually change the text back to the opened or saved state, `dirty` automatically returns to `false`
+- If undo / redo returns the buffer to the clean text, dirty is cleared automatically
 
-## 外部文件变更
+## External File Changes
 
-- 已打开文件会被文件监视器观察
-- 外部修改被检测到后，会触发重载流程
-- 内部保存后会有一个短时间忽略窗口，避免保存自己触发 reload 回声
+- Opened files are watched by the file watcher
+- When an external change is detected, a reload flow is triggered
+- After an internal save, a short ignore window suppresses watcher echo and avoids self-triggered reload
 
-## swap 恢复
+## Swap Recovery
 
-每个文件会在状态目录下维护一份 `.swp`。
+Each file keeps one `.swp` file under the state directory.
 
-行为：
+Behavior:
 
-- 打开文件时，如果检测到已有 swap，会提示：
+- When opening a file, if an existing swap is detected, `rim` prompts:
   - `[r]ecover`
   - `[d]elete`
   - `[e]dit anyway`
   - `[a]bort`
-- `r`：恢复 swap 中未保存文本
-- `d`：删除旧 swap，并用当前磁盘内容重新建立会话
-- `e`：忽略旧 swap，直接继续编辑当前磁盘内容
-- `a` 或 `Esc`：中止这次 buffer 打开
+- `r`: recover the unsaved text recorded in the swap
+- `d`: delete the old swap and rebuild the session from the current on-disk content
+- `e`: ignore the old swap and keep editing the current on-disk content
+- `a` or `Esc`: abort the buffer open operation
 
-说明：
+Notes:
 
-- swap 是 `BASE + edit log` 结构
-- 日志会做 debounce flush
-- undo 触发的尾部可逆日志会尽量通过 `truncate` 消掉，而不是总是整文件重写
+- Swap uses a `BASE + edit log` model
+- Log flushing is debounced
+- Tail logs produced by undo are removed with `truncate` whenever possible instead of always rewriting the whole file
 
-## 持久化 undo / redo
+## Persistent Undo / Redo
 
-每个文件会在状态目录下维护：
+Each file keeps:
 
 - `*.undo.log`
 - `*.undo.meta`
 
-行为：
+Behavior:
 
-- 打开文件后，如果当前文本与持久化历史匹配，会自动恢复 undo / redo 栈
-- 外部 reload 或 swap recover 后，也会重新尝试恢复历史
-- 普通 `undo` / `redo` 主要只更新 `meta`
-- 发生分叉编辑时，会对 `undo.log` 做尾部 `truncate` 后再 append 新分支
+- After opening a file, if the current text matches the persisted history state, undo / redo stacks are restored automatically
+- After an external reload or swap recovery, `rim` tries to restore history again
+- Normal `undo` / `redo` mostly update only `meta`
+- A branch edit truncates the tail of `undo.log`, then appends the new branch
 
-## 当前已知边界
+## Current Boundaries
 
-- 这是一个 WIP 编辑器原型，功能已具备主流程，但仍在持续收敛语义与设施边界
+- This is still a WIP editor prototype
+- The main flows are in place, but semantics and infrastructure boundaries are still being tightened
