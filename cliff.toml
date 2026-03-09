@@ -62,5 +62,5 @@ commit_parsers = [
   { message = ".*", group = "Other" },
 ]
 
-filter_commits = false
+filter_commits     = false
 recurse_submodules = false

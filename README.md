@@ -3,7 +3,7 @@
 `rim` is a terminal-first editor prototype built around a state-driven architecture:
 
 - The primary text buffer uses `ropey::Rope`
-- The kernel is separated from infrastructure, and each infrastructure concern lives in its own workspace crate
+- The kernel is separated from infrastructure, and the runtime still follows a single `App` container model
 - File watching, swap recovery, and persistent undo/redo all flow through the same event pipeline
 
 ## Current Feature Set
@@ -22,12 +22,44 @@
 - `rim-paths`: shared platform path rules for `logs` / `swp` / `undo`
 - `rim-kernel`: pure core state machine and business logic
 - `rim-app`: the single `App` container, runtime orchestrator, and TUI entrypoint
-- `rim-infra-file-io`: asynchronous file I/O infrastructure
+- `rim-infra-storage`: unified storage infrastructure for file I/O, swap, and persistent undo/redo
 - `rim-infra-file-watcher`: file watching infrastructure
-- `rim-infra-persistence`: swap and persistent undo/redo
 - `rim-infra-input`: keyboard input infrastructure
 - `rim-infra-ui`: ratatui rendering
-- `rim-app`: application container and TUI entrypoint
+
+## Architecture Snapshot
+
+- `rim-app` keeps the only top-level container: `App`
+- `rim-kernel` keeps `RimState` as the only core state aggregate
+- `RimState::apply_action` remains the single business dispatch entrypoint
+- `rim-kernel/src/action_handler/` is split by flow:
+  - `file_flow`
+  - `mode_flow`
+  - `command_flow`
+  - `editor_flow`
+  - `post_edit_flow`
+- `rim-kernel/src/state/` is split by domain:
+  - `buffer`
+  - `mode`
+  - `window`
+  - `tab`
+  - `edit/` with `movement`, `core_edit`, `visual`
+- `rim-infra-storage/src/worker/` handles the single storage worker loop
+- `rim-infra-storage/src/swap_session/` is split into:
+  - `protocol`
+  - `compaction`
+  - `lease`
+- `rim-infra-storage/src/undo_history/` is split into:
+  - `protocol`
+  - `session_flow`
+
+This means the current architecture boundary is no longer just crate-level. The main maintenance units are now:
+
+- kernel action flow
+- kernel state domains
+- storage worker
+- swap persistence
+- undo persistence
 
 ## Build And Run
 

@@ -1474,10 +1474,9 @@ dependencies = [
  "anyhow",
  "derive_more",
  "flume",
- "rim-infra-file-io",
  "rim-infra-file-watcher",
  "rim-infra-input",
- "rim-infra-persistence",
+ "rim-infra-storage",
  "rim-infra-ui",
  "rim-kernel",
  "rim-paths",
@@ -1486,18 +1485,6 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "rim-infra-file-io"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "compio",
- "dep-inj",
- "flume",
- "rim-kernel",
- "tracing",
 ]
 
 [[package]]
@@ -1522,11 +1509,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "rim-infra-persistence"
+name = "rim-infra-storage"
 version = "0.0.1"
 dependencies = [
  "anyhow",
  "base64",
+ "compio",
  "dep-inj",
  "flume",
  "rim-kernel",

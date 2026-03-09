@@ -2,9 +2,8 @@
 members = [
   "rim-paths",
   "rim-kernel",
-  "rim-infra-file-io",
+  "rim-infra-storage",
   "rim-infra-file-watcher",
-  "rim-infra-persistence",
   "rim-infra-input",
   "rim-infra-ui",
   "rim-app",
@@ -19,7 +18,7 @@ authors = ["zooeywm <zooeywm@gmail.com>"]
 [workspace.dependencies]
 anyhow                 = "1"
 base64                 = "0.22"
-compio                 = { version = "0.18", features = ["fs", "macros"] }
+compio                 = { version = "0.18", features = ["fs", "macros", "time"] }
 crossterm              = "0.29"
 dep-inj                = "0.1"
 derive_more            = { version = "2.1", features = ["as_ref"] }
@@ -37,10 +36,9 @@ tracing-appender       = "0.2"
 tracing-subscriber     = { version = "0.3", features = ["env-filter", "fmt", "time"] }
 unicode-width          = "0.2"
 rim-app                = { path = "rim-app" }
-rim-infra-file-io      = { path = "rim-infra-file-io" }
+rim-infra-storage      = { path = "rim-infra-storage" }
 rim-infra-file-watcher = { path = "rim-infra-file-watcher" }
 rim-infra-input        = { path = "rim-infra-input" }
-rim-infra-persistence  = { path = "rim-infra-persistence" }
 rim-infra-ui           = { path = "rim-infra-ui" }
 rim-kernel             = { path = "rim-kernel" }
 rim-paths              = { path = "rim-paths" }

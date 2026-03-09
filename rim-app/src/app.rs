@@ -1,10 +1,9 @@
 use std::{ops::ControlFlow, path::PathBuf};
 
 use anyhow::{Context, Result};
-use rim_infra_file_io::FileIoState;
 use rim_infra_file_watcher::FileWatcherState;
 use rim_infra_input::InputPumpService;
-use rim_infra_persistence::PersistenceIoState;
+use rim_infra_storage::StorageIoState;
 use rim_infra_ui::{Renderer, TerminalSession};
 use rim_kernel::{action::{AppAction, FileAction}, state::RimState};
 use tracing::trace;
@@ -13,23 +12,26 @@ use tracing::trace;
 pub struct App {
 	// Kernel state is mutable because action dispatch mutates domain state.
 	#[as_mut]
-	state:          RimState,
+	state:        RimState,
 	// Concrete infrastructure states are kept in the single app container.
 	#[as_ref]
-	file_io:        FileIoState,
+	storage_io:   StorageIoState,
 	#[as_ref]
-	file_watcher:   FileWatcherState,
-	#[as_ref]
-	persistence_io: PersistenceIoState,
+	file_watcher: FileWatcherState,
 	// Event bus is the glue between runtime producers and kernel consumers.
-	event_tx:       flume::Sender<AppAction>,
-	event_rx:       flume::Receiver<AppAction>,
+	event_tx:     flume::Sender<AppAction>,
+	event_rx:     flume::Receiver<AppAction>,
 }
 
 pub(crate) struct AppPorts<'a> {
-	pub(crate) file_io:        &'a FileIoState,
-	pub(crate) file_watcher:   &'a FileWatcherState,
-	pub(crate) persistence_io: &'a PersistenceIoState,
+	pub(crate) storage_io:   &'a StorageIoState,
+	pub(crate) file_watcher: &'a FileWatcherState,
+}
+
+impl<'a> AppPorts<'a> {
+	fn new(storage_io: &'a StorageIoState, file_watcher: &'a FileWatcherState) -> Self {
+		Self { storage_io, file_watcher }
+	}
 }
 
 impl App {
@@ -39,9 +41,8 @@ impl App {
 
 		Ok(Self {
 			state: RimState::new(),
-			file_io: FileIoState::new(event_tx.clone()),
+			storage_io: StorageIoState::new(event_tx.clone()),
 			file_watcher: FileWatcherState::new(event_tx.clone()),
-			persistence_io: PersistenceIoState::new(event_tx.clone()),
 			event_tx,
 			event_rx,
 		})
@@ -50,9 +51,8 @@ impl App {
 	pub fn start_services(&self) {
 		// Infrastructure workers run independently and push completion events to the
 		// bus.
-		self.file_io.start();
+		self.storage_io.start();
 		self.file_watcher.start();
-		self.persistence_io.start();
 	}
 
 	pub fn open_startup_files(&mut self, file_paths: Vec<PathBuf>) {
@@ -105,12 +105,9 @@ impl App {
 
 	pub fn process_action(&mut self, action: AppAction) -> ControlFlow<()> {
 		// All domain transitions must go through one handler entrypoint.
-		let ports = AppPorts {
-			file_io:        &self.file_io,
-			file_watcher:   &self.file_watcher,
-			persistence_io: &self.persistence_io,
-		};
-		self.state.apply_action(&ports, action)
+		let state = &mut self.state;
+		let ports = AppPorts::new(&self.storage_io, &self.file_watcher);
+		state.apply_action(&ports, action)
 	}
 
 	pub fn action_affects_layout(action: &AppAction) -> bool {
