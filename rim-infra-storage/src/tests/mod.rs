@@ -10,6 +10,7 @@ use crate::path_codec::source_path_from_swap_storage_path;
 use crate::{path_codec::{encode_source_path_for_file_name, normalize_source_path_text, swap_lease_path_for_source, swap_path_for_source, undo_log_path_for_source, undo_meta_path_for_source}, swap_session::{BufferedSwapOp, SwapSession, append_swap_ops, parse_swap_file, touch_swap_lease_file, write_swap_snapshot}, undo_history::{load_undo_history, save_undo_history}};
 
 mod path_codec;
+mod session;
 mod swap_session;
 mod undo_history;
 

@@ -3,7 +3,11 @@ use std::path::PathBuf;
 use ratatui::layout::Rect;
 use rim_kernel::state::{CursorState, RimState};
 
-use super::{DIR_DOWN, DIR_LEFT, DIR_RIGHT, DIR_UP, SelectionSegment, VisualSelectionSpec, WindowAreaWidget, collect_visual_selection_segments, dirs_from_symbol, display_width_of_char_prefix, render_line_for_display, symbol_from_dirs, visible_slice_by_display_width};
+use super::{
+	DIR_DOWN, DIR_LEFT, DIR_RIGHT, DIR_UP, SelectionSegment, VisualSelectionSpec, WindowAreaWidget,
+	collect_visual_selection_segments, dirs_from_symbol, display_width_of_char_prefix, render_line_for_display,
+	symbol_from_dirs, visible_slice_by_display_width,
+};
 
 fn merged_symbol(existing: &str, add_dirs: u8) -> &'static str {
 	symbol_from_dirs(dirs_from_symbol(existing) | add_dirs)
@@ -90,15 +94,18 @@ fn render_line_for_display_should_expand_tab_to_spaces() {
 fn visual_segments_should_cover_range_in_single_line() {
 	let content = "abcdef";
 	let text_rect = Rect { x: 0, y: 0, width: 10, height: 1 };
-	let segments = collect_visual_selection_segments(content, VisualSelectionSpec {
-		text_rect,
-		scroll_x: 0,
-		scroll_y: 0,
-		anchor: CursorState { row: 1, col: 2 },
-		cursor: CursorState { row: 1, col: 4 },
-		line_wise: false,
-		block_wise: false,
-	});
+	let segments = collect_visual_selection_segments(
+		content,
+		VisualSelectionSpec {
+			text_rect,
+			scroll_x: 0,
+			scroll_y: 0,
+			anchor: CursorState { row: 1, col: 2 },
+			cursor: CursorState { row: 1, col: 4 },
+			line_wise: false,
+			block_wise: false,
+		},
+	);
 	assert_eq!(segments.len(), 1);
 	let SelectionSegment { x_start, x_end, y } = segments[0];
 	assert_eq!(y, 0);
@@ -110,15 +117,18 @@ fn visual_segments_should_cover_range_in_single_line() {
 fn visual_line_segments_should_cover_entire_line_width() {
 	let content = "abcdef";
 	let text_rect = Rect { x: 0, y: 0, width: 10, height: 1 };
-	let segments = collect_visual_selection_segments(content, VisualSelectionSpec {
-		text_rect,
-		scroll_x: 0,
-		scroll_y: 0,
-		anchor: CursorState { row: 1, col: 3 },
-		cursor: CursorState { row: 1, col: 3 },
-		line_wise: true,
-		block_wise: false,
-	});
+	let segments = collect_visual_selection_segments(
+		content,
+		VisualSelectionSpec {
+			text_rect,
+			scroll_x: 0,
+			scroll_y: 0,
+			anchor: CursorState { row: 1, col: 3 },
+			cursor: CursorState { row: 1, col: 3 },
+			line_wise: true,
+			block_wise: false,
+		},
+	);
 	assert_eq!(segments.len(), 1);
 	let SelectionSegment { x_start, x_end, y } = segments[0];
 	assert_eq!(y, 0);
@@ -130,15 +140,18 @@ fn visual_line_segments_should_cover_entire_line_width() {
 fn visual_segments_should_include_newline_marker_slot() {
 	let content = "ab\ncd";
 	let text_rect = Rect { x: 0, y: 0, width: 10, height: 2 };
-	let segments = collect_visual_selection_segments(content, VisualSelectionSpec {
-		text_rect,
-		scroll_x: 0,
-		scroll_y: 0,
-		anchor: CursorState { row: 1, col: 2 },
-		cursor: CursorState { row: 1, col: 3 },
-		line_wise: false,
-		block_wise: false,
-	});
+	let segments = collect_visual_selection_segments(
+		content,
+		VisualSelectionSpec {
+			text_rect,
+			scroll_x: 0,
+			scroll_y: 0,
+			anchor: CursorState { row: 1, col: 2 },
+			cursor: CursorState { row: 1, col: 3 },
+			line_wise: false,
+			block_wise: false,
+		},
+	);
 	assert_eq!(segments.len(), 1);
 	let SelectionSegment { x_start, x_end, y } = segments[0];
 	assert_eq!(y, 0);
@@ -150,15 +163,18 @@ fn visual_segments_should_include_newline_marker_slot() {
 fn visual_block_segments_should_cover_same_columns_across_rows() {
 	let content = "abcd\nefgh\nijkl";
 	let text_rect = Rect { x: 0, y: 0, width: 10, height: 3 };
-	let segments = collect_visual_selection_segments(content, VisualSelectionSpec {
-		text_rect,
-		scroll_x: 0,
-		scroll_y: 0,
-		anchor: CursorState { row: 1, col: 2 },
-		cursor: CursorState { row: 3, col: 3 },
-		line_wise: false,
-		block_wise: true,
-	});
+	let segments = collect_visual_selection_segments(
+		content,
+		VisualSelectionSpec {
+			text_rect,
+			scroll_x: 0,
+			scroll_y: 0,
+			anchor: CursorState { row: 1, col: 2 },
+			cursor: CursorState { row: 3, col: 3 },
+			line_wise: false,
+			block_wise: true,
+		},
+	);
 	assert_eq!(segments.len(), 3);
 	for (index, segment) in segments.iter().enumerate() {
 		assert_eq!(segment.y, index as u16);

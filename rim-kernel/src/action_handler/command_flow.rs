@@ -3,10 +3,10 @@ use std::{ops::ControlFlow, path::PathBuf};
 use tracing::error;
 
 use super::ActionHandlerError;
-use crate::{action::{AppAction, FileAction, KeyCode, KeyEvent, WindowAction}, ports::{FileWatcher, StorageIo}, state::RimState};
+use crate::{action::{AppAction, FileAction, KeyCode, KeyEvent, WindowAction}, ports::{FilePicker, FileWatcher, StorageIo}, state::RimState};
 
 pub(super) fn handle_command_mode_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
-where P: StorageIo + FileWatcher {
+where P: StorageIo + FileWatcher + FilePicker {
 	if key.modifiers.contains(crate::action::KeyModifiers::CONTROL) {
 		return ControlFlow::Continue(());
 	}
@@ -18,6 +18,17 @@ where P: StorageIo + FileWatcher {
 			match command.as_str() {
 				"" => {}
 				"qa" => {
+					if state.has_dirty_buffers() {
+						state.status_bar.message = "quit all blocked: unsaved changes".to_string();
+						return ControlFlow::Continue(());
+					}
+					return RimState::dispatch_internal(
+						ports,
+						state,
+						AppAction::System(crate::action::SystemAction::Quit),
+					);
+				}
+				"qa!" => {
 					return RimState::dispatch_internal(
 						ports,
 						state,
@@ -64,9 +75,12 @@ where P: StorageIo + FileWatcher {
 				}
 				"w" => enqueue_save_active_buffer(ports, state, false, false, None),
 				"w!" => enqueue_save_active_buffer(ports, state, false, true, None),
-				"wa" => enqueue_save_all_buffers(ports, state),
+				"wa" => enqueue_save_all_buffers(ports, state, false, false),
+				"wqa" => enqueue_save_all_buffers(ports, state, true, false),
+				"wqa!" => enqueue_save_all_buffers(ports, state, true, true),
 				"wq" => enqueue_save_active_buffer(ports, state, true, false, None),
 				"wq!" => enqueue_save_active_buffer(ports, state, true, true, None),
+				"yazi" | "files" => enqueue_open_with_picker(ports, state),
 				"e" => enqueue_reload_active_buffer(ports, state, false),
 				"e!" => enqueue_reload_active_buffer(ports, state, true),
 				_ if command.starts_with("e ") => {
@@ -200,15 +214,52 @@ where P: StorageIo + FileWatcher {
 	state.status_bar.message = format!("loading {}", path.display());
 }
 
-fn enqueue_save_all_buffers<P>(ports: &P, state: &mut RimState)
-where P: StorageIo + FileWatcher {
+fn enqueue_open_with_picker<P>(ports: &P, state: &mut RimState)
+where P: FilePicker + StorageIo + FileWatcher {
+	match ports.pick_open_path() {
+		Ok(Some(path)) => {
+			let _ = RimState::dispatch_internal(ports, state, AppAction::File(FileAction::OpenRequested { path }));
+		}
+		Ok(None) => {
+			state.status_bar.message = "open cancelled".to_string();
+		}
+		Err(err) => {
+			error!("file picker failed: {}", err);
+			state.status_bar.message = format!("open failed: {}", err);
+		}
+	}
+}
+
+fn enqueue_save_all_buffers<P>(
+	ports: &P,
+	state: &mut RimState,
+	quit_after_save: bool,
+	force_overwrite: bool,
+) where
+	P: StorageIo + FileWatcher,
+{
 	let (snapshots, missing_path) = state.all_buffer_save_snapshots();
+	if missing_path > 0 {
+		state.status_bar.message = format!("save all failed: {} buffer(s) have no file path", missing_path);
+		state.quit_after_save = false;
+		return;
+	}
+	if !force_overwrite
+		&& snapshots.iter().any(|(buffer_id, ..)| {
+			state.buffers.get(*buffer_id).map(|buffer| buffer.externally_modified).unwrap_or(false)
+		}) {
+		state.status_bar.message =
+			"save all blocked: file changed externally (use :wqa! to overwrite)".to_string();
+		state.quit_after_save = false;
+		return;
+	}
 	if snapshots.is_empty() {
 		if missing_path > 0 {
 			state.status_bar.message = "save failed: no buffer has file path".to_string();
 		} else {
 			state.status_bar.message = "nothing to save".to_string();
 		}
+		state.quit_after_save = false;
 		return;
 	}
 
@@ -227,10 +278,6 @@ where P: StorageIo + FileWatcher {
 		enqueued = enqueued.saturating_add(1);
 	}
 
-	state.quit_after_save = false;
-	if missing_path > 0 {
-		state.status_bar.message = format!("saving {} buffers ({} skipped: no path)", enqueued, missing_path);
-	} else {
-		state.status_bar.message = format!("saving {} buffers...", enqueued);
-	}
+	state.quit_after_save = quit_after_save;
+	state.status_bar.message = format!("saving {} buffers...", enqueued);
 }

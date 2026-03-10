@@ -15,7 +15,9 @@ pub struct Renderer {
 }
 
 impl Renderer {
-	pub fn new() -> Self { Self { last_content_area: None } }
+	pub fn new() -> Self {
+		Self { last_content_area: None }
+	}
 
 	pub fn render(&mut self, frame: &mut ratatui::Frame<'_>, state: &mut RimState) {
 		let area = frame.area();
@@ -43,9 +45,13 @@ impl Renderer {
 		}
 	}
 
-	pub fn mark_layout_dirty(&mut self) { self.last_content_area = None; }
+	pub fn mark_layout_dirty(&mut self) {
+		self.last_content_area = None;
+	}
 }
 
 impl Default for Renderer {
-	fn default() -> Self { Self::new() }
+	fn default() -> Self {
+		Self::new()
+	}
 }

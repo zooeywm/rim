@@ -1,6 +1,6 @@
 use std::{ops::{BitOr, BitOrAssign}, path::PathBuf};
 
-use crate::state::{BufferId, PersistedBufferHistory};
+use crate::state::{BufferId, PersistedBufferHistory, WorkspaceSessionSnapshot};
 
 /// Facility-agnostic key code used by the kernel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -152,7 +152,11 @@ pub enum FileAction {
 		buffer_id:     BufferId,
 		source_path:   PathBuf,
 		expected_text: String,
+		restore_view:  bool,
 		result:        anyhow::Result<Option<PersistedBufferHistory>>,
+	},
+	WorkspaceSessionLoaded {
+		result: anyhow::Result<Option<WorkspaceSessionSnapshot>>,
 	},
 	LoadCompleted {
 		buffer_id: BufferId,

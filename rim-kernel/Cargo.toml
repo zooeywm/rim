@@ -11,3 +11,4 @@ tracing.workspace       = true
 slotmap.workspace       = true
 unicode-width.workspace = true
 ropey.workspace         = true
+serde.workspace         = true

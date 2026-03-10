@@ -1,6 +1,10 @@
 use std::io;
 
-use crossterm::{cursor::SetCursorStyle, execute, terminal::{EnterAlternateScreen, LeaveAlternateScreen, SetTitle, disable_raw_mode, enable_raw_mode}};
+use crossterm::{
+	cursor::SetCursorStyle,
+	execute,
+	terminal::{EnterAlternateScreen, LeaveAlternateScreen, SetTitle, disable_raw_mode, enable_raw_mode},
+};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use rim_kernel::state::EditorMode;
 use thiserror::Error;
@@ -12,13 +16,28 @@ pub enum TerminalSessionError {
 		#[source]
 		source: io::Error,
 	},
+	#[error("disable raw mode failed")]
+	DisableRawMode {
+		#[source]
+		source: io::Error,
+	},
 	#[error("enter alternate screen failed")]
 	EnterAlternateScreen {
 		#[source]
 		source: io::Error,
 	},
+	#[error("leave alternate screen failed")]
+	LeaveAlternateScreen {
+		#[source]
+		source: io::Error,
+	},
 	#[error("create terminal backend failed")]
 	CreateTerminal {
+		#[source]
+		source: io::Error,
+	},
+	#[error("clear terminal failed")]
+	ClearTerminal {
 		#[source]
 		source: io::Error,
 	},
@@ -45,7 +64,8 @@ impl Drop for TerminalModeGuard {
 }
 
 pub struct TerminalSession {
-	terminal:    Terminal<CrosstermBackend<io::Stdout>>,
+	terminal: Terminal<CrosstermBackend<io::Stdout>>,
+	title: String,
 	_mode_guard: TerminalModeGuard,
 }
 
@@ -59,7 +79,7 @@ impl TerminalSession {
 		let backend = CrosstermBackend::new(stdout);
 		let terminal =
 			Terminal::new(backend).map_err(|source| TerminalSessionError::CreateTerminal { source })?;
-		Ok(Self { terminal, _mode_guard: mode_guard })
+		Ok(Self { terminal, title: title.to_string(), _mode_guard: mode_guard })
 	}
 
 	pub fn draw(&mut self, render: impl FnOnce(&mut ratatui::Frame<'_>)) -> Result<(), TerminalSessionError> {
@@ -78,6 +98,21 @@ impl TerminalSession {
 		};
 		execute!(self.terminal.backend_mut(), style)
 			.map_err(|source| TerminalSessionError::SetCursorStyle { source })?;
+		Ok(())
+	}
+
+	pub fn suspend(&mut self) -> Result<(), TerminalSessionError> {
+		disable_raw_mode().map_err(|source| TerminalSessionError::DisableRawMode { source })?;
+		execute!(self.terminal.backend_mut(), SetCursorStyle::DefaultUserShape, LeaveAlternateScreen)
+			.map_err(|source| TerminalSessionError::LeaveAlternateScreen { source })?;
+		Ok(())
+	}
+
+	pub fn resume(&mut self) -> Result<(), TerminalSessionError> {
+		enable_raw_mode().map_err(|source| TerminalSessionError::EnableRawMode { source })?;
+		execute!(self.terminal.backend_mut(), EnterAlternateScreen, SetTitle(self.title.as_str()))
+			.map_err(|source| TerminalSessionError::EnterAlternateScreen { source })?;
+		self.terminal.clear().map_err(|source| TerminalSessionError::ClearTerminal { source })?;
 		Ok(())
 	}
 }

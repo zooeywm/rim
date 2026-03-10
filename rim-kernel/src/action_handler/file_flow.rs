@@ -3,7 +3,7 @@ use std::{ops::ControlFlow, path::{Path, PathBuf}};
 use tracing::error;
 
 use super::{ActionHandlerError, RimState};
-use crate::{action::{FileAction, KeyCode, KeyEvent, KeyModifiers, SwapConflictInfo}, ports::{FileWatcher, StorageIo}, state::{BufferId, PendingSwapDecision, PersistedBufferHistory}};
+use crate::{action::{FileAction, KeyCode, KeyEvent, KeyModifiers, SwapConflictInfo}, ports::{FilePicker, FileWatcher, StorageIo}, state::{BufferId, PendingSwapDecision, PersistedBufferHistory}};
 
 pub(super) fn enqueue_swap_recover<P>(
 	ports: &P,
@@ -24,10 +24,11 @@ pub(super) fn enqueue_history_load<P>(
 	buffer_id: BufferId,
 	source_path: PathBuf,
 	expected_text: String,
+	restore_view: bool,
 ) where
 	P: StorageIo,
 {
-	if let Err(source) = ports.enqueue_load_history(buffer_id, source_path, expected_text) {
+	if let Err(source) = ports.enqueue_load_history(buffer_id, source_path, expected_text, restore_view) {
 		let err = ActionHandlerError::PersistenceHistoryLoad { source };
 		error!("persistence worker unavailable while enqueueing history load: {}", err);
 	}
@@ -47,15 +48,21 @@ pub(super) fn enqueue_history_save<P>(
 	}
 }
 
-pub(super) fn enqueue_history_load_for_buffer<P>(ports: &P, state: &RimState, buffer_id: BufferId)
-where P: StorageIo {
+pub(super) fn enqueue_history_load_for_buffer<P>(
+	ports: &P,
+	state: &RimState,
+	buffer_id: BufferId,
+	restore_view: bool,
+) where
+	P: StorageIo,
+{
 	let Some(buffer) = state.buffers.get(buffer_id) else {
 		return;
 	};
 	let Some(source_path) = buffer.path.clone() else {
 		return;
 	};
-	enqueue_history_load(ports, buffer_id, source_path, buffer.text.to_string());
+	enqueue_history_load(ports, buffer_id, source_path, buffer.text.to_string(), restore_view);
 }
 
 pub(super) fn enqueue_history_save_for_buffer<P>(ports: &P, state: &RimState, buffer_id: BufferId)
@@ -72,6 +79,28 @@ where P: StorageIo {
 	enqueue_history_save(ports, buffer_id, source_path, history);
 }
 
+fn enqueue_workspace_runtime_bindings<P>(ports: &P, state: &RimState)
+where P: StorageIo + FileWatcher {
+	for (buffer_id, buffer) in &state.buffers {
+		let Some(source_path) = buffer.path.clone() else {
+			continue;
+		};
+		if let Err(source) = ports.enqueue_open(buffer_id, source_path.clone()) {
+			let err = ActionHandlerError::PersistenceOpen { source };
+			error!("session restore enqueue_open failed: {}", err);
+		}
+		if let Err(source) = ports.enqueue_watch(buffer_id, source_path.clone()) {
+			let err = ActionHandlerError::OpenFileWatch { source };
+			error!("session restore enqueue_watch failed: {}", err);
+		}
+		if let Err(source) = ports.enqueue_initialize_base(buffer_id, source_path, buffer.text.to_string(), true)
+		{
+			let err = ActionHandlerError::PersistenceSwapInitializeBase { source };
+			error!("session restore enqueue_initialize_base failed: {}", err);
+		}
+	}
+}
+
 pub(super) fn swap_conflict_prompt_message(conflict: &SwapConflictInfo) -> String {
 	format!(
 		"swap exists (pid {}, user {}): [r]ecover [d]elete [e]dit anyway [a]bort",
@@ -85,7 +114,7 @@ pub(super) fn handle_pending_swap_decision_key<P>(
 	key: KeyEvent,
 ) -> ControlFlow<()>
 where
-	P: StorageIo + FileWatcher,
+	P: StorageIo + FileWatcher + FilePicker,
 {
 	state.normal_sequence.clear();
 	state.status_bar.key_sequence.clear();
@@ -168,7 +197,7 @@ where
 }
 
 pub(super) fn handle_file_action<P>(ports: &P, state: &mut RimState, action: FileAction) -> ControlFlow<()>
-where P: StorageIo + FileWatcher {
+where P: StorageIo + FileWatcher + FilePicker {
 	match action {
 		FileAction::SwapConflictDetected { buffer_id, result } => match result {
 			Ok(Some(conflict)) => {
@@ -213,7 +242,7 @@ where P: StorageIo + FileWatcher {
 				state.clear_buffer_history(buffer_id);
 				state.refresh_buffer_dirty(buffer_id);
 				state.set_buffer_externally_modified(buffer_id, false);
-				enqueue_history_load_for_buffer(ports, state, buffer_id);
+				enqueue_history_load_for_buffer(ports, state, buffer_id, true);
 				state.status_bar.message = "swap recovered: unsaved edits restored".to_string();
 			}
 			Ok(None) => {
@@ -224,7 +253,7 @@ where P: StorageIo + FileWatcher {
 				error!("swap recover failed: buffer_id={:?}, error={}", buffer_id, err);
 			}
 		},
-		FileAction::UndoHistoryLoaded { buffer_id, source_path, expected_text, result } => {
+		FileAction::UndoHistoryLoaded { buffer_id, source_path, expected_text, restore_view, result } => {
 			let Some(is_still_current) = state
 				.buffers
 				.get(buffer_id)
@@ -238,7 +267,7 @@ where P: StorageIo + FileWatcher {
 
 			match result {
 				Ok(Some(history)) => {
-					if !state.restore_buffer_persisted_history(buffer_id, history) {
+					if !state.restore_buffer_persisted_history(buffer_id, history, restore_view) {
 						error!("restore persisted history failed: buffer_id={:?}", buffer_id);
 					}
 				}
@@ -248,6 +277,25 @@ where P: StorageIo + FileWatcher {
 				}
 			}
 		}
+		FileAction::WorkspaceSessionLoaded { result } => match result {
+			Ok(Some(snapshot)) => {
+				if state.restore_workspace_session(snapshot) {
+					enqueue_workspace_runtime_bindings(ports, state);
+				} else {
+					state.create_untitled_buffer();
+					state.status_bar.message = "session restore failed".to_string();
+				}
+			}
+			Ok(None) => {
+				state.create_untitled_buffer();
+				state.status_bar.message = "new file".to_string();
+			}
+			Err(err) => {
+				error!("workspace session load failed: {}", err);
+				state.create_untitled_buffer();
+				state.status_bar.message = format!("session load failed: {}", err);
+			}
+		},
 		FileAction::LoadCompleted { buffer_id, source, result } => match (source, result) {
 			(crate::action::FileLoadSource::Open, Ok(text)) => {
 				if let Some(buffer) = state.buffers.get_mut(buffer_id) {
@@ -258,7 +306,7 @@ where P: StorageIo + FileWatcher {
 				state.clear_buffer_history(buffer_id);
 				state.mark_buffer_clean(buffer_id);
 				state.set_buffer_externally_modified(buffer_id, false);
-				enqueue_history_load_for_buffer(ports, state, buffer_id);
+				enqueue_history_load_for_buffer(ports, state, buffer_id, true);
 				state.status_bar.message = "file loaded".to_string();
 				if let Some(source_path) = state.buffers.get(buffer_id).and_then(|buffer| buffer.path.clone())
 					&& let Err(source) = ports.enqueue_detect_conflict(buffer_id, source_path)
@@ -291,7 +339,7 @@ where P: StorageIo + FileWatcher {
 				state.clear_buffer_history(buffer_id);
 				state.mark_buffer_clean(buffer_id);
 				state.set_buffer_externally_modified(buffer_id, false);
-				enqueue_history_load_for_buffer(ports, state, buffer_id);
+				enqueue_history_load_for_buffer(ports, state, buffer_id, false);
 				if is_active {
 					state.status_bar.message = format!("reloaded {}", name);
 				}
@@ -374,9 +422,13 @@ where P: StorageIo + FileWatcher {
 				state.set_buffer_externally_modified(buffer_id, false);
 				enqueue_history_save_for_buffer(ports, state, buffer_id);
 				state.status_bar.message = "file saved".to_string();
-				if state.quit_after_save {
+				if state.quit_after_save && state.in_flight_internal_saves.is_empty() {
 					state.quit_after_save = false;
-					return ControlFlow::Break(());
+					return RimState::dispatch_internal(
+						ports,
+						state,
+						crate::action::AppAction::System(crate::action::SystemAction::Quit),
+					);
 				}
 			}
 			Err(err) => {

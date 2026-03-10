@@ -763,15 +763,18 @@ fn undo_active_buffer_edit_should_restore_previous_text_and_cursor() {
 	state.move_cursor_right();
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	state.insert_char_at_cursor('x');
-	state.push_buffer_history_entry(buffer_id, BufferHistoryEntry {
-		edits:         vec![BufferEditSnapshot {
-			start_byte:    1,
-			deleted_text:  String::new(),
-			inserted_text: "x".to_string(),
-		}],
-		before_cursor: CursorState { row: 1, col: 2 },
-		after_cursor:  CursorState { row: 1, col: 3 },
-	});
+	state.push_buffer_history_entry(
+		buffer_id,
+		BufferHistoryEntry {
+			edits: vec![BufferEditSnapshot {
+				start_byte: 1,
+				deleted_text: String::new(),
+				inserted_text: "x".to_string(),
+			}],
+			before_cursor: CursorState { row: 1, col: 2 },
+			after_cursor: CursorState { row: 1, col: 3 },
+		},
+	);
 
 	state.undo_active_buffer_edit();
 
@@ -788,15 +791,18 @@ fn redo_active_buffer_edit_should_reapply_last_undone_change() {
 	state.move_cursor_right();
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	state.insert_char_at_cursor('x');
-	state.push_buffer_history_entry(buffer_id, BufferHistoryEntry {
-		edits:         vec![BufferEditSnapshot {
-			start_byte:    1,
-			deleted_text:  String::new(),
-			inserted_text: "x".to_string(),
-		}],
-		before_cursor: CursorState { row: 1, col: 2 },
-		after_cursor:  CursorState { row: 1, col: 3 },
-	});
+	state.push_buffer_history_entry(
+		buffer_id,
+		BufferHistoryEntry {
+			edits: vec![BufferEditSnapshot {
+				start_byte: 1,
+				deleted_text: String::new(),
+				inserted_text: "x".to_string(),
+			}],
+			before_cursor: CursorState { row: 1, col: 2 },
+			after_cursor: CursorState { row: 1, col: 3 },
+		},
+	);
 	state.undo_active_buffer_edit();
 
 	state.redo_active_buffer_edit();

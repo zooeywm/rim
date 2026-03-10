@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use super::common::{set_active_buffer_text, test_state};
-use crate::state::{BufferEditSnapshot, BufferHistoryEntry, BufferSwitchDirection, CursorState, RimState, SplitAxis};
+use crate::state::{
+	BufferEditSnapshot, BufferHistoryEntry, BufferSwitchDirection, CursorState, RimState, SplitAxis,
+};
 
 #[test]
 fn same_buffer_in_different_windows_should_keep_separate_cursor_positions() {
@@ -24,7 +26,7 @@ fn same_buffer_in_different_windows_should_keep_separate_cursor_positions() {
 }
 
 #[test]
-fn switching_buffers_in_same_window_should_keep_window_cursor_position() {
+fn switching_buffers_in_same_window_should_restore_cursor_per_buffer() {
 	let mut state = test_state();
 	let b1 = state.active_buffer_id().expect("active buffer exists");
 	let b2 = state.create_buffer(Some(PathBuf::from("b2.rs")), "x\ny\nz");
@@ -37,15 +39,20 @@ fn switching_buffers_in_same_window_should_keep_window_cursor_position() {
 
 	state.switch_active_window_buffer(BufferSwitchDirection::Next);
 	assert_eq!(state.active_buffer_id(), Some(b2));
-	assert_eq!(state.active_cursor().row, 3);
+	assert_eq!(state.active_cursor().row, 1);
 	assert_eq!(state.active_cursor().col, 1);
 
 	state.move_cursor_down();
-	assert_eq!(state.active_cursor().row, 3);
+	assert_eq!(state.active_cursor().row, 2);
 
 	state.switch_active_window_buffer(BufferSwitchDirection::Prev);
 	assert_eq!(state.active_buffer_id(), Some(b1));
 	assert_eq!(state.active_cursor().row, 3);
+	assert_eq!(state.active_cursor().col, 1);
+
+	state.switch_active_window_buffer(BufferSwitchDirection::Next);
+	assert_eq!(state.active_buffer_id(), Some(b2));
+	assert_eq!(state.active_cursor().row, 2);
 	assert_eq!(state.active_cursor().col, 1);
 }
 
@@ -99,6 +106,66 @@ fn switch_active_window_buffer_should_realign_scroll_to_target_cursor() {
 
 	let scroll_y = state.windows.get(active_window_id).expect("active window should exist").scroll_y;
 	assert_eq!(scroll_y, 0);
+}
+
+#[test]
+fn switching_to_short_buffer_should_not_keep_old_scroll_offset() {
+	let mut state = test_state();
+	let b2 = state.create_buffer(Some(PathBuf::from("short.rs")), "a\nb\nc\nd\ne");
+	let active_window_id = state.active_window_id();
+	set_active_buffer_text(
+		&mut state,
+		&(1..=200).map(|idx| format!("line-{idx}")).collect::<Vec<_>>().join("\n"),
+	);
+	state.update_active_tab_layout(80, 10);
+	{
+		let window = state.windows.get_mut(active_window_id).expect("active window should exist");
+		window.cursor = CursorState { row: 100, col: 1 };
+		window.scroll_y = 98;
+	}
+
+	state.switch_active_window_buffer(BufferSwitchDirection::Next);
+
+	assert_eq!(state.active_buffer_id(), Some(b2));
+	assert_eq!(state.active_cursor(), CursorState { row: 1, col: 1 });
+	let window = state.windows.get(active_window_id).expect("active window should exist");
+	assert_eq!(window.scroll_y, 0);
+}
+
+#[test]
+fn switching_back_to_buffer_should_restore_previous_scroll_position() {
+	let mut state = test_state();
+	let b1 = state.active_buffer_id().expect("active buffer exists");
+	let b2 = state.create_buffer(
+		Some(PathBuf::from("other.rs")),
+		(1..=200).map(|idx| format!("other-{idx}")).collect::<Vec<_>>().join("\n"),
+	);
+	let active_window_id = state.active_window_id();
+	set_active_buffer_text(
+		&mut state,
+		&(1..=200).map(|idx| format!("line-{idx}")).collect::<Vec<_>>().join("\n"),
+	);
+	state.update_active_tab_layout(80, 10);
+	{
+		let window = state.windows.get_mut(active_window_id).expect("active window should exist");
+		window.cursor = CursorState { row: 155, col: 1 };
+		window.scroll_y = 153;
+	}
+
+	state.switch_active_window_buffer(BufferSwitchDirection::Next);
+	assert_eq!(state.active_buffer_id(), Some(b2));
+	{
+		let window = state.windows.get_mut(active_window_id).expect("active window should exist");
+		window.cursor = CursorState { row: 20, col: 1 };
+		window.scroll_y = 18;
+	}
+
+	state.switch_active_window_buffer(BufferSwitchDirection::Prev);
+
+	assert_eq!(state.active_buffer_id(), Some(b1));
+	assert_eq!(state.active_cursor(), CursorState { row: 155, col: 1 });
+	let window = state.windows.get(active_window_id).expect("active window should exist");
+	assert_eq!(window.scroll_y, 153);
 }
 
 #[test]
@@ -287,15 +354,18 @@ fn undo_back_to_clean_text_should_clear_dirty() {
 	let buffer_id = state.active_buffer_id().expect("active buffer exists");
 	set_active_buffer_text(&mut state, "ab");
 	state.insert_char_at_cursor('x');
-	state.push_buffer_history_entry(buffer_id, BufferHistoryEntry {
-		edits:         vec![BufferEditSnapshot {
-			start_byte:    0,
-			deleted_text:  String::new(),
-			inserted_text: "x".to_string(),
-		}],
-		before_cursor: CursorState { row: 1, col: 1 },
-		after_cursor:  CursorState { row: 1, col: 2 },
-	});
+	state.push_buffer_history_entry(
+		buffer_id,
+		BufferHistoryEntry {
+			edits: vec![BufferEditSnapshot {
+				start_byte: 0,
+				deleted_text: String::new(),
+				inserted_text: "x".to_string(),
+			}],
+			before_cursor: CursorState { row: 1, col: 1 },
+			after_cursor: CursorState { row: 1, col: 2 },
+		},
+	);
 
 	assert!(state.buffers.get(buffer_id).expect("buffer exists").dirty);
 

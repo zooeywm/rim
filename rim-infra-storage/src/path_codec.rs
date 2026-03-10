@@ -144,3 +144,5 @@ fn decode_underscore_flat_source_path(encoded: &str) -> Result<Option<PathBuf>> 
 pub(super) fn user_swap_dir() -> PathBuf { user_state_root().join("swp") }
 
 pub(super) fn user_undo_dir() -> PathBuf { user_state_root().join("undo") }
+
+pub(super) fn user_session_dir() -> PathBuf { user_state_root().join("session") }

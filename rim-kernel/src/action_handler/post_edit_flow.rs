@@ -2,19 +2,22 @@ use ropey::Rope;
 use tracing::error;
 
 use super::{ActionHandlerError, RimState};
-use crate::{ports::{StorageIo, SwapEditOp}, state::{BufferId, compute_rope_text_diff}};
+use crate::{
+	ports::{StorageIo, SwapEditOp},
+	state::{BufferId, compute_rope_text_diff},
+};
 
 #[derive(Debug, Clone)]
 pub(super) struct BufferTextSnapshot {
 	pub(super) buffer_id: BufferId,
-	pub(super) text:      Rope,
-	pub(super) cursor:    crate::state::CursorState,
+	pub(super) text: Rope,
+	pub(super) cursor: crate::state::CursorState,
 }
 
 #[derive(Debug)]
 struct TextDiff {
-	start_char:    usize,
-	deleted_text:  String,
+	start_char: usize,
+	deleted_text: String,
 	inserted_text: String,
 }
 
@@ -25,7 +28,9 @@ pub(super) fn capture_active_buffer_text_snapshot(state: &RimState) -> Option<Bu
 }
 
 pub(super) fn enqueue_swap_ops<P>(ports: &P, state: &RimState, buffer_id: BufferId, ops: Vec<SwapEditOp>)
-where P: StorageIo {
+where
+	P: StorageIo,
+{
 	if ops.is_empty() {
 		return;
 	}
@@ -141,8 +146,8 @@ fn compute_text_diff(before: &str, after: &str) -> Option<TextDiff> {
 	}
 
 	Some(TextDiff {
-		start_char:    common_prefix,
-		deleted_text:  before_chars[common_prefix..before_mid_end].iter().collect(),
+		start_char: common_prefix,
+		deleted_text: before_chars[common_prefix..before_mid_end].iter().collect(),
 		inserted_text: after_chars[common_prefix..after_mid_end].iter().collect(),
 	})
 }

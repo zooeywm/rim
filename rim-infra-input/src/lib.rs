@@ -1,4 +1,8 @@
-use std::thread;
+use std::{
+	sync::{Arc, atomic::{AtomicBool, Ordering}},
+	thread,
+	time::Duration,
+};
 
 use crossterm::{event, event::{Event, KeyCode as CrosstermKeyCode, KeyEvent as CrosstermKeyEvent, KeyEventKind as CrosstermKeyEventKind, KeyModifiers as CrosstermKeyModifiers}};
 use rim_kernel::action::{AppAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction};
@@ -57,17 +61,35 @@ impl InputHandler {
 
 pub struct InputPumpService {
 	join_handle: Option<std::thread::JoinHandle<()>>,
+	running:     Arc<AtomicBool>,
 	event_tx:    flume::Sender<AppAction>,
 }
 
 impl InputPumpService {
-	pub fn new(event_tx: flume::Sender<AppAction>) -> Self { Self { join_handle: None, event_tx } }
+	pub fn new(event_tx: flume::Sender<AppAction>) -> Self {
+		Self { join_handle: None, running: Arc::new(AtomicBool::new(false)), event_tx }
+	}
 
 	pub fn start(&mut self) {
+		if self.join_handle.is_some() {
+			return;
+		}
 		let input_handler = InputHandler;
+		let running = self.running.clone();
+		running.store(true, Ordering::SeqCst);
 		let event_tx = self.event_tx.clone();
 		let join_handle = thread::spawn(move || {
-			loop {
+			while running.load(Ordering::SeqCst) {
+				let poll_ready = match event::poll(Duration::from_millis(50)) {
+					Ok(ready) => ready,
+					Err(err) => {
+						error!("input pump stopped: failed to poll terminal event: {}", err);
+						break;
+					}
+				};
+				if !poll_ready {
+					continue;
+				}
 				let evt = match event::read() {
 					Ok(evt) => evt,
 					Err(err) => {
@@ -85,16 +107,17 @@ impl InputPumpService {
 		});
 		self.join_handle = Some(join_handle);
 	}
-}
 
-impl Drop for InputPumpService {
-	fn drop(&mut self) {
-		if let Some(join_handle) = self.join_handle.take()
-			&& join_handle.is_finished()
-		{
+	pub fn stop(&mut self) {
+		self.running.store(false, Ordering::SeqCst);
+		if let Some(join_handle) = self.join_handle.take() {
 			let _ = join_handle.join();
 		}
 	}
+}
+
+impl Drop for InputPumpService {
+	fn drop(&mut self) { self.stop(); }
 }
 
 #[cfg(test)]

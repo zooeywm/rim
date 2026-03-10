@@ -1,5 +1,11 @@
-use super::{super::mode_flow::SequenceMatch, support::{dispatch_test_action, map_normal_key, resolve_keys}};
-use crate::{action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction}, state::{NormalSequenceKey, RimState}};
+use super::{
+	super::mode_flow::SequenceMatch,
+	support::{dispatch_test_action, map_normal_key, resolve_keys},
+};
+use crate::{
+	action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction},
+	state::{NormalSequenceKey, RimState},
+};
 
 #[test]
 fn to_normal_key_should_map_leader_char_to_leader_token() {

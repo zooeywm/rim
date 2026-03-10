@@ -15,6 +15,7 @@
 - File watching: automatic reload after external changes
 - Swap recovery: restore unsaved text after a crash
 - Persistent undo/redo: reopen a file and restore history
+- Workspace session restore: reopen `rim` without file arguments and restore tabs, windows, buffers, undo stacks, and per-window view state
 - Windows MSVC cross compilation: `cargo win-release`
 
 ## Workspace Layout
@@ -52,6 +53,8 @@
 - `rim-infra-storage/src/undo_history/` is split into:
   - `protocol`
   - `session_flow`
+- `rim-kernel/src/state/session.rs` exports and restores workspace snapshots
+- `rim-infra-storage/src/session.rs` persists the last workspace session snapshot
 
 This means the current architecture boundary is no longer just crate-level. The main maintenance units are now:
 
@@ -93,11 +96,12 @@ target/x86_64-pc-windows-msvc/release/rim.exe
 
 ## Runtime Files
 
-By default, `rim` maintains three runtime directories under the user state root:
+By default, `rim` maintains four runtime directories under the user state root:
 
 - `logs/`: runtime logs
 - `swp/`: crash recovery swap files
 - `undo/`: persistent undo/redo history
+- `session/`: the last restored workspace session snapshot
 
 The root directory is resolved centrally by `rim-paths`.
 
@@ -129,6 +133,8 @@ Directory layout:
 rim/
 ├── logs/
 │   └── rim.log
+├── session/
+│   └── last-session.json
 ├── swp/
 │   ├── _home_zooeywm_a.txt.swp
 │   └── _home_zooeywm_a.txt.<pid>.lease
@@ -145,6 +151,19 @@ File naming rules:
 - Examples:
   - Linux: `/home/zooeywm/a.txt` -> `_home_zooeywm_a.txt`
   - Windows: `C:\Users\zooey\a.txt` -> `C_Users_zooey_a.txt`
+
+Workspace session rules:
+
+- When `rim` starts without any file arguments, it first tries to load `session/last-session.json`
+- When `rim` starts with file arguments, session restore is skipped and the explicit files win
+- A normal quit saves the full current workspace snapshot
+- The session snapshot restores:
+  - buffer order
+  - tab and window layout
+  - active tab and active window
+  - buffer text, clean baseline, undo stack, and redo stack
+  - per `window + buffer` cursor and scroll state
+- File-backed buffers are rebound to file watching and swap tracking after restore
 
 ## UI Conventions
 
@@ -290,13 +309,17 @@ The status bar will show: `block insert supports text, tab, backspace, esc only`
 - `:q!`
 - `:quit!`
 - `:qa`
+- `:qa!`
 - `:w`
 - `:w!`
 - `:wa`
+- `:wqa`
+- `:wqa!`
 - `:wq`
 - `:wq!`
 - `:e`
 - `:e!`
+- `:yazi`
 - `:e <path>`
 - `:w <path>`
 - `:w! <path>`
@@ -313,27 +336,39 @@ The status bar will show: `block insert supports text, tab, backspace, esc only`
 - `:q!`
   - Ignore dirty checks and use the same window / tab / app closing order as `:q`
 - `:qa`
-  - Quit the application immediately
+  - If any buffer is dirty, quitting is blocked
+  - Otherwise, quit the application
+- `:qa!`
+  - Ignore dirty checks and quit the application immediately
 - `:w`
   - Save the current buffer
 - `:w!`
   - Force-save the current buffer
 - `:wa`
   - Save all file-backed buffers
+- `:wqa`
+  - Save all file-backed buffers, then quit the application
+  - If any buffer has no file path, the command is blocked
+  - If any file-backed buffer was changed externally, the command is blocked and `:wqa!` is suggested
+- `:wqa!`
+  - Force-save all file-backed buffers, then quit the application
+  - If any buffer has no file path, the command is blocked
 - `:wq`
-  - Save the current buffer, then close the current closing scope
+  - Save the current buffer, then quit the application
 - `:wq!`
-  - Force-save, then close the current closing scope
+  - Force-save the current buffer, then quit the application
 - `:e`
   - Reload the file bound to the current buffer
 - `:e!`
   - Force-reload the current buffer, including a dirty buffer
+- `:yazi`
+  - Suspend the current TUI, launch `yazi`, and open the selected file if one is chosen
 - `:e <path>`
   - Open the given path after normalizing it to an absolute path
 - `:w <path>` / `:w! <path>`
   - Save the current buffer to the given path
 - `:wq <path>` / `:wq! <path>`
-  - Save to the given path, then close the current closing scope
+  - Save to the given path, then quit the application
 
 ## File And Buffer Behavior
 

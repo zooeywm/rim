@@ -1,7 +1,16 @@
 use std::ops::ControlFlow;
 
-use super::{command_flow, enqueue_history_save_for_buffer, handle_pending_swap_decision_key, post_edit_flow};
-use crate::{action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction, WindowAction}, ports::{FileWatcher, StorageIo}, state::{EditorMode, NormalSequenceKey, RimState}};
+use super::{
+	command_flow, enqueue_history_save_for_buffer, handle_pending_swap_decision_key, post_edit_flow,
+};
+use crate::{
+	action::{
+		AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction,
+		WindowAction,
+	},
+	ports::{FilePicker, FileWatcher, StorageIo},
+	state::{EditorMode, NormalSequenceKey, RimState},
+};
 
 #[derive(Debug)]
 pub(super) enum SequenceMatch {
@@ -11,7 +20,9 @@ pub(super) enum SequenceMatch {
 }
 
 pub(super) fn handle_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
-where P: StorageIo + FileWatcher {
+where
+	P: StorageIo + FileWatcher + FilePicker,
+{
 	if state.pending_swap_decision.is_some() {
 		return handle_pending_swap_decision_key(ports, state, key);
 	}
@@ -75,7 +86,9 @@ where P: StorageIo + FileWatcher {
 }
 
 pub(super) fn handle_normal_mode_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
-where P: StorageIo + FileWatcher {
+where
+	P: StorageIo + FileWatcher + FilePicker,
+{
 	let Some(normal_key) = to_normal_key(state, key) else {
 		state.normal_sequence.clear();
 		state.status_bar.key_sequence.clear();

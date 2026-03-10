@@ -1,11 +1,17 @@
-use ratatui::{buffer::Buffer, layout::{Constraint, Layout, Rect}, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Paragraph, Widget}};
+use ratatui::{
+	buffer::Buffer,
+	layout::{Constraint, Layout, Rect},
+	style::{Color, Modifier, Style},
+	text::{Line, Span},
+	widgets::{Paragraph, Widget},
+};
 use rim_kernel::state::RimState;
 
 pub(super) struct TopBarWidget {
 	buffer_spans: Vec<Span<'static>>,
-	tab_spans:    Vec<Span<'static>>,
-	tabs_width:   u16,
-	show_tabs:    bool,
+	tab_spans: Vec<Span<'static>>,
+	tabs_width: u16,
+	show_tabs: bool,
 }
 
 impl TopBarWidget {

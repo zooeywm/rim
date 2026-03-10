@@ -1,7 +1,7 @@
 use std::{cell::RefCell, ops::ControlFlow, path::{Path, PathBuf}};
 
 use super::super::mode_flow::SequenceMatch;
-use crate::{action::{AppAction, KeyEvent}, ports::{FileWatcher, FileWatcherError, StorageIo, StorageIoError, SwapEditOp}, state::{BufferId, NormalSequenceKey, PersistedBufferHistory, RimState}};
+use crate::{action::{AppAction, KeyEvent}, ports::{FilePicker, FilePickerError, FileWatcher, FileWatcherError, StorageIo, StorageIoError, SwapEditOp}, state::{BufferId, NormalSequenceKey, PersistedBufferHistory, RimState, WorkspaceSessionSnapshot}};
 
 pub(super) struct TestPorts;
 
@@ -9,6 +9,10 @@ impl FileWatcher for TestPorts {
 	fn enqueue_watch(&self, _buffer_id: BufferId, _path: PathBuf) -> Result<(), FileWatcherError> { Ok(()) }
 
 	fn enqueue_unwatch(&self, _buffer_id: BufferId) -> Result<(), FileWatcherError> { Ok(()) }
+}
+
+impl FilePicker for TestPorts {
+	fn pick_open_path(&self) -> Result<Option<PathBuf>, FilePickerError> { Ok(None) }
 }
 
 impl StorageIo for TestPorts {
@@ -69,6 +73,7 @@ impl StorageIo for TestPorts {
 		_buffer_id: BufferId,
 		_source_path: PathBuf,
 		_expected_text: String,
+		_restore_view: bool,
 	) -> Result<(), StorageIoError> {
 		Ok(())
 	}
@@ -92,19 +97,35 @@ pub(super) fn dispatch_test_action(state: &mut RimState, action: AppAction) -> C
 
 #[derive(Default)]
 pub(super) struct RecordingPorts {
-	pub(super) file_loads:     RefCell<Vec<(BufferId, PathBuf)>>,
-	pub(super) external_loads: RefCell<Vec<(BufferId, PathBuf)>>,
-	pub(super) swap_edits:     RefCell<Vec<(BufferId, PathBuf, SwapEditOp)>>,
-	pub(super) history_saves:  RefCell<Vec<(BufferId, PathBuf, PersistedBufferHistory)>>,
+	pub(super) file_loads:       RefCell<Vec<(BufferId, PathBuf)>>,
+	pub(super) external_loads:   RefCell<Vec<(BufferId, PathBuf)>>,
+	pub(super) swap_edits:       RefCell<Vec<(BufferId, PathBuf, SwapEditOp)>>,
+	pub(super) history_saves:    RefCell<Vec<(BufferId, PathBuf, PersistedBufferHistory)>>,
+	pub(super) open_requests:    RefCell<Vec<(BufferId, PathBuf)>>,
+	pub(super) watch_requests:   RefCell<Vec<(BufferId, PathBuf)>>,
+	pub(super) initialize_bases: RefCell<Vec<(BufferId, PathBuf, String, bool)>>,
+	pub(super) session_saves:    RefCell<Vec<WorkspaceSessionSnapshot>>,
 }
 
 impl FileWatcher for RecordingPorts {
-	fn enqueue_watch(&self, _buffer_id: BufferId, _path: PathBuf) -> Result<(), FileWatcherError> { Ok(()) }
+	fn enqueue_watch(&self, buffer_id: BufferId, path: PathBuf) -> Result<(), FileWatcherError> {
+		self.watch_requests.borrow_mut().push((buffer_id, path));
+		Ok(())
+	}
 
 	fn enqueue_unwatch(&self, _buffer_id: BufferId) -> Result<(), FileWatcherError> { Ok(()) }
 }
 
+impl FilePicker for RecordingPorts {
+	fn pick_open_path(&self) -> Result<Option<PathBuf>, FilePickerError> { Ok(None) }
+}
+
 impl StorageIo for RecordingPorts {
+	fn enqueue_save_workspace_session(&self, snapshot: WorkspaceSessionSnapshot) -> Result<(), StorageIoError> {
+		self.session_saves.borrow_mut().push(snapshot);
+		Ok(())
+	}
+
 	fn enqueue_load(&self, buffer_id: BufferId, path: PathBuf) -> Result<(), StorageIoError> {
 		self.file_loads.borrow_mut().push((buffer_id, path));
 		Ok(())
@@ -119,7 +140,10 @@ impl StorageIo for RecordingPorts {
 		Ok(())
 	}
 
-	fn enqueue_open(&self, _buffer_id: BufferId, _source_path: PathBuf) -> Result<(), StorageIoError> { Ok(()) }
+	fn enqueue_open(&self, buffer_id: BufferId, source_path: PathBuf) -> Result<(), StorageIoError> {
+		self.open_requests.borrow_mut().push((buffer_id, source_path));
+		Ok(())
+	}
 
 	fn enqueue_detect_conflict(
 		&self,
@@ -145,11 +169,12 @@ impl StorageIo for RecordingPorts {
 
 	fn enqueue_initialize_base(
 		&self,
-		_buffer_id: BufferId,
-		_source_path: PathBuf,
-		_base_text: String,
-		_delete_existing: bool,
+		buffer_id: BufferId,
+		source_path: PathBuf,
+		base_text: String,
+		delete_existing: bool,
 	) -> Result<(), StorageIoError> {
+		self.initialize_bases.borrow_mut().push((buffer_id, source_path, base_text, delete_existing));
 		Ok(())
 	}
 
@@ -167,6 +192,7 @@ impl StorageIo for RecordingPorts {
 		_buffer_id: BufferId,
 		_source_path: PathBuf,
 		_expected_text: String,
+		_restore_view: bool,
 	) -> Result<(), StorageIoError> {
 		Ok(())
 	}
@@ -200,6 +226,106 @@ impl FileWatcher for SwapDecisionPorts {
 		self.unwatches.borrow_mut().push(buffer_id);
 		Ok(())
 	}
+}
+
+impl FilePicker for SwapDecisionPorts {
+	fn pick_open_path(&self) -> Result<Option<PathBuf>, FilePickerError> { Ok(None) }
+}
+
+#[derive(Default)]
+pub(super) struct FilePickerPorts {
+	pub(super) picked_path: RefCell<Option<PathBuf>>,
+	pub(super) file_loads:  RefCell<Vec<(BufferId, PathBuf)>>,
+}
+
+impl FileWatcher for FilePickerPorts {
+	fn enqueue_watch(&self, _buffer_id: BufferId, _path: PathBuf) -> Result<(), FileWatcherError> { Ok(()) }
+
+	fn enqueue_unwatch(&self, _buffer_id: BufferId) -> Result<(), FileWatcherError> { Ok(()) }
+}
+
+impl FilePicker for FilePickerPorts {
+	fn pick_open_path(&self) -> Result<Option<PathBuf>, FilePickerError> {
+		Ok(self.picked_path.borrow().clone())
+	}
+}
+
+impl StorageIo for FilePickerPorts {
+	fn enqueue_load(&self, buffer_id: BufferId, path: PathBuf) -> Result<(), StorageIoError> {
+		self.file_loads.borrow_mut().push((buffer_id, path));
+		Ok(())
+	}
+
+	fn enqueue_save(&self, _buffer_id: BufferId, _path: PathBuf, _text: String) -> Result<(), StorageIoError> {
+		Ok(())
+	}
+
+	fn enqueue_external_load(&self, _buffer_id: BufferId, _path: PathBuf) -> Result<(), StorageIoError> {
+		Ok(())
+	}
+
+	fn enqueue_open(&self, _buffer_id: BufferId, _source_path: PathBuf) -> Result<(), StorageIoError> { Ok(()) }
+
+	fn enqueue_detect_conflict(
+		&self,
+		_buffer_id: BufferId,
+		_source_path: PathBuf,
+	) -> Result<(), StorageIoError> {
+		Ok(())
+	}
+
+	fn enqueue_edit(
+		&self,
+		_buffer_id: BufferId,
+		_source_path: PathBuf,
+		_op: SwapEditOp,
+	) -> Result<(), StorageIoError> {
+		Ok(())
+	}
+
+	fn enqueue_mark_clean(&self, _buffer_id: BufferId, _source_path: PathBuf) -> Result<(), StorageIoError> {
+		Ok(())
+	}
+
+	fn enqueue_initialize_base(
+		&self,
+		_buffer_id: BufferId,
+		_source_path: PathBuf,
+		_base_text: String,
+		_delete_existing: bool,
+	) -> Result<(), StorageIoError> {
+		Ok(())
+	}
+
+	fn enqueue_recover(
+		&self,
+		_buffer_id: BufferId,
+		_source_path: PathBuf,
+		_base_text: String,
+	) -> Result<(), StorageIoError> {
+		Ok(())
+	}
+
+	fn enqueue_load_history(
+		&self,
+		_buffer_id: BufferId,
+		_source_path: PathBuf,
+		_expected_text: String,
+		_restore_view: bool,
+	) -> Result<(), StorageIoError> {
+		Ok(())
+	}
+
+	fn enqueue_save_history(
+		&self,
+		_buffer_id: BufferId,
+		_source_path: PathBuf,
+		_history: PersistedBufferHistory,
+	) -> Result<(), StorageIoError> {
+		Ok(())
+	}
+
+	fn enqueue_close(&self, _buffer_id: BufferId) -> Result<(), StorageIoError> { Ok(()) }
 }
 
 impl StorageIo for SwapDecisionPorts {
@@ -259,6 +385,7 @@ impl StorageIo for SwapDecisionPorts {
 		_buffer_id: BufferId,
 		_source_path: PathBuf,
 		_expected_text: String,
+		_restore_view: bool,
 	) -> Result<(), StorageIoError> {
 		Ok(())
 	}

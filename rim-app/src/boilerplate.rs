@@ -2,11 +2,19 @@ use std::path::PathBuf;
 
 use rim_infra_file_watcher::FileWatcherImpl;
 use rim_infra_storage::StorageIoImpl;
-use rim_kernel::{ports::{FileWatcher, FileWatcherError, StorageIo, StorageIoError, SwapEditOp}, state::{BufferId, PersistedBufferHistory}};
+use rim_kernel::{ports::{FileWatcher, FileWatcherError, StorageIo, StorageIoError, SwapEditOp}, state::{BufferId, PersistedBufferHistory, WorkspaceSessionSnapshot}};
 
 use crate::app::AppPorts;
 
 impl StorageIo for AppPorts<'_> {
+	fn enqueue_load_workspace_session(&self) -> Result<(), StorageIoError> {
+		StorageIoImpl::inj_ref(self.storage_io).enqueue_load_workspace_session()
+	}
+
+	fn enqueue_save_workspace_session(&self, snapshot: WorkspaceSessionSnapshot) -> Result<(), StorageIoError> {
+		StorageIoImpl::inj_ref(self.storage_io).enqueue_save_workspace_session(snapshot)
+	}
+
 	fn enqueue_load(&self, buffer_id: BufferId, path: PathBuf) -> Result<(), StorageIoError> {
 		StorageIoImpl::inj_ref(self.storage_io).enqueue_load(buffer_id, path)
 	}
@@ -69,8 +77,14 @@ impl StorageIo for AppPorts<'_> {
 		buffer_id: BufferId,
 		source_path: PathBuf,
 		expected_text: String,
+		restore_view: bool,
 	) -> Result<(), StorageIoError> {
-		StorageIoImpl::inj_ref(self.storage_io).enqueue_load_history(buffer_id, source_path, expected_text)
+		StorageIoImpl::inj_ref(self.storage_io).enqueue_load_history(
+			buffer_id,
+			source_path,
+			expected_text,
+			restore_view,
+		)
 	}
 
 	fn enqueue_save_history(

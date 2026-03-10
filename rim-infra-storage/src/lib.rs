@@ -1,15 +1,16 @@
 use std::{path::PathBuf, sync::Mutex, thread, time::Duration};
 
 use anyhow::Result;
-use rim_kernel::{action::{AppAction, FileLoadSource}, ports::{StorageIo, StorageIoError, SwapEditOp}, state::{BufferId, PersistedBufferHistory}};
+use rim_kernel::{action::{AppAction, FileLoadSource}, ports::{StorageIo, StorageIoError, SwapEditOp}, state::{BufferId, PersistedBufferHistory, WorkspaceSessionSnapshot}};
 use tracing::error;
 
 mod path_codec;
+mod session;
 mod swap_session;
 mod undo_history;
 mod worker;
 
-use path_codec::{user_swap_dir, user_undo_dir};
+use path_codec::{user_session_dir, user_swap_dir, user_undo_dir};
 use worker::{StorageIoRequest, run_worker};
 
 const SWAP_FILE_MAGIC: &str = "RIMSWP\t1";
@@ -25,6 +26,7 @@ pub struct StorageIoState {
 	app_event_tx: flume::Sender<AppAction>,
 	swap_dir:     PathBuf,
 	undo_dir:     PathBuf,
+	session_dir:  PathBuf,
 	worker_join:  Mutex<Option<thread::JoinHandle<()>>>,
 }
 
@@ -35,6 +37,24 @@ impl AsRef<StorageIoState> for StorageIoState {
 impl<Deps> StorageIo for StorageIoImpl<Deps>
 where Deps: AsRef<StorageIoState>
 {
+	fn enqueue_load_workspace_session(&self) -> Result<(), StorageIoError> {
+		send_request(
+			&self.request_tx,
+			StorageIoRequest::LoadWorkspaceSession,
+			"enqueue_load_workspace_session",
+			"load_workspace_session",
+		)
+	}
+
+	fn enqueue_save_workspace_session(&self, snapshot: WorkspaceSessionSnapshot) -> Result<(), StorageIoError> {
+		send_request(
+			&self.request_tx,
+			StorageIoRequest::SaveWorkspaceSession { snapshot },
+			"enqueue_save_workspace_session",
+			"save_workspace_session",
+		)
+	}
+
 	fn enqueue_load(&self, buffer_id: BufferId, path: PathBuf) -> Result<(), StorageIoError> {
 		send_request(
 			&self.request_tx,
@@ -132,10 +152,11 @@ where Deps: AsRef<StorageIoState>
 		buffer_id: BufferId,
 		source_path: PathBuf,
 		expected_text: String,
+		restore_view: bool,
 	) -> Result<(), StorageIoError> {
 		send_request(
 			&self.request_tx,
-			StorageIoRequest::LoadHistory { buffer_id, source_path, expected_text },
+			StorageIoRequest::LoadHistory { buffer_id, source_path, expected_text, restore_view },
 			"enqueue_load_history",
 			"load_history",
 		)
@@ -181,6 +202,7 @@ impl StorageIoState {
 			app_event_tx: event_tx,
 			swap_dir: user_swap_dir(),
 			undo_dir: user_undo_dir(),
+			session_dir: user_session_dir(),
 			worker_join: Mutex::new(None),
 		}
 	}
@@ -194,8 +216,9 @@ impl StorageIoState {
 		let event_tx = self.app_event_tx.clone();
 		let swap_dir = self.swap_dir.clone();
 		let undo_dir = self.undo_dir.clone();
+		let session_dir = self.session_dir.clone();
 		let join = thread::spawn(move || {
-			if let Err(err) = run_worker(request_rx, event_tx, swap_dir, undo_dir) {
+			if let Err(err) = run_worker(request_rx, event_tx, swap_dir, undo_dir, session_dir) {
 				error!("storage worker exited with error: {:#}", err);
 			}
 		});

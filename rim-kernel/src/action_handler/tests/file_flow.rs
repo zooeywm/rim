@@ -1,7 +1,7 @@
 use std::{ops::ControlFlow, path::PathBuf, time::{Duration, Instant}};
 
-use super::support::{RecordingPorts, SwapDecisionPorts, dispatch_test_action, normalize_test_path};
-use crate::{action::{AppAction, EditorAction, FileAction, KeyCode, KeyEvent, KeyModifiers, SwapConflictInfo}, state::{BufferEditSnapshot, BufferHistoryEntry, CursorState, PendingSwapDecision, PersistedBufferHistory, RimState}};
+use super::support::{FilePickerPorts, RecordingPorts, SwapDecisionPorts, dispatch_test_action, normalize_test_path};
+use crate::{action::{AppAction, EditorAction, FileAction, KeyCode, KeyEvent, KeyModifiers, SwapConflictInfo, SystemAction}, state::{BufferEditSnapshot, BufferHistoryEntry, CursorState, PendingSwapDecision, PersistedBufferHistory, RimState, WorkspaceBufferSnapshot, WorkspaceSessionSnapshot, WorkspaceTabSnapshot, WorkspaceWindowBufferViewSnapshot, WorkspaceWindowSnapshot}};
 
 #[test]
 fn file_load_completed_should_mark_buffer_clean() {
@@ -37,6 +37,93 @@ fn file_save_completed_should_mark_buffer_clean() {
 
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
 	assert!(!buffer.dirty);
+}
+
+#[test]
+fn system_quit_should_enqueue_workspace_session_save() {
+	let mut state = RimState::new();
+	let ports = RecordingPorts::default();
+	let buffer_id = state.create_buffer(Some(PathBuf::from("a.txt")), "hello");
+	state.bind_buffer_to_active_window(buffer_id);
+
+	let flow = state.apply_action(&ports, AppAction::System(SystemAction::Quit));
+
+	assert!(matches!(flow, ControlFlow::Break(())));
+	assert_eq!(ports.session_saves.borrow().len(), 1);
+}
+
+#[test]
+fn workspace_session_loaded_should_restore_state_and_enqueue_runtime_bindings() {
+	let mut state = RimState::new();
+	let ports = RecordingPorts::default();
+	let source_path = normalize_test_path("a.rs");
+	let snapshot = WorkspaceSessionSnapshot {
+		version:          1,
+		buffers:          vec![
+			WorkspaceBufferSnapshot {
+				path:       Some(source_path.clone()),
+				text:       "alpha\nbeta\n".to_string(),
+				clean_text: "alpha\nbeta\n".to_string(),
+				undo_stack: Vec::new(),
+				redo_stack: Vec::new(),
+			},
+			WorkspaceBufferSnapshot {
+				path:       None,
+				text:       "scratch".to_string(),
+				clean_text: "scratch".to_string(),
+				undo_stack: Vec::new(),
+				redo_stack: Vec::new(),
+			},
+		],
+		buffer_order:     vec![0, 1],
+		tabs:             vec![WorkspaceTabSnapshot {
+			windows:             vec![WorkspaceWindowSnapshot {
+				buffer_index: Some(0),
+				x:            0,
+				y:            0,
+				width:        80,
+				height:       20,
+				views:        vec![WorkspaceWindowBufferViewSnapshot {
+					buffer_index: 0,
+					cursor:       CursorState { row: 2, col: 3 },
+					scroll_x:     1,
+					scroll_y:     4,
+				}],
+			}],
+			active_window_index: 0,
+		}],
+		active_tab_index: 0,
+	};
+
+	let flow = state
+		.apply_action(&ports, AppAction::File(FileAction::WorkspaceSessionLoaded { result: Ok(Some(snapshot)) }));
+
+	assert!(matches!(flow, ControlFlow::Continue(())));
+	assert_eq!(state.status_bar.message, "session restored");
+	assert_eq!(state.buffers.len(), 2);
+	assert_eq!(ports.open_requests.borrow().len(), 1);
+	assert_eq!(ports.watch_requests.borrow().len(), 1);
+	assert_eq!(ports.initialize_bases.borrow().len(), 1);
+	assert_eq!(ports.open_requests.borrow()[0].1, source_path);
+	assert_eq!(state.active_cursor(), CursorState { row: 2, col: 3 });
+	let active_window = state.windows.get(state.active_window_id()).expect("active window should exist");
+	assert_eq!(active_window.scroll_x, 1);
+	assert_eq!(active_window.scroll_y, 4);
+}
+
+#[test]
+fn workspace_session_loaded_none_should_create_untitled_buffer() {
+	let mut state = RimState::new();
+
+	let flow = dispatch_test_action(
+		&mut state,
+		AppAction::File(FileAction::WorkspaceSessionLoaded { result: Ok(None) }),
+	);
+
+	assert!(matches!(flow, ControlFlow::Continue(())));
+	assert_eq!(state.buffers.len(), 1);
+	assert_eq!(state.status_bar.message, "new file");
+	assert!(state.active_buffer_id().is_some());
 }
 
 #[test]
@@ -135,6 +222,44 @@ fn command_q_should_be_blocked_when_any_buffer_is_dirty() {
 }
 
 #[test]
+fn command_qa_should_be_blocked_when_any_buffer_is_dirty() {
+	let mut state = RimState::new();
+	let buffer_id = state.create_buffer(None, "abc");
+	state.bind_buffer_to_active_window(buffer_id);
+	state.set_buffer_dirty(buffer_id, true);
+	state.enter_command_mode();
+	state.push_command_char('q');
+	state.push_command_char('a');
+
+	let flow = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
+	);
+
+	assert!(matches!(flow, ControlFlow::Continue(())));
+	assert_eq!(state.status_bar.message, "quit all blocked: unsaved changes");
+}
+
+#[test]
+fn command_qa_bang_should_force_quit_when_buffers_are_dirty() {
+	let mut state = RimState::new();
+	let buffer_id = state.create_buffer(None, "abc");
+	state.bind_buffer_to_active_window(buffer_id);
+	state.set_buffer_dirty(buffer_id, true);
+	state.enter_command_mode();
+	state.push_command_char('q');
+	state.push_command_char('a');
+	state.push_command_char('!');
+
+	let flow = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
+	);
+
+	assert!(matches!(flow, ControlFlow::Break(())));
+}
+
+#[test]
 fn command_q_bang_should_force_quit_when_buffer_is_dirty() {
 	let mut state = RimState::new();
 	let buffer_id = state.create_buffer(None, "abc");
@@ -153,6 +278,155 @@ fn command_q_bang_should_force_quit_when_buffer_is_dirty() {
 }
 
 #[test]
+fn command_wq_should_break_after_save_completed_and_save_workspace_session() {
+	let mut state = RimState::new();
+	let ports = RecordingPorts::default();
+	let buffer_id = state.create_buffer(Some(PathBuf::from("a.txt")), "abc");
+	state.bind_buffer_to_active_window(buffer_id);
+	state.enter_command_mode();
+	state.push_command_char('w');
+	state.push_command_char('q');
+
+	let flow = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
+	);
+	assert!(matches!(flow, ControlFlow::Continue(())));
+	assert!(state.quit_after_save);
+
+	let flow = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::SaveCompleted { buffer_id, result: Ok(()) }),
+	);
+
+	assert!(matches!(flow, ControlFlow::Break(())));
+	assert_eq!(ports.session_saves.borrow().len(), 1);
+}
+
+#[test]
+fn command_wqa_should_enqueue_save_all_and_quit_after_last_save() {
+	let mut state = RimState::new();
+	let ports = RecordingPorts::default();
+	let first = state.create_buffer(Some(PathBuf::from("a.txt")), "a");
+	let second = state.create_buffer(Some(PathBuf::from("b.txt")), "b");
+	state.bind_buffer_to_active_window(first);
+	state.set_buffer_dirty(first, true);
+	state.set_buffer_dirty(second, true);
+	state.enter_command_mode();
+	state.push_command_char('w');
+	state.push_command_char('q');
+	state.push_command_char('a');
+
+	let flow = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
+	);
+	assert!(matches!(flow, ControlFlow::Continue(())));
+	assert!(state.quit_after_save);
+	assert_eq!(ports.file_loads.borrow().len(), 0);
+	assert_eq!(state.in_flight_internal_saves.len(), 2);
+
+	let flow = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::SaveCompleted { buffer_id: first, result: Ok(()) }),
+	);
+	assert!(matches!(flow, ControlFlow::Continue(())));
+	assert!(state.quit_after_save);
+	assert_eq!(ports.session_saves.borrow().len(), 0);
+
+	let flow = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::SaveCompleted { buffer_id: second, result: Ok(()) }),
+	);
+	assert!(matches!(flow, ControlFlow::Break(())));
+	assert_eq!(ports.session_saves.borrow().len(), 1);
+}
+
+#[test]
+fn command_wqa_should_be_blocked_when_any_buffer_has_no_path() {
+	let mut state = RimState::new();
+	let file_backed = state.create_buffer(Some(PathBuf::from("a.txt")), "a");
+	let untitled = state.create_buffer(None, "b");
+	state.bind_buffer_to_active_window(file_backed);
+	state.set_buffer_dirty(file_backed, true);
+	state.set_buffer_dirty(untitled, true);
+	state.enter_command_mode();
+	state.push_command_char('w');
+	state.push_command_char('q');
+	state.push_command_char('a');
+
+	let flow = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
+	);
+
+	assert!(matches!(flow, ControlFlow::Continue(())));
+	assert_eq!(state.status_bar.message, "save all failed: 1 buffer(s) have no file path");
+	assert!(!state.quit_after_save);
+}
+
+#[test]
+fn command_wqa_should_be_blocked_when_any_buffer_was_changed_externally() {
+	let mut state = RimState::new();
+	let first = state.create_buffer(Some(PathBuf::from("a.txt")), "a");
+	let second = state.create_buffer(Some(PathBuf::from("b.txt")), "b");
+	state.bind_buffer_to_active_window(first);
+	state.set_buffer_dirty(first, true);
+	state.set_buffer_dirty(second, true);
+	state.set_buffer_externally_modified(second, true);
+	state.enter_command_mode();
+	state.push_command_char('w');
+	state.push_command_char('q');
+	state.push_command_char('a');
+
+	let flow = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
+	);
+
+	assert!(matches!(flow, ControlFlow::Continue(())));
+	assert_eq!(state.status_bar.message, "save all blocked: file changed externally (use :wqa! to overwrite)");
+	assert!(!state.quit_after_save);
+}
+
+#[test]
+fn command_wqa_bang_should_force_save_all_and_quit() {
+	let mut state = RimState::new();
+	let ports = RecordingPorts::default();
+	let first = state.create_buffer(Some(PathBuf::from("a.txt")), "a");
+	let second = state.create_buffer(Some(PathBuf::from("b.txt")), "b");
+	state.bind_buffer_to_active_window(first);
+	state.set_buffer_dirty(first, true);
+	state.set_buffer_dirty(second, true);
+	state.set_buffer_externally_modified(second, true);
+	state.enter_command_mode();
+	state.push_command_char('w');
+	state.push_command_char('q');
+	state.push_command_char('a');
+	state.push_command_char('!');
+
+	let flow = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
+	);
+	assert!(matches!(flow, ControlFlow::Continue(())));
+	assert!(state.quit_after_save);
+	assert_eq!(state.in_flight_internal_saves.len(), 2);
+
+	let _ = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::SaveCompleted { buffer_id: first, result: Ok(()) }),
+	);
+	let flow = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::SaveCompleted { buffer_id: second, result: Ok(()) }),
+	);
+
+	assert!(matches!(flow, ControlFlow::Break(())));
+	assert_eq!(ports.session_saves.borrow().len(), 1);
+}
+
+#[test]
 fn command_q_should_quit_when_all_buffers_are_clean() {
 	let mut state = RimState::new();
 	let buffer_id = state.create_buffer(None, "abc");
@@ -167,6 +441,45 @@ fn command_q_should_quit_when_all_buffers_are_clean() {
 	);
 
 	assert!(matches!(flow, ControlFlow::Break(())));
+}
+
+#[test]
+fn command_yazi_should_open_selected_file() {
+	let mut state = RimState::new();
+	let ports = FilePickerPorts::default();
+	ports.picked_path.replace(Some(PathBuf::from("picked.txt")));
+	state.enter_command_mode();
+	state.push_command_char('y');
+	state.push_command_char('a');
+	state.push_command_char('z');
+	state.push_command_char('i');
+
+	let flow = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
+	);
+
+	assert!(matches!(flow, ControlFlow::Continue(())));
+	assert_eq!(ports.file_loads.borrow().len(), 1);
+	assert_eq!(ports.file_loads.borrow()[0].1, normalize_test_path("picked.txt"));
+}
+
+#[test]
+fn command_yazi_should_report_cancelled_when_no_file_is_selected() {
+	let mut state = RimState::new();
+	state.enter_command_mode();
+	state.push_command_char('y');
+	state.push_command_char('a');
+	state.push_command_char('z');
+	state.push_command_char('i');
+
+	let flow = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
+	);
+
+	assert!(matches!(flow, ControlFlow::Continue(())));
+	assert_eq!(state.status_bar.message, "open cancelled");
 }
 
 #[test]
@@ -409,6 +722,7 @@ fn undo_history_loaded_should_restore_buffer_history_when_text_matches() {
 			buffer_id,
 			source_path: path,
 			expected_text: "abc".to_string(),
+			restore_view: true,
 			result: Ok(Some(history.clone())),
 		}),
 	);
@@ -417,6 +731,42 @@ fn undo_history_loaded_should_restore_buffer_history_when_text_matches() {
 	assert_eq!(buffer.undo_stack, history.undo_stack);
 	assert_eq!(buffer.redo_stack, history.redo_stack);
 	assert_eq!(state.active_cursor(), history.cursor);
+}
+
+#[test]
+fn undo_history_loaded_without_restore_view_should_preserve_current_cursor() {
+	let mut state = RimState::new();
+	let path = normalize_test_path("undo_restore_preserve_view.txt");
+	let buffer_id = state.create_buffer(Some(path.clone()), "abc");
+	state.bind_buffer_to_active_window(buffer_id);
+	let active_window_id = state.active_window_id();
+	{
+		let window = state.windows.get_mut(active_window_id).expect("window should exist");
+		window.cursor = CursorState { row: 1, col: 3 };
+		window.scroll_y = 4;
+	}
+	state.sync_window_view_binding(active_window_id);
+	let history = PersistedBufferHistory {
+		current_text: "abc".to_string(),
+		cursor:       CursorState { row: 1, col: 1 },
+		undo_stack:   Vec::new(),
+		redo_stack:   Vec::new(),
+	};
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::File(FileAction::UndoHistoryLoaded {
+			buffer_id,
+			source_path: path,
+			expected_text: "abc".to_string(),
+			restore_view: false,
+			result: Ok(Some(history)),
+		}),
+	);
+
+	assert_eq!(state.active_cursor(), CursorState { row: 1, col: 3 });
+	let window = state.windows.get(active_window_id).expect("window should exist");
+	assert_eq!(window.scroll_y, 4);
 }
 
 #[test]

@@ -1,4 +1,9 @@
-use super::{CursorState, PendingBlockInsert, RimState, clamp_cursor_col_for_line, pad_rope_line_to_char_len, rope_block_char_range, rope_cursor_char, rope_editable_line_count, rope_editable_line_len_chars, rope_join_rows_without_newline, rope_line_len_chars, rope_line_without_newline, rope_linewise_char_range, rope_linewise_insertion_text, split_lines_owned};
+use super::{
+	CursorState, PendingBlockInsert, RimState, clamp_cursor_col_for_line, pad_rope_line_to_char_len,
+	rope_block_char_range, rope_cursor_char, rope_editable_line_count, rope_editable_line_len_chars,
+	rope_join_rows_without_newline, rope_line_len_chars, rope_line_without_newline, rope_linewise_char_range,
+	rope_linewise_insertion_text, split_lines_owned,
+};
 
 impl RimState {
 	pub fn begin_visual_block_insert(&mut self, append: bool) {
@@ -20,8 +25,8 @@ impl RimState {
 		// Keep a stable rectangle so every insert-mode edit can be mirrored across it.
 		self.enter_block_insert_mode(PendingBlockInsert {
 			start_row: start.row,
-			end_row:   end.row,
-			base_col:  insert_col,
+			end_row: end.row,
+			base_col: insert_col,
 		});
 		self.preferred_col = None;
 		self.align_active_window_scroll_to_cursor();
@@ -435,10 +440,10 @@ impl RimState {
 		let anchor = self.visual_anchor?;
 		let cursor = self.active_cursor();
 		let (mut start, mut end) = if self.is_visual_block_mode() {
-			(CursorState { row: anchor.row.min(cursor.row), col: anchor.col.min(cursor.col) }, CursorState {
-				row: anchor.row.max(cursor.row),
-				col: anchor.col.max(cursor.col),
-			})
+			(
+				CursorState { row: anchor.row.min(cursor.row), col: anchor.col.min(cursor.col) },
+				CursorState { row: anchor.row.max(cursor.row), col: anchor.col.max(cursor.col) },
+			)
 		} else if (anchor.row, anchor.col) <= (cursor.row, cursor.col) {
 			(anchor, cursor)
 		} else {

@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::{Path, PathBuf}, time::Instant};
 
 use anyhow::{Context, Result};
-use rim_kernel::{action::{AppAction, FileAction, FileLoadSource}, ports::SwapEditOp, state::{BufferId, PersistedBufferHistory}};
+use rim_kernel::{action::{AppAction, FileAction, FileLoadSource}, ports::SwapEditOp, state::{BufferId, PersistedBufferHistory, WorkspaceSessionSnapshot}};
 use tracing::error;
 
 mod file_transfer;
@@ -12,13 +12,14 @@ use file_transfer::handle_file_transfer_request;
 use history_flow::handle_history_request;
 use swap_flow::handle_swap_request;
 
-use crate::{swap_session::SwapSession, undo_history::UndoHistorySession};
+use crate::{session::{load_workspace_session, save_workspace_session}, swap_session::SwapSession, undo_history::UndoHistorySession};
 
 pub(super) fn run_worker(
 	request_rx: flume::Receiver<StorageIoRequest>,
 	event_tx: flume::Sender<AppAction>,
 	swap_dir: PathBuf,
 	undo_dir: PathBuf,
+	session_dir: PathBuf,
 ) -> Result<()> {
 	let runtime = compio::runtime::Runtime::new().context("storage worker runtime init failed")?;
 	runtime.block_on(async move {
@@ -30,6 +31,9 @@ pub(super) fn run_worker(
 		compio::fs::create_dir_all(&undo_dir)
 			.await
 			.with_context(|| format!("create undo dir failed: {}", undo_dir.display()))?;
+		compio::fs::create_dir_all(&session_dir)
+			.await
+			.with_context(|| format!("create session dir failed: {}", session_dir.display()))?;
 
 		let mut deadlines: HashMap<BufferId, FlushSchedule> = HashMap::new();
 		let mut sessions: HashMap<BufferId, SwapSession> = HashMap::new();
@@ -58,6 +62,7 @@ pub(super) fn run_worker(
 				event_tx: &event_tx,
 				swap_dir: &swap_dir,
 				undo_dir: &undo_dir,
+				session_dir: &session_dir,
 				pid,
 				username: username.as_str(),
 				deadlines: &mut deadlines,
@@ -141,10 +146,15 @@ pub(super) enum StorageIoRequest {
 		buffer_id:     BufferId,
 		source_path:   PathBuf,
 		expected_text: String,
+		restore_view:  bool,
 	},
+	LoadWorkspaceSession,
 	SaveHistory {
 		source_path: PathBuf,
 		history:     PersistedBufferHistory,
+	},
+	SaveWorkspaceSession {
+		snapshot: WorkspaceSessionSnapshot,
 	},
 	Close {
 		buffer_id: BufferId,
@@ -155,6 +165,7 @@ struct StorageIoContext<'a> {
 	event_tx:      &'a flume::Sender<AppAction>,
 	swap_dir:      &'a Path,
 	undo_dir:      &'a Path,
+	session_dir:   &'a Path,
 	pid:           u32,
 	username:      &'a str,
 	deadlines:     &'a mut HashMap<BufferId, FlushSchedule>,
@@ -183,6 +194,7 @@ async fn handle_request(request: StorageIoRequest, context: StorageIoContext<'_>
 		event_tx,
 		swap_dir,
 		undo_dir,
+		session_dir,
 		pid,
 		username,
 		deadlines,
@@ -206,6 +218,19 @@ async fn handle_request(request: StorageIoRequest, context: StorageIoContext<'_>
 		}
 		StorageIoRequest::LoadHistory { .. } | StorageIoRequest::SaveHistory { .. } => {
 			return handle_history_request(request, event_tx, undo_dir, undo_sessions).await;
+		}
+		StorageIoRequest::LoadWorkspaceSession => {
+			let result = load_workspace_session(session_dir).await;
+			return send_file_action(
+				event_tx,
+				FileAction::WorkspaceSessionLoaded { result },
+				"workspace_session_loaded",
+			);
+		}
+		StorageIoRequest::SaveWorkspaceSession { snapshot } => {
+			if let Err(err) = save_workspace_session(session_dir, &snapshot).await {
+				error!("save workspace session failed: {:#}", err);
+			}
 		}
 	}
 

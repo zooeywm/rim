@@ -1,10 +1,15 @@
 use tracing::error;
 
 use super::{ActionHandlerError, RimState, enqueue_history_save_for_buffer};
-use crate::{action::EditorAction, ports::{FileWatcher, StorageIo}};
+use crate::{
+	action::EditorAction,
+	ports::{FileWatcher, StorageIo},
+};
 
 pub(super) fn apply_editor_action<P>(ports: &P, state: &mut RimState, action: EditorAction)
-where P: StorageIo + FileWatcher {
+where
+	P: StorageIo + FileWatcher,
+{
 	match action {
 		EditorAction::KeyPressed(_) => {}
 		EditorAction::EnterInsert => {

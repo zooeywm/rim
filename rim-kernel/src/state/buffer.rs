@@ -66,12 +66,16 @@ impl RimState {
 			fallback = Some(self.create_buffer(None, String::new()));
 		}
 
-		for (_, window) in &mut self.windows {
-			if window.buffer_id == Some(target_buffer_id) {
-				window.buffer_id = fallback;
-			}
-		}
+		let rebound_window_ids = self
+			.windows
+			.iter()
+			.filter_map(|(window_id, window)| (window.buffer_id == Some(target_buffer_id)).then_some(window_id))
+			.collect::<Vec<_>>();
+		self.window_buffer_views.retain(|(_, buffer_id), _| *buffer_id != target_buffer_id);
 		if let Some(fallback_id) = fallback {
+			for window_id in rebound_window_ids {
+				self.bind_buffer_to_window(window_id, fallback_id, false);
+			}
 			self.clamp_window_cursors_for_buffer(fallback_id);
 		}
 
@@ -88,6 +92,15 @@ impl RimState {
 
 		buffer.text = Rope::from_str(text.as_str());
 		let new_max_row = rope_line_count(&buffer.text) as u16;
+		for ((_, saved_buffer_id), view) in &mut self.window_buffer_views {
+			if *saved_buffer_id != buffer_id {
+				continue;
+			}
+			if view.cursor.row >= previous_max_row {
+				view.cursor.row = new_max_row;
+			}
+			view.cursor = super::clamp_cursor_for_rope(&buffer.text, view.cursor);
+		}
 		for (_, window) in &mut self.windows {
 			if window.buffer_id != Some(buffer_id) {
 				continue;
@@ -150,9 +163,7 @@ impl RimState {
 			},
 		};
 
-		if let Some(window) = self.windows.get_mut(active_window_id) {
-			window.buffer_id = Some(target);
-		}
+		self.bind_buffer_to_window(active_window_id, target, true);
 		self.clamp_window_cursors_for_buffer(target);
 		self.align_active_window_scroll_to_cursor();
 		if let Some(buffer) = self.buffers.get(target) {
@@ -421,6 +432,7 @@ impl RimState {
 		&mut self,
 		buffer_id: BufferId,
 		persisted_history: PersistedBufferHistory,
+		restore_view: bool,
 	) -> bool {
 		let is_active = self.active_buffer_id() == Some(buffer_id);
 		let Some(buffer) = self.buffers.get_mut(buffer_id) else {
@@ -433,16 +445,24 @@ impl RimState {
 
 		buffer.undo_stack = persisted_history.undo_stack;
 		buffer.redo_stack = persisted_history.redo_stack;
-		for (_, window) in &mut self.windows {
-			if window.buffer_id == Some(buffer_id) {
-				window.cursor = clamp_cursor_for_rope(&buffer.text, persisted_history.cursor);
+		if restore_view {
+			let persisted_cursor = clamp_cursor_for_rope(&buffer.text, persisted_history.cursor);
+			for ((_, saved_buffer_id), view) in &mut self.window_buffer_views {
+				if *saved_buffer_id == buffer_id {
+					view.cursor = persisted_cursor;
+				}
+			}
+			for (_, window) in &mut self.windows {
+				if window.buffer_id == Some(buffer_id) {
+					window.cursor = persisted_cursor;
+				}
 			}
 		}
 		if self.pending_insert_group.as_ref().is_some_and(|group| group.buffer_id == buffer_id) {
 			self.pending_insert_group = None;
 		}
 
-		if is_active {
+		if restore_view && is_active {
 			self.align_active_window_scroll_to_cursor();
 		}
 		true
@@ -490,7 +510,8 @@ impl RimState {
 			buffer.redo_stack.remove(0);
 		}
 		buffer.dirty = buffer.text != buffer.clean_text;
-
+		let _ = buffer;
+		self.sync_window_view_binding(active_window_id);
 		self.align_active_window_scroll_to_cursor();
 		self.status_bar.message = "undo".to_string();
 	}
@@ -521,7 +542,8 @@ impl RimState {
 			buffer.undo_stack.remove(0);
 		}
 		buffer.dirty = buffer.text != buffer.clean_text;
-
+		let _ = buffer;
+		self.sync_window_view_binding(active_window_id);
 		self.align_active_window_scroll_to_cursor();
 		self.status_bar.message = "redo".to_string();
 	}
@@ -538,6 +560,11 @@ impl RimState {
 			return;
 		};
 		let text = &buffer.text;
+		for ((_, saved_buffer_id), view) in &mut self.window_buffer_views {
+			if *saved_buffer_id == buffer_id {
+				view.cursor = clamp_cursor_for_rope(text, view.cursor);
+			}
+		}
 		for (_, window) in &mut self.windows {
 			if window.buffer_id == Some(buffer_id) {
 				window.cursor = clamp_cursor_for_rope(text, window.cursor);
@@ -546,7 +573,17 @@ impl RimState {
 	}
 
 	pub(crate) fn cursor_for_buffer(&self, buffer_id: BufferId) -> Option<CursorState> {
-		self.windows.values().find(|window| window.buffer_id == Some(buffer_id)).map(|window| window.cursor)
+		self
+			.windows
+			.values()
+			.find(|window| window.buffer_id == Some(buffer_id))
+			.map(|window| window.cursor)
+			.or_else(|| {
+				self
+					.window_buffer_views
+					.iter()
+					.find_map(|((_, saved_buffer_id), view)| (*saved_buffer_id == buffer_id).then_some(view.cursor))
+			})
 	}
 
 	pub fn active_buffer_text_string(&self) -> Option<String> {

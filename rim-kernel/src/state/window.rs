@@ -64,6 +64,7 @@ impl RimState {
 			absorbed_target.is_none() && self.absorb_closed_window_by_group(&remaining_windows, &closed_layout);
 
 		let _ = self.windows.remove(active_window);
+		self.remove_window_view_bindings(active_window);
 		let tab = self.tabs.get_mut(&self.active_tab).expect("invariant: active tab must exist");
 		tab.windows.retain(|id| *id != active_window);
 		tab.active_window = if let Some(id) = absorbed_target {
@@ -98,6 +99,8 @@ impl RimState {
 		if let Some(window) = self.windows.get_mut(new_window_id) {
 			*window = new_window_layout;
 		}
+		self.sync_window_view_binding(active_window_id);
+		self.sync_window_view_binding(new_window_id);
 		self.center_window_on_cursor_if_hidden(active_window_id);
 		self.center_window_on_cursor_if_hidden(new_window_id);
 

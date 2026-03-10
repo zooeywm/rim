@@ -12,12 +12,12 @@ pub(super) async fn handle_history_request(
 	undo_sessions: &mut HashMap<PathBuf, UndoHistorySession>,
 ) -> bool {
 	match request {
-		StorageIoRequest::LoadHistory { buffer_id, source_path, expected_text } => {
+		StorageIoRequest::LoadHistory { buffer_id, source_path, expected_text, restore_view } => {
 			let result =
 				load_undo_history(undo_dir, source_path.as_path(), expected_text.as_str(), undo_sessions).await;
 			if !send_file_action(
 				event_tx,
-				FileAction::UndoHistoryLoaded { buffer_id, source_path, expected_text, result },
+				FileAction::UndoHistoryLoaded { buffer_id, source_path, expected_text, restore_view, result },
 				"UndoHistoryLoaded",
 			) {
 				return false;
