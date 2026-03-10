@@ -1,9 +1,4 @@
-use ratatui::{
-	buffer::{Buffer, Cell},
-	layout::Rect,
-	style::{Color, Style},
-	widgets::{Paragraph, Widget},
-};
+use ratatui::{buffer::{Buffer, Cell}, layout::Rect, style::{Color, Style}, widgets::{Paragraph, Widget}};
 use rim_kernel::state::RimState;
 use ropey::Rope;
 use unicode_width::UnicodeWidthChar;
@@ -11,51 +6,51 @@ use unicode_width::UnicodeWidthChar;
 const TAB_DISPLAY_WIDTH: usize = 4;
 
 pub(super) struct WindowAreaWidget {
-	windows: Vec<WindowView>,
+	windows:            Vec<WindowView>,
 	selection_segments: Vec<SelectionSegment>,
-	vertical_lines: Vec<VerticalLine>,
-	horizontal_lines: Vec<HorizontalLine>,
+	vertical_lines:     Vec<VerticalLine>,
+	horizontal_lines:   Vec<HorizontalLine>,
 }
 
 #[derive(Debug)]
 struct WindowView {
-	local_rect: Rect,
-	number_col_width: u16,
+	local_rect:        Rect,
+	number_col_width:  u16,
 	line_numbers_text: String,
-	text_text: String,
+	text_text:         String,
 }
 
 #[derive(Debug)]
 struct VerticalLine {
-	x: u16,
+	x:       u16,
 	y_start: u16,
-	y_end: u16,
+	y_end:   u16,
 }
 
 #[derive(Debug)]
 struct HorizontalLine {
-	x_start: u16,
-	x_end: u16,
-	y: u16,
-	left_join_x: Option<u16>,
+	x_start:      u16,
+	x_end:        u16,
+	y:            u16,
+	left_join_x:  Option<u16>,
 	right_join_x: Option<u16>,
 }
 
 #[derive(Debug)]
 struct SelectionSegment {
 	x_start: u16,
-	x_end: u16,
-	y: u16,
+	x_end:   u16,
+	y:       u16,
 }
 
 #[derive(Clone, Copy)]
 struct VisualSelectionSpec {
-	text_rect: Rect,
-	scroll_x: u16,
-	scroll_y: u16,
-	anchor: rim_kernel::state::CursorState,
-	cursor: rim_kernel::state::CursorState,
-	line_wise: bool,
+	text_rect:  Rect,
+	scroll_x:   u16,
+	scroll_y:   u16,
+	anchor:     rim_kernel::state::CursorState,
+	cursor:     rim_kernel::state::CursorState,
+	line_wise:  bool,
 	block_wise: bool,
 }
 
@@ -70,8 +65,12 @@ impl WindowAreaWidget {
 				continue;
 			};
 
-			let mut local_rect =
-				Rect { x: window.x, y: window.y, width: window.width.max(1), height: window.height.max(1) };
+			let mut local_rect = Rect {
+				x:      window.x,
+				y:      window.y,
+				width:  window.width.max(1),
+				height: window.height.max(1),
+			};
 			if window.x > 0 {
 				local_rect.x = local_rect.x.saturating_add(1);
 				local_rect.width = local_rect.width.saturating_sub(1);
@@ -96,9 +95,9 @@ impl WindowAreaWidget {
 			}
 
 			let text_rect = Rect {
-				x: local_rect.x.saturating_add(number_col_width),
-				y: local_rect.y,
-				width: text_width,
+				x:      local_rect.x.saturating_add(number_col_width),
+				y:      local_rect.y,
+				width:  text_width,
 				height: local_rect.height,
 			};
 
@@ -155,18 +154,15 @@ impl WindowAreaWidget {
 					&& let Some(anchor) = state.visual_anchor
 					&& let Some(text) = buffer_text
 				{
-					selection_segments.extend(collect_visual_selection_segments_rope(
-						text,
-						VisualSelectionSpec {
-							text_rect,
-							scroll_x: window.scroll_x,
-							scroll_y: window.scroll_y,
-							anchor,
-							cursor,
-							line_wise: state.is_visual_line_mode(),
-							block_wise: state.is_visual_block_mode(),
-						},
-					));
+					selection_segments.extend(collect_visual_selection_segments_rope(text, VisualSelectionSpec {
+						text_rect,
+						scroll_x: window.scroll_x,
+						scroll_y: window.scroll_y,
+						anchor,
+						cursor,
+						line_wise: state.is_visual_line_mode(),
+						block_wise: state.is_visual_block_mode(),
+					}));
 				}
 			}
 
@@ -180,7 +176,7 @@ impl WindowAreaWidget {
 
 #[derive(Debug, Clone)]
 struct OwnedLogicalLine {
-	text: String,
+	text:        String,
 	has_newline: bool,
 }
 
@@ -191,7 +187,7 @@ fn empty_owned_logical_line() -> OwnedLogicalLine {
 #[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 struct LogicalLine<'a> {
-	text: &'a str,
+	text:        &'a str,
 	has_newline: bool,
 }
 
@@ -264,17 +260,21 @@ impl Widget for WindowAreaWidget {
 
 		for window in self.windows {
 			let abs_rect = Rect {
-				x: area.x.saturating_add(window.local_rect.x),
-				y: area.y.saturating_add(window.local_rect.y),
-				width: window.local_rect.width,
+				x:      area.x.saturating_add(window.local_rect.x),
+				y:      area.y.saturating_add(window.local_rect.y),
+				width:  window.local_rect.width,
 				height: window.local_rect.height,
 			};
-			let number_rect =
-				Rect { x: abs_rect.x, y: abs_rect.y, width: window.number_col_width, height: abs_rect.height };
+			let number_rect = Rect {
+				x:      abs_rect.x,
+				y:      abs_rect.y,
+				width:  window.number_col_width,
+				height: abs_rect.height,
+			};
 			let text_rect = Rect {
-				x: abs_rect.x.saturating_add(window.number_col_width),
-				y: abs_rect.y,
-				width: abs_rect.width.saturating_sub(window.number_col_width),
+				x:      abs_rect.x.saturating_add(window.number_col_width),
+				y:      abs_rect.y,
+				width:  abs_rect.width.saturating_sub(window.number_col_width),
 				height: abs_rect.height,
 			};
 
@@ -627,17 +627,11 @@ fn expand_tabs_for_display(line: &str) -> String {
 	rendered
 }
 
-fn set_separator_cell(cell: &mut Cell) {
-	merge_cell(cell, DIR_LEFT | DIR_RIGHT);
-}
+fn set_separator_cell(cell: &mut Cell) { merge_cell(cell, DIR_LEFT | DIR_RIGHT); }
 
-fn set_right_tee_cell(cell: &mut Cell) {
-	merge_cell(cell, DIR_UP | DIR_RIGHT);
-}
+fn set_right_tee_cell(cell: &mut Cell) { merge_cell(cell, DIR_UP | DIR_RIGHT); }
 
-fn set_left_tee_cell(cell: &mut Cell) {
-	merge_cell(cell, DIR_UP | DIR_LEFT);
-}
+fn set_left_tee_cell(cell: &mut Cell) { merge_cell(cell, DIR_UP | DIR_LEFT); }
 
 const DIR_UP: u8 = 0b0001;
 const DIR_DOWN: u8 = 0b0010;

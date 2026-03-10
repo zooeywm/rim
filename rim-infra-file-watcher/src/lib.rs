@@ -1,7 +1,7 @@
 use std::{collections::{HashMap, HashSet}, path::{Path, PathBuf}, thread};
 
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher, event::EventKind};
-use rim_kernel::{action::{AppAction, FileAction}, ports::{FileWatcher, FileWatcherError}, state::BufferId};
+use rim_kernel::{action::{AppAction, FileAction, SystemAction}, ports::{FileWatcher, FileWatcherError}, state::BufferId};
 use tracing::error;
 
 #[derive(dep_inj::DepInj)]
@@ -49,6 +49,13 @@ impl FileWatcherState {
 		thread::spawn(move || Self::run(worker_rx, worker_tx, event_tx));
 	}
 
+	pub fn enqueue_watch_config(&self, path: PathBuf) -> Result<(), FileWatcherError> {
+		self.worker_tx.send(WatchWorkerEvent::Command(WatchRequest::WatchConfigPath { path })).map_err(|err| {
+			error!("enqueue_watch_config failed: watch request channel is disconnected: {}", err);
+			FileWatcherError::RequestChannelDisconnected { operation: "watch_config" }
+		})
+	}
+
 	fn run(
 		worker_rx: flume::Receiver<WatchWorkerEvent>,
 		worker_tx: flume::Sender<WatchWorkerEvent>,
@@ -69,6 +76,7 @@ impl FileWatcherState {
 
 		let mut file_to_buffer: HashMap<PathBuf, BufferId> = HashMap::new();
 		let mut buffer_to_file: HashMap<BufferId, PathBuf> = HashMap::new();
+		let mut config_paths: HashSet<PathBuf> = HashSet::new();
 		let mut watch_target_ref_counts: HashMap<PathBuf, usize> = HashMap::new();
 
 		while let Ok(event) = worker_rx.recv() {
@@ -79,11 +87,12 @@ impl FileWatcherState {
 						&mut watcher,
 						&mut file_to_buffer,
 						&mut buffer_to_file,
+						&mut config_paths,
 						&mut watch_target_ref_counts,
 					);
 				}
 				WatchWorkerEvent::Notify(result) => {
-					if !Self::handle_notify_event(result, &file_to_buffer, &buffer_to_file, &event_tx) {
+					if !Self::handle_notify_event(result, &file_to_buffer, &buffer_to_file, &config_paths, &event_tx) {
 						return;
 					}
 				}
@@ -95,6 +104,7 @@ impl FileWatcherState {
 		result: notify::Result<notify::Event>,
 		file_to_buffer: &HashMap<PathBuf, BufferId>,
 		buffer_to_file: &HashMap<BufferId, PathBuf>,
+		config_paths: &HashSet<PathBuf>,
 		event_tx: &flume::Sender<AppAction>,
 	) -> bool {
 		let event = match result {
@@ -109,10 +119,14 @@ impl FileWatcherState {
 		}
 
 		let mut affected_buffers = HashSet::new();
+		let mut config_changed = false;
 		for path in event.paths {
 			let normalized_path = Self::normalize_watch_path(&path);
 			if let Some(buffer_id) = file_to_buffer.get(&normalized_path) {
 				affected_buffers.insert(*buffer_id);
+			}
+			if config_paths.contains(&normalized_path) {
+				config_changed = true;
 			}
 		}
 
@@ -124,6 +138,9 @@ impl FileWatcherState {
 				return false;
 			}
 		}
+		if config_changed && event_tx.send(AppAction::System(SystemAction::ReloadCommandConfig)).is_err() {
+			return false;
+		}
 
 		true
 	}
@@ -133,6 +150,7 @@ impl FileWatcherState {
 		watcher: &mut RecommendedWatcher,
 		file_to_buffer: &mut HashMap<PathBuf, BufferId>,
 		buffer_to_file: &mut HashMap<BufferId, PathBuf>,
+		config_paths: &mut HashSet<PathBuf>,
 		watch_target_ref_counts: &mut HashMap<PathBuf, usize>,
 	) {
 		match request {
@@ -188,6 +206,18 @@ impl FileWatcherState {
 					&file_path,
 					buffer_id,
 				);
+			}
+			WatchRequest::WatchConfigPath { path } => {
+				let normalized_file = Self::normalize_watch_path(&path);
+				let watch_target = Self::watch_target_for_file(&normalized_file);
+				if config_paths.insert(normalized_file) {
+					let count = watch_target_ref_counts.entry(watch_target.clone()).or_insert(0);
+					let is_first_for_target = *count == 0;
+					*count = count.saturating_add(1);
+					if is_first_for_target && let Err(err) = watcher.watch(&watch_target, RecursiveMode::NonRecursive) {
+						error!("file watcher watch failed: path={} error={}", watch_target.display(), err);
+					}
+				}
 			}
 		}
 	}
@@ -256,6 +286,7 @@ enum WatchWorkerEvent {
 enum WatchRequest {
 	WatchBufferPath { buffer_id: BufferId, path: PathBuf },
 	UnwatchBuffer { buffer_id: BufferId },
+	WatchConfigPath { path: PathBuf },
 }
 
 #[cfg(test)]

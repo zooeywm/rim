@@ -1,6 +1,34 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [0.0.2] - 2026-03-10
+
+### Features
+
+- Introduce unified command registry for built-in and future plugin commands
+
+- Add TOML command config loading with inline-table keymap and command alias support
+
+- Create default `~/.config/rim/config.toml` template automatically when missing
+
+- Support full-table replacement semantics for `normal.keymap` and `command.commands`
+
+- Add runtime hot reload for command config through `FileWatcher` event dispatch
+
+- Add `:qa!`, `:wqa`, and `:wqa!` command completion and execution flow
+
+### Fixes
+
+- Block `:qa` when any buffer is dirty
+
+- Persist workspace session correctly on `:wq`
+
+- Improve yazi picker open flow and runtime status synchronization
+
+### Documentation
+
+- Update README with `v0.0.2` release notes and command-config semantics
+
 ## [0.0.1] - 2026-03-06
 
 ### Chore

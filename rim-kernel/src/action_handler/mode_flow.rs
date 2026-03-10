@@ -1,28 +1,18 @@
 use std::ops::ControlFlow;
 
-use super::{
-	command_flow, enqueue_history_save_for_buffer, handle_pending_swap_decision_key, post_edit_flow,
-};
-use crate::{
-	action::{
-		AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction,
-		WindowAction,
-	},
-	ports::{FilePicker, FileWatcher, StorageIo},
-	state::{EditorMode, NormalSequenceKey, RimState},
-};
+use super::{command_flow, enqueue_history_save_for_buffer, handle_pending_swap_decision_key, post_edit_flow};
+use crate::{action::{AppAction, EditorAction, KeyCode, KeyEvent, KeyModifiers}, command::{BindingMatch, CommandRegistry, CommandTarget}, ports::{FilePicker, FileWatcher, StorageIo}, state::{EditorMode, NormalSequenceKey, RimState}};
 
 #[derive(Debug)]
 pub(super) enum SequenceMatch {
 	Action(AppAction),
+	Command(CommandTarget),
 	Pending,
 	NoMatch,
 }
 
 pub(super) fn handle_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
-where
-	P: StorageIo + FileWatcher + FilePicker,
-{
+where P: StorageIo + FileWatcher + FilePicker {
 	if state.pending_swap_decision.is_some() {
 		return handle_pending_swap_decision_key(ports, state, key);
 	}
@@ -86,9 +76,7 @@ where
 }
 
 pub(super) fn handle_normal_mode_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
-where
-	P: StorageIo + FileWatcher + FilePicker,
-{
+where P: StorageIo + FileWatcher + FilePicker {
 	let Some(normal_key) = to_normal_key(state, key) else {
 		state.normal_sequence.clear();
 		state.status_bar.key_sequence.clear();
@@ -98,11 +86,16 @@ where
 	state.normal_sequence.push(normal_key);
 
 	loop {
-		match resolve_normal_sequence(&state.normal_sequence) {
+		match resolve_normal_sequence_with_registry(&state.command_registry, &state.normal_sequence) {
 			SequenceMatch::Action(action) => {
 				state.normal_sequence.clear();
 				state.status_bar.key_sequence.clear();
 				return RimState::dispatch_internal(ports, state, action);
+			}
+			SequenceMatch::Command(target) => {
+				state.normal_sequence.clear();
+				state.status_bar.key_sequence.clear();
+				return command_flow::execute_command_target(ports, state, target, None);
 			}
 			SequenceMatch::Pending => {
 				state.status_bar.key_sequence = render_normal_sequence(&state.normal_sequence);
@@ -154,69 +147,21 @@ pub(super) fn to_normal_key(state: &RimState, key: KeyEvent) -> Option<NormalSeq
 	None
 }
 
-pub(super) fn resolve_normal_sequence(keys: &[NormalSequenceKey]) -> SequenceMatch {
-	use NormalSequenceKey as K;
-
-	match keys {
-		[K::Leader] => SequenceMatch::Pending,
-		[K::Leader, K::Char('w')] => SequenceMatch::Pending,
-		[K::Leader, K::Char('w'), K::Char('v')] => {
-			SequenceMatch::Action(AppAction::Layout(LayoutAction::SplitVertical))
+pub(super) fn resolve_normal_sequence_with_registry(
+	registry: &CommandRegistry,
+	keys: &[NormalSequenceKey],
+) -> SequenceMatch {
+	match registry.resolve_normal_sequence(keys) {
+		BindingMatch::Pending => SequenceMatch::Pending,
+		BindingMatch::NoMatch => SequenceMatch::NoMatch,
+		BindingMatch::Exact(CommandTarget::Builtin(builtin)) => {
+			if let Some(action) = builtin.normal_mode_action() {
+				SequenceMatch::Action(action)
+			} else {
+				SequenceMatch::Command(CommandTarget::Builtin(builtin))
+			}
 		}
-		[K::Leader, K::Char('w'), K::Char('h')] => {
-			SequenceMatch::Action(AppAction::Layout(LayoutAction::SplitHorizontal))
-		}
-		[K::Leader, K::Tab] => SequenceMatch::Pending,
-		[K::Leader, K::Tab, K::Char('n')] => SequenceMatch::Action(AppAction::Tab(TabAction::New)),
-		[K::Leader, K::Tab, K::Char('d')] => SequenceMatch::Action(AppAction::Tab(TabAction::CloseCurrent)),
-		[K::Leader, K::Tab, K::Char('[')] => SequenceMatch::Action(AppAction::Tab(TabAction::SwitchPrev)),
-		[K::Leader, K::Tab, K::Char(']')] => SequenceMatch::Action(AppAction::Tab(TabAction::SwitchNext)),
-		[K::Leader, K::Char('b')] => SequenceMatch::Pending,
-		[K::Leader, K::Char('b'), K::Char('d')] => {
-			SequenceMatch::Action(AppAction::Editor(EditorAction::CloseActiveBuffer))
-		}
-		[K::Leader, K::Char('b'), K::Char('n')] => {
-			SequenceMatch::Action(AppAction::Editor(EditorAction::NewEmptyBuffer))
-		}
-		[K::Char('d')] => SequenceMatch::Pending,
-		[K::Char('d'), K::Char('d')] => {
-			SequenceMatch::Action(AppAction::Editor(EditorAction::DeleteCurrentLineToSlot))
-		}
-		[K::Char('i')] => SequenceMatch::Action(AppAction::Editor(EditorAction::EnterInsert)),
-		[K::Char('a')] => SequenceMatch::Action(AppAction::Editor(EditorAction::AppendInsert)),
-		[K::Char('o')] => SequenceMatch::Action(AppAction::Editor(EditorAction::OpenLineBelowInsert)),
-		[K::Char('O')] => SequenceMatch::Action(AppAction::Editor(EditorAction::OpenLineAboveInsert)),
-		[K::Char(':')] => SequenceMatch::Action(AppAction::Editor(EditorAction::EnterCommandMode)),
-		[K::Char('v')] => SequenceMatch::Action(AppAction::Editor(EditorAction::EnterVisualMode)),
-		[K::Char('V')] => SequenceMatch::Action(AppAction::Editor(EditorAction::EnterVisualLineMode)),
-		[K::Ctrl('v')] => SequenceMatch::Action(AppAction::Editor(EditorAction::EnterVisualBlockMode)),
-		[K::Char('u')] => SequenceMatch::Action(AppAction::Editor(EditorAction::Undo)),
-		[K::Char('h')] => SequenceMatch::Action(AppAction::Editor(EditorAction::MoveLeft)),
-		[K::Char('0')] => SequenceMatch::Action(AppAction::Editor(EditorAction::MoveLineStart)),
-		[K::Char('$')] => SequenceMatch::Action(AppAction::Editor(EditorAction::MoveLineEnd)),
-		[K::Char('j')] => SequenceMatch::Action(AppAction::Editor(EditorAction::MoveDown)),
-		[K::Char('k')] => SequenceMatch::Action(AppAction::Editor(EditorAction::MoveUp)),
-		[K::Char('l')] => SequenceMatch::Action(AppAction::Editor(EditorAction::MoveRight)),
-		[K::Char('g')] => SequenceMatch::Pending,
-		[K::Char('g'), K::Char('g')] => SequenceMatch::Action(AppAction::Editor(EditorAction::MoveFileStart)),
-		[K::Char('G')] => SequenceMatch::Action(AppAction::Editor(EditorAction::MoveFileEnd)),
-		[K::Char('J')] => SequenceMatch::Action(AppAction::Editor(EditorAction::JoinLineBelow)),
-		[K::Char('x')] => SequenceMatch::Action(AppAction::Editor(EditorAction::CutCharToSlot)),
-		[K::Char('p')] => SequenceMatch::Action(AppAction::Editor(EditorAction::PasteSlotAfterCursor)),
-		[K::Char('H')] => SequenceMatch::Action(AppAction::Buffer(BufferAction::SwitchPrev)),
-		[K::Char('L')] => SequenceMatch::Action(AppAction::Buffer(BufferAction::SwitchNext)),
-		[K::Char('{')] => SequenceMatch::Action(AppAction::Buffer(BufferAction::SwitchPrev)),
-		[K::Char('}')] => SequenceMatch::Action(AppAction::Buffer(BufferAction::SwitchNext)),
-		[K::Ctrl('h')] => SequenceMatch::Action(AppAction::Window(WindowAction::FocusLeft)),
-		[K::Ctrl('j')] => SequenceMatch::Action(AppAction::Window(WindowAction::FocusDown)),
-		[K::Ctrl('k')] => SequenceMatch::Action(AppAction::Window(WindowAction::FocusUp)),
-		[K::Ctrl('l')] => SequenceMatch::Action(AppAction::Window(WindowAction::FocusRight)),
-		[K::Ctrl('e')] => SequenceMatch::Action(AppAction::Editor(EditorAction::ScrollViewDown)),
-		[K::Ctrl('y')] => SequenceMatch::Action(AppAction::Editor(EditorAction::ScrollViewUp)),
-		[K::Ctrl('d')] => SequenceMatch::Action(AppAction::Editor(EditorAction::ScrollViewHalfPageDown)),
-		[K::Ctrl('u')] => SequenceMatch::Action(AppAction::Editor(EditorAction::ScrollViewHalfPageUp)),
-		[K::Ctrl('r')] => SequenceMatch::Action(AppAction::Editor(EditorAction::Redo)),
-		_ => SequenceMatch::NoMatch,
+		BindingMatch::Exact(target) => SequenceMatch::Command(target),
 	}
 }
 

@@ -1,11 +1,5 @@
-use super::{
-	super::mode_flow::SequenceMatch,
-	support::{dispatch_test_action, map_normal_key, resolve_keys},
-};
-use crate::{
-	action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction},
-	state::{NormalSequenceKey, RimState},
-};
+use super::{super::mode_flow::SequenceMatch, support::{dispatch_test_action, map_normal_key, resolve_keys}};
+use crate::{action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction}, command::{CommandConfigFile, CommandKeymapSection, KeyBindingOn, KeymapBindingConfig}, state::{NormalSequenceKey, RimState}};
 
 #[test]
 fn to_normal_key_should_map_leader_char_to_leader_token() {
@@ -177,6 +171,34 @@ fn resolve_normal_sequence_should_map_leader_b_n_to_new_empty_buffer() {
 	let seq = vec![NormalSequenceKey::Leader, NormalSequenceKey::Char('b'), NormalSequenceKey::Char('n')];
 	let resolved = resolve_keys(&seq);
 	assert!(matches!(resolved, SequenceMatch::Action(AppAction::Editor(EditorAction::NewEmptyBuffer))));
+}
+
+#[test]
+fn configured_normal_key_binding_should_override_builtin_mapping() {
+	let mut state = RimState::new();
+	let first = state.create_buffer(None, "first");
+	let second = state.create_buffer(None, "second");
+	state.bind_buffer_to_active_window(first);
+	state.bind_buffer_to_active_window(second);
+	state.switch_active_window_buffer(crate::state::BufferSwitchDirection::Prev);
+	let errors = state.apply_command_config(&CommandConfigFile {
+		normal: CommandKeymapSection {
+			keymap: vec![KeymapBindingConfig {
+				on:   KeyBindingOn::Single("H".to_string()),
+				run:  "core.buffer.next".to_string(),
+				desc: Some("custom".to_string()),
+			}],
+		},
+		..CommandConfigFile::default()
+	});
+
+	assert!(errors.is_empty());
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('H'), KeyModifiers::SHIFT))),
+	);
+
+	assert_eq!(state.active_buffer_id(), Some(second));
 }
 
 #[test]

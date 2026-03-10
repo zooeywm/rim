@@ -1,7 +1,4 @@
-use super::{
-	BufferHistoryEntry, CursorState, EditorMode, PendingBlockInsert, PendingInsertUndoGroup,
-	PendingSwapDecision, RimState, StatusBarMode, rope_line_count,
-};
+use super::{BufferHistoryEntry, CursorState, EditorMode, PendingBlockInsert, PendingInsertUndoGroup, PendingSwapDecision, RimState, StatusBarMode, rope_line_count};
 
 impl RimState {
 	pub fn status_line(&self) -> String {
@@ -31,25 +28,17 @@ impl RimState {
 		format!("{} | keys {} | {}", self.status_bar.message, self.status_bar.key_sequence, cursor_pos)
 	}
 
-	pub fn is_insert_mode(&self) -> bool {
-		self.mode == EditorMode::Insert
-	}
+	pub fn is_insert_mode(&self) -> bool { self.mode == EditorMode::Insert }
 
-	pub fn is_command_mode(&self) -> bool {
-		self.mode == EditorMode::Command
-	}
+	pub fn is_command_mode(&self) -> bool { self.mode == EditorMode::Command }
 
 	pub fn is_visual_mode(&self) -> bool {
 		matches!(self.mode, EditorMode::VisualChar | EditorMode::VisualLine | EditorMode::VisualBlock)
 	}
 
-	pub fn is_visual_line_mode(&self) -> bool {
-		self.mode == EditorMode::VisualLine
-	}
+	pub fn is_visual_line_mode(&self) -> bool { self.mode == EditorMode::VisualLine }
 
-	pub fn is_visual_block_mode(&self) -> bool {
-		self.mode == EditorMode::VisualBlock
-	}
+	pub fn is_visual_block_mode(&self) -> bool { self.mode == EditorMode::VisualBlock }
 
 	pub fn is_block_insert_mode(&self) -> bool {
 		self.mode == EditorMode::Insert && self.pending_block_insert.is_some()
@@ -120,13 +109,9 @@ impl RimState {
 		self.status_bar.mode = StatusBarMode::Normal;
 	}
 
-	pub fn push_command_char(&mut self, ch: char) {
-		self.command_line.push(ch);
-	}
+	pub fn push_command_char(&mut self, ch: char) { self.command_line.push(ch); }
 
-	pub fn pop_command_char(&mut self) {
-		let _ = self.command_line.pop();
-	}
+	pub fn pop_command_char(&mut self) { let _ = self.command_line.pop(); }
 
 	pub fn take_command_line(&mut self) -> String {
 		let command = self.command_line.trim().to_string();
@@ -153,9 +138,7 @@ impl RimState {
 			Some(PendingInsertUndoGroup { buffer_id, before_cursor: self.active_cursor(), edits: Vec::new() });
 	}
 
-	pub fn cancel_insert_history_group(&mut self) {
-		self.pending_insert_group = None;
-	}
+	pub fn cancel_insert_history_group(&mut self) { self.pending_insert_group = None; }
 
 	pub fn commit_insert_history_group(&mut self) {
 		let Some(group) = self.pending_insert_group.take() else {
@@ -165,9 +148,10 @@ impl RimState {
 			return;
 		}
 		let after_cursor = self.cursor_for_buffer(group.buffer_id).unwrap_or(group.before_cursor);
-		self.push_buffer_history_entry(
-			group.buffer_id,
-			BufferHistoryEntry { edits: group.edits, before_cursor: group.before_cursor, after_cursor },
-		);
+		self.push_buffer_history_entry(group.buffer_id, BufferHistoryEntry {
+			edits: group.edits,
+			before_cursor: group.before_cursor,
+			after_cursor,
+		});
 	}
 }

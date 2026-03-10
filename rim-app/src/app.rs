@@ -5,34 +5,32 @@ use rim_infra_file_watcher::FileWatcherState;
 use rim_infra_input::InputPumpService;
 use rim_infra_storage::StorageIoState;
 use rim_infra_ui::{Renderer, TerminalSession};
-use rim_kernel::{
-	action::{AppAction, FileAction},
-	ports::{FilePicker, FilePickerError, StorageIo},
-	state::RimState,
-};
+use rim_kernel::{action::{AppAction, FileAction, SystemAction}, ports::{FilePicker, FilePickerError, StorageIo}, state::RimState};
 use tracing::trace;
+
+use crate::config::{command_config_path, load_command_config};
 
 #[derive(derive_more::AsRef, derive_more::AsMut)]
 pub struct App {
 	// Kernel state is mutable because action dispatch mutates domain state.
 	#[as_mut]
-	state: RimState,
+	state:              RimState,
 	// Concrete infrastructure states are kept in the single app container.
 	#[as_ref]
-	storage_io: StorageIoState,
+	storage_io:         StorageIoState,
 	#[as_ref]
-	file_watcher: FileWatcherState,
-	terminal_session: RefCell<Option<TerminalSession>>,
+	file_watcher:       FileWatcherState,
+	terminal_session:   RefCell<Option<TerminalSession>>,
 	input_pump_service: RefCell<InputPumpService>,
 	// Event bus is the glue between runtime producers and kernel consumers.
-	event_rx: flume::Receiver<AppAction>,
+	event_rx:           flume::Receiver<AppAction>,
 }
 
 pub(crate) struct AppPorts<'a> {
-	pub(crate) storage_io: &'a StorageIoState,
-	pub(crate) file_watcher: &'a FileWatcherState,
+	pub(crate) storage_io:       &'a StorageIoState,
+	pub(crate) file_watcher:     &'a FileWatcherState,
 	pub(crate) terminal_session: &'a RefCell<Option<TerminalSession>>,
-	pub(crate) input_pump: &'a RefCell<InputPumpService>,
+	pub(crate) input_pump:       &'a RefCell<InputPumpService>,
 }
 
 impl<'a> AppPorts<'a> {
@@ -50,9 +48,14 @@ impl App {
 	pub fn new() -> Result<Self> {
 		// One bounded queue coordinates input, IO callbacks, and kernel actions.
 		let (event_tx, event_rx) = flume::bounded(1024);
-
+		let mut state = RimState::new();
+		if let Some(config) = load_command_config()? {
+			for error in state.apply_command_config(&config) {
+				tracing::error!("command config ignored entry: {}", error);
+			}
+		}
 		Ok(Self {
-			state: RimState::new(),
+			state,
 			storage_io: StorageIoState::new(event_tx.clone()),
 			file_watcher: FileWatcherState::new(event_tx.clone()),
 			terminal_session: RefCell::new(None),
@@ -66,6 +69,9 @@ impl App {
 		// bus.
 		self.storage_io.start();
 		self.file_watcher.start();
+		if let Err(err) = self.file_watcher.enqueue_watch_config(command_config_path()) {
+			tracing::error!("watch command config failed: {}", err);
+		}
 	}
 
 	pub fn open_startup_files(&mut self, file_paths: Vec<PathBuf>) {
@@ -127,19 +133,20 @@ impl App {
 				break;
 			}
 			// Cursor shape is synchronized after each state transition.
-			{
-				let mut terminal_session = self.terminal_session.borrow_mut();
-				terminal_session
-					.as_mut()
-					.expect("terminal session should exist while app is running")
-					.sync_cursor_style(self.state.mode)
-					.context("sync cursor style failed")?;
-			}
+			let mut terminal_session = self.terminal_session.borrow_mut();
+			terminal_session
+				.as_mut()
+				.expect("terminal session should exist while app is running")
+				.sync_cursor_style(self.state.mode)
+				.context("sync cursor style failed")?;
 		}
 		Ok(())
 	}
 
 	pub fn process_action(&mut self, action: AppAction) -> ControlFlow<()> {
+		if matches!(action, AppAction::System(SystemAction::ReloadCommandConfig)) {
+			return self.reload_command_config();
+		}
 		// All domain transitions must go through one handler entrypoint.
 		let state = &mut self.state;
 		let ports =
@@ -154,6 +161,28 @@ impl App {
 				| AppAction::Layout(_)
 				| AppAction::File(FileAction::WorkspaceSessionLoaded { .. })
 		)
+	}
+
+	fn reload_command_config(&mut self) -> ControlFlow<()> {
+		match load_command_config() {
+			Ok(Some(config)) => {
+				let errors = self.state.apply_command_config(&config);
+				if errors.is_empty() {
+					self.state.status_bar.message = "command config reloaded".to_string();
+				} else {
+					self.state.status_bar.message = format!("command config reloaded with {} issue(s)", errors.len());
+					for error in errors {
+						tracing::error!("command config ignored entry: {}", error);
+					}
+				}
+			}
+			Ok(None) => {}
+			Err(err) => {
+				tracing::error!("command config reload failed: {}", err);
+				self.state.status_bar.message = format!("command config reload failed: {}", err);
+			}
+		}
+		ControlFlow::Continue(())
 	}
 }
 

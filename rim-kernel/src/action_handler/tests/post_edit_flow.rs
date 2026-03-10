@@ -1,11 +1,7 @@
 use ropey::Rope;
 
 use super::support::{RecordingPorts, normalize_test_path};
-use crate::{
-	action::{AppAction, EditorAction, KeyCode, KeyEvent, KeyModifiers},
-	ports::SwapEditOp,
-	state::RimState,
-};
+use crate::{action::{AppAction, EditorAction, KeyCode, KeyEvent, KeyModifiers}, ports::SwapEditOp, state::RimState};
 
 #[test]
 fn swap_ops_from_text_diff_should_split_multiline_block_insert_into_multiple_inserts() {
@@ -14,13 +10,10 @@ fn swap_ops_from_text_diff_should_split_multiline_block_insert_into_multiple_ins
 
 	let ops = super::super::post_edit_flow::swap_ops_from_text_diff(&before, &after);
 
-	assert_eq!(
-		ops,
-		vec![
-			SwapEditOp::Insert { pos: 1, text: "X".to_string() },
-			SwapEditOp::Insert { pos: 6, text: "X".to_string() },
-		]
-	);
+	assert_eq!(ops, vec![SwapEditOp::Insert { pos: 1, text: "X".to_string() }, SwapEditOp::Insert {
+		pos:  6,
+		text: "X".to_string(),
+	},]);
 }
 
 #[test]
@@ -49,11 +42,8 @@ fn visual_block_insert_should_enqueue_multiple_swap_insert_ops() {
 		.map(|(_, _, op)| op.clone())
 		.collect::<Vec<_>>();
 
-	assert_eq!(
-		ops,
-		vec![
-			SwapEditOp::Insert { pos: 1, text: "X".to_string() },
-			SwapEditOp::Insert { pos: 6, text: "X".to_string() },
-		]
-	);
+	assert_eq!(ops, vec![SwapEditOp::Insert { pos: 1, text: "X".to_string() }, SwapEditOp::Insert {
+		pos:  6,
+		text: "X".to_string(),
+	},]);
 }

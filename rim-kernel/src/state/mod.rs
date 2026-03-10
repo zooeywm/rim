@@ -1,14 +1,11 @@
-use std::{
-	collections::{BTreeMap, HashMap, HashSet},
-	fmt,
-	path::{Path, PathBuf},
-	time::{Duration, Instant},
-};
+use std::{collections::{BTreeMap, HashMap, HashSet}, fmt, path::{Path, PathBuf}, time::{Duration, Instant}};
 
 use ropey::Rope;
 use serde::{Deserialize, Serialize};
 use slotmap::{SlotMap, new_key_type};
 use tracing::error;
+
+use crate::command::{CommandConfigFile, CommandRegistry, PluginCommandRegistration};
 
 mod buffer;
 mod edit;
@@ -25,82 +22,86 @@ pub struct TabId(pub u64);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BufferState {
-	pub name: String,
-	pub path: Option<PathBuf>,
-	pub text: Rope,
+	pub name:                String,
+	pub path:                Option<PathBuf>,
+	pub text:                Rope,
 	// This is the last clean snapshot loaded from or saved to disk.
-	pub clean_text: Rope,
-	pub dirty: bool,
+	pub clean_text:          Rope,
+	pub dirty:               bool,
 	pub externally_modified: bool,
-	pub undo_stack: Vec<BufferHistoryEntry>,
-	pub redo_stack: Vec<BufferHistoryEntry>,
+	pub undo_stack:          Vec<BufferHistoryEntry>,
+	pub redo_stack:          Vec<BufferHistoryEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BufferHistoryEntry {
-	pub edits: Vec<BufferEditSnapshot>,
+	pub edits:         Vec<BufferEditSnapshot>,
 	pub before_cursor: CursorState,
-	pub after_cursor: CursorState,
+	pub after_cursor:  CursorState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersistedBufferHistory {
 	pub current_text: String,
-	pub cursor: CursorState,
-	pub undo_stack: Vec<BufferHistoryEntry>,
-	pub redo_stack: Vec<BufferHistoryEntry>,
+	pub cursor:       CursorState,
+	pub undo_stack:   Vec<BufferHistoryEntry>,
+	pub redo_stack:   Vec<BufferHistoryEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BufferEditSnapshot {
-	pub start_byte: usize,
-	pub deleted_text: String,
+	pub start_byte:    usize,
+	pub deleted_text:  String,
 	pub inserted_text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RopeTextDiff {
-	pub start_char: usize,
-	pub start_byte: usize,
-	pub deleted_text: String,
+	pub start_char:    usize,
+	pub start_byte:    usize,
+	pub deleted_text:  String,
 	pub inserted_text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WindowState {
 	pub buffer_id: Option<BufferId>,
-	pub cursor: CursorState,
-	pub scroll_x: u16,
-	pub scroll_y: u16,
-	pub x: u16,
-	pub y: u16,
-	pub width: u16,
-	pub height: u16,
+	pub cursor:    CursorState,
+	pub scroll_x:  u16,
+	pub scroll_y:  u16,
+	pub x:         u16,
+	pub y:         u16,
+	pub width:     u16,
+	pub height:    u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct WindowBufferViewState {
-	pub cursor: CursorState,
+	pub cursor:   CursorState,
 	pub scroll_x: u16,
 	pub scroll_y: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TabState {
-	pub windows: Vec<WindowId>,
+	pub windows:       Vec<WindowId>,
 	pub active_window: WindowId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusBarState {
-	pub mode: StatusBarMode,
-	pub message: String,
+	pub mode:         StatusBarMode,
+	pub message:      String,
 	pub key_sequence: String,
 }
 
 impl Default for StatusBarState {
 	fn default() -> Self {
-		Self { mode: StatusBarMode::Normal, message: "new file".to_string(), key_sequence: String::new() }
+		Self {
+			mode:         StatusBarMode::Normal,
+			message:      "new file".to_string(),
+			key_sequence: String::new(),
+		}
 	}
 }
 
@@ -137,9 +138,7 @@ pub struct CursorState {
 }
 
 impl Default for CursorState {
-	fn default() -> Self {
-		Self { row: 1, col: 1 }
-	}
+	fn default() -> Self { Self { row: 1, col: 1 } }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,24 +167,24 @@ pub enum NormalSequenceKey {
 
 #[derive(Debug)]
 pub struct PendingInsertUndoGroup {
-	pub buffer_id: BufferId,
+	pub buffer_id:     BufferId,
 	pub before_cursor: CursorState,
-	pub edits: Vec<BufferEditSnapshot>,
+	pub edits:         Vec<BufferEditSnapshot>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PendingBlockInsert {
 	pub start_row: u16,
-	pub end_row: u16,
-	pub base_col: u16,
+	pub end_row:   u16,
+	pub base_col:  u16,
 }
 
 #[derive(Debug, Clone)]
 pub struct PendingSwapDecision {
-	pub buffer_id: BufferId,
-	pub source_path: PathBuf,
-	pub base_text: String,
-	pub owner_pid: u32,
+	pub buffer_id:      BufferId,
+	pub source_path:    PathBuf,
+	pub base_text:      String,
+	pub owner_pid:      u32,
 	pub owner_username: String,
 }
 
@@ -233,32 +232,33 @@ pub struct WorkspaceWindowBufferViewSnapshot {
 
 #[derive(Debug)]
 pub struct RimState {
-	pub title: String,
-	pub active_tab: TabId,
-	pub leader_key: char,
-	pub mode: EditorMode,
-	pub visual_anchor: Option<CursorState>,
-	pub command_line: String,
-	pub quit_after_save: bool,
-	pub pending_save_path: Option<(BufferId, PathBuf)>,
-	pub preferred_col: Option<u16>,
-	pub line_slot: Option<String>,
-	pub line_slot_line_wise: bool,
-	pub line_slot_block_wise: bool,
-	pub cursor_scroll_threshold: u16,
-	pub normal_sequence: Vec<NormalSequenceKey>,
-	pub visual_g_pending: bool,
-	pub pending_insert_group: Option<PendingInsertUndoGroup>,
-	pub pending_block_insert: Option<PendingBlockInsert>,
-	pub pending_swap_decision: Option<PendingSwapDecision>,
-	pub in_flight_internal_saves: HashSet<BufferId>,
+	pub title:                        String,
+	pub active_tab:                   TabId,
+	pub leader_key:                   char,
+	pub mode:                         EditorMode,
+	pub visual_anchor:                Option<CursorState>,
+	pub command_line:                 String,
+	pub quit_after_save:              bool,
+	pub pending_save_path:            Option<(BufferId, PathBuf)>,
+	pub preferred_col:                Option<u16>,
+	pub line_slot:                    Option<String>,
+	pub line_slot_line_wise:          bool,
+	pub line_slot_block_wise:         bool,
+	pub cursor_scroll_threshold:      u16,
+	pub normal_sequence:              Vec<NormalSequenceKey>,
+	pub visual_g_pending:             bool,
+	pub pending_insert_group:         Option<PendingInsertUndoGroup>,
+	pub pending_block_insert:         Option<PendingBlockInsert>,
+	pub pending_swap_decision:        Option<PendingSwapDecision>,
+	pub in_flight_internal_saves:     HashSet<BufferId>,
 	pub ignore_external_change_until: HashMap<BufferId, Instant>,
-	pub(crate) window_buffer_views: HashMap<(WindowId, BufferId), WindowBufferViewState>,
-	pub buffers: SlotMap<BufferId, BufferState>,
-	pub buffer_order: Vec<BufferId>,
-	pub windows: SlotMap<WindowId, WindowState>,
-	pub tabs: BTreeMap<TabId, TabState>,
-	pub status_bar: StatusBarState,
+	pub command_registry:             CommandRegistry,
+	pub(crate) window_buffer_views:   HashMap<(WindowId, BufferId), WindowBufferViewState>,
+	pub buffers:                      SlotMap<BufferId, BufferState>,
+	pub buffer_order:                 Vec<BufferId>,
+	pub windows:                      SlotMap<WindowId, WindowState>,
+	pub tabs:                         BTreeMap<TabId, TabState>,
+	pub status_bar:                   StatusBarState,
 }
 
 impl RimState {
@@ -296,6 +296,7 @@ impl RimState {
 			pending_swap_decision: None,
 			in_flight_internal_saves: HashSet::new(),
 			ignore_external_change_until: HashMap::new(),
+			command_registry: CommandRegistry::with_defaults(),
 			window_buffer_views: HashMap::new(),
 			buffers,
 			buffer_order: Vec::new(),
@@ -303,6 +304,14 @@ impl RimState {
 			tabs,
 			status_bar: StatusBarState::default(),
 		}
+	}
+
+	pub fn apply_command_config(&mut self, config: &CommandConfigFile) -> Vec<String> {
+		self.command_registry.apply_config(config)
+	}
+
+	pub fn register_plugin_command(&mut self, registration: PluginCommandRegistration) -> Result<(), String> {
+		self.command_registry.register_plugin_command(registration)
 	}
 
 	pub fn create_window(&mut self, buffer_id: Option<BufferId>) -> Option<WindowId> {
@@ -339,14 +348,11 @@ impl RimState {
 			return;
 		};
 		if persist_previous_cursor && let Some(previous_buffer_id) = window_snapshot.buffer_id {
-			self.window_buffer_views.insert(
-				(window_id, previous_buffer_id),
-				WindowBufferViewState {
-					cursor: window_snapshot.cursor,
-					scroll_x: window_snapshot.scroll_x,
-					scroll_y: window_snapshot.scroll_y,
-				},
-			);
+			self.window_buffer_views.insert((window_id, previous_buffer_id), WindowBufferViewState {
+				cursor:   window_snapshot.cursor,
+				scroll_x: window_snapshot.scroll_x,
+				scroll_y: window_snapshot.scroll_y,
+			});
 		}
 
 		let restored_view = self.window_buffer_views.get(&(window_id, buffer_id)).copied().unwrap_or_default();
@@ -361,14 +367,11 @@ impl RimState {
 			window.scroll_x = restored_view.scroll_x;
 			window.scroll_y = restored_view.scroll_y;
 		}
-		self.window_buffer_views.insert(
-			(window_id, buffer_id),
-			WindowBufferViewState {
-				cursor: next_cursor,
-				scroll_x: restored_view.scroll_x,
-				scroll_y: restored_view.scroll_y,
-			},
-		);
+		self.window_buffer_views.insert((window_id, buffer_id), WindowBufferViewState {
+			cursor:   next_cursor,
+			scroll_x: restored_view.scroll_x,
+			scroll_y: restored_view.scroll_y,
+		});
 	}
 
 	pub(crate) fn sync_window_view_binding(&mut self, window_id: WindowId) {
@@ -378,10 +381,11 @@ impl RimState {
 		let Some(buffer_id) = window.buffer_id else {
 			return;
 		};
-		self.window_buffer_views.insert(
-			(window_id, buffer_id),
-			WindowBufferViewState { cursor: window.cursor, scroll_x: window.scroll_x, scroll_y: window.scroll_y },
-		);
+		self.window_buffer_views.insert((window_id, buffer_id), WindowBufferViewState {
+			cursor:   window.cursor,
+			scroll_x: window.scroll_x,
+			scroll_y: window.scroll_y,
+		});
 	}
 
 	pub(crate) fn remove_window_view_bindings(&mut self, window_id: WindowId) {
@@ -390,9 +394,7 @@ impl RimState {
 }
 
 impl Default for RimState {
-	fn default() -> Self {
-		Self::new()
-	}
+	fn default() -> Self { Self::new() }
 }
 
 fn buffer_name_from_path(path: &Path) -> Option<String> {
@@ -407,9 +409,7 @@ pub(crate) fn rope_line_count(text: &Rope) -> usize {
 	if rope_ends_with_newline(text) { line_count.saturating_sub(1).max(1) } else { line_count.max(1) }
 }
 
-pub(crate) fn rope_is_empty(text: &Rope) -> bool {
-	text.len_chars() == 0
-}
+pub(crate) fn rope_is_empty(text: &Rope) -> bool { text.len_chars() == 0 }
 
 pub(crate) fn rope_line_without_newline(text: &Rope, row_index: usize) -> Option<String> {
 	if row_index >= rope_line_count(text) {
@@ -503,9 +503,9 @@ pub(crate) fn compute_rope_text_diff(before: &Rope, after: &Rope) -> Option<Rope
 	}
 
 	Some(RopeTextDiff {
-		start_char: common_prefix_chars,
-		start_byte: common_prefix_bytes,
-		deleted_text: before.slice(common_prefix_chars..before_mid_end).to_string(),
+		start_char:    common_prefix_chars,
+		start_byte:    common_prefix_bytes,
+		deleted_text:  before.slice(common_prefix_chars..before_mid_end).to_string(),
 		inserted_text: after.slice(common_prefix_chars..after_mid_end).to_string(),
 	})
 }

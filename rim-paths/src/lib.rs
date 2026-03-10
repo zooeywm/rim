@@ -1,5 +1,34 @@
 use std::path::PathBuf;
 
+pub fn user_config_root() -> PathBuf {
+	#[cfg(target_os = "windows")]
+	{
+		windows_config_root_from_env(
+			std::env::var_os("APPDATA").map(PathBuf::from),
+			std::env::var_os("USERPROFILE").map(PathBuf::from),
+			std::env::temp_dir(),
+		)
+	}
+
+	#[cfg(target_os = "macos")]
+	{
+		std::env::var_os("HOME")
+			.map(PathBuf::from)
+			.unwrap_or_else(std::env::temp_dir)
+			.join("Library")
+			.join("Application Support")
+			.join("rim")
+	}
+
+	#[cfg(all(unix, not(target_os = "macos")))]
+	{
+		if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from) {
+			return config_home.join("rim");
+		}
+		std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join(".config").join("rim")
+	}
+}
+
 pub fn user_state_root() -> PathBuf {
 	#[cfg(target_os = "windows")]
 	{
@@ -61,6 +90,21 @@ fn windows_state_root_from_env(
 	temp_dir.join("rim")
 }
 
+#[cfg(any(test, target_os = "windows"))]
+fn windows_config_root_from_env(
+	app_data: Option<PathBuf>,
+	user_profile: Option<PathBuf>,
+	temp_dir: PathBuf,
+) -> PathBuf {
+	if let Some(app_data) = app_data.filter(|path| path.is_absolute()) {
+		return app_data.join("rim");
+	}
+	if let Some(user_profile) = user_profile.filter(|path| path.is_absolute()) {
+		return user_profile.join("AppData").join("Roaming").join("rim");
+	}
+	temp_dir.join("rim")
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -74,5 +118,16 @@ mod tests {
 		);
 
 		assert_eq!(root, PathBuf::from("/Users/tester/AppData/Local/rim"));
+	}
+
+	#[test]
+	fn windows_config_root_should_ignore_relative_appdata() {
+		let root = windows_config_root_from_env(
+			Some(PathBuf::from("relative-appdata")),
+			Some(PathBuf::from("/Users/tester")),
+			PathBuf::from("/tmp"),
+		);
+
+		assert_eq!(root, PathBuf::from("/Users/tester/AppData/Roaming/rim"));
 	}
 }

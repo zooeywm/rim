@@ -1,7 +1,7 @@
 use std::{ops::ControlFlow, path::PathBuf, time::{Duration, Instant}};
 
 use super::support::{FilePickerPorts, RecordingPorts, SwapDecisionPorts, dispatch_test_action, normalize_test_path};
-use crate::{action::{AppAction, EditorAction, FileAction, KeyCode, KeyEvent, KeyModifiers, SwapConflictInfo, SystemAction}, state::{BufferEditSnapshot, BufferHistoryEntry, CursorState, PendingSwapDecision, PersistedBufferHistory, RimState, WorkspaceBufferSnapshot, WorkspaceSessionSnapshot, WorkspaceTabSnapshot, WorkspaceWindowBufferViewSnapshot, WorkspaceWindowSnapshot}};
+use crate::{action::{AppAction, EditorAction, FileAction, KeyCode, KeyEvent, KeyModifiers, SwapConflictInfo, SystemAction}, command::{CommandAliasConfig, CommandAliasSection, CommandConfigFile}, state::{BufferEditSnapshot, BufferHistoryEntry, CursorState, PendingSwapDecision, PersistedBufferHistory, RimState, WorkspaceBufferSnapshot, WorkspaceSessionSnapshot, WorkspaceTabSnapshot, WorkspaceWindowBufferViewSnapshot, WorkspaceWindowSnapshot}};
 
 #[test]
 fn file_load_completed_should_mark_buffer_clean() {
@@ -251,6 +251,32 @@ fn command_qa_bang_should_force_quit_when_buffers_are_dirty() {
 	state.push_command_char('a');
 	state.push_command_char('!');
 
+	let flow = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
+	);
+
+	assert!(matches!(flow, ControlFlow::Break(())));
+}
+
+#[test]
+fn configured_command_alias_should_execute_registered_command() {
+	let mut state = RimState::new();
+	let errors = state.apply_command_config(&CommandConfigFile {
+		command: CommandAliasSection {
+			commands: vec![CommandAliasConfig {
+				name: "qq".to_string(),
+				run:  "core.quit_all".to_string(),
+				desc: Some("custom".to_string()),
+			}],
+		},
+		..CommandConfigFile::default()
+	});
+	state.enter_command_mode();
+	state.push_command_char('q');
+	state.push_command_char('q');
+
+	assert!(errors.is_empty());
 	let flow = dispatch_test_action(
 		&mut state,
 		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),

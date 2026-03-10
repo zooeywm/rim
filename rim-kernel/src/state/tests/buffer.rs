@@ -1,9 +1,7 @@
 use std::path::PathBuf;
 
 use super::common::{set_active_buffer_text, test_state};
-use crate::state::{
-	BufferEditSnapshot, BufferHistoryEntry, BufferSwitchDirection, CursorState, RimState, SplitAxis,
-};
+use crate::state::{BufferEditSnapshot, BufferHistoryEntry, BufferSwitchDirection, CursorState, RimState, SplitAxis};
 
 #[test]
 fn same_buffer_in_different_windows_should_keep_separate_cursor_positions() {
@@ -354,18 +352,15 @@ fn undo_back_to_clean_text_should_clear_dirty() {
 	let buffer_id = state.active_buffer_id().expect("active buffer exists");
 	set_active_buffer_text(&mut state, "ab");
 	state.insert_char_at_cursor('x');
-	state.push_buffer_history_entry(
-		buffer_id,
-		BufferHistoryEntry {
-			edits: vec![BufferEditSnapshot {
-				start_byte: 0,
-				deleted_text: String::new(),
-				inserted_text: "x".to_string(),
-			}],
-			before_cursor: CursorState { row: 1, col: 1 },
-			after_cursor: CursorState { row: 1, col: 2 },
-		},
-	);
+	state.push_buffer_history_entry(buffer_id, BufferHistoryEntry {
+		edits:         vec![BufferEditSnapshot {
+			start_byte:    0,
+			deleted_text:  String::new(),
+			inserted_text: "x".to_string(),
+		}],
+		before_cursor: CursorState { row: 1, col: 1 },
+		after_cursor:  CursorState { row: 1, col: 2 },
+	});
 
 	assert!(state.buffers.get(buffer_id).expect("buffer exists").dirty);
 

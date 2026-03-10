@@ -6,6 +6,22 @@
 - The kernel is separated from infrastructure, and the runtime still follows a single `App` container model
 - File watching, swap recovery, and persistent undo/redo all flow through the same event pipeline
 
+## Release v0.0.2
+
+This release focuses on runtime consistency and configuration ergonomics:
+
+- Workspace session persistence is aligned with runtime state (tabs, windows, buffers, undo/redo, per-window view state)
+- `:qa` is blocked when any buffer is dirty; `:qa!`, `:wqa`, and `:wqa!` are implemented
+- `:wq` now persists workspace session consistently
+- `:yazi` picker integration is stabilized for cursor/window restore behavior
+- Command config supports inline table style:
+  - `[normal] keymap = [ { on = "...", run = "...", desc = "..." } ]`
+  - `[command] commands = [ { name = "...", run = "...", desc = "..." } ]`
+- Config file changes are hot-reloaded through `FileWatcher` events (no polling loop in app runtime)
+- Override semantics are explicit:
+  - `normal.keymap` uses full-table replacement when provided
+  - `command.commands` uses full-table replacement when provided
+
 ## Current Feature Set
 
 - Core editing: movement, insert, delete, paste, undo, redo
@@ -164,6 +180,57 @@ Workspace session rules:
   - buffer text, clean baseline, undo stack, and redo stack
   - per `window + buffer` cursor and scroll state
 - File-backed buffers are rebound to file watching and swap tracking after restore
+
+## Command Registry And Keymap
+
+`rim` now treats both built-in actions and future plugin actions as commands.
+
+- Built-in commands are registered under stable command IDs such as `core.quit`, `core.save`, and `core.picker.yazi`
+- Future plugins can register additional command IDs under their own namespace
+- Normal-mode key bindings and command-line aliases are both resolved through the same command registry
+
+User overrides are loaded from:
+
+```text
+<config-root>/config.toml
+```
+
+If the file does not exist yet, `rim` creates a full default config template automatically on startup.
+
+Typical config roots:
+
+- Linux: `~/.config/rim`
+- macOS: `~/Library/Application Support/rim`
+- Windows: `%APPDATA%\\rim`
+
+Example:
+
+```toml
+[normal]
+keymap = [
+  { on = ["H"], run = "core.buffer.next", desc = "Switch to next buffer" },
+  { on = ["<leader>", "w", "v"], run = "core.window.split_vertical", desc = "Split vertically" },
+  { on = ["Q"], run = "quit", desc = "Quit application" },
+]
+
+[command]
+commands = [
+  { name = "qq", run = "core.quit_all", desc = "Quit application" },
+  { name = "files", run = "core.picker.yazi", desc = "Open yazi picker" },
+]
+```
+
+Rules:
+
+- `run` must reference a registered command ID
+- `normal.keymap` accepts `on = "..."` and `on = ["...", "..."]`
+- `run` can be a command invocation such as `quit` or `quit!`, or a command ID such as `core.quit_all`
+- `command.commands` defines command-line aliases entered after `:`
+- If `normal.keymap` is provided, it replaces the default normal keymap table
+- If `command.commands` is provided, it replaces the default command alias table
+- Missing sections keep the built-in code defaults
+- Invalid config entries are ignored and reported in the log
+- Config file edits are detected at runtime and reloaded automatically
 
 ## UI Conventions
 

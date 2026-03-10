@@ -11,7 +11,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 authors = ["zooeywm <zooeywm@gmail.com>"]
 
@@ -34,6 +34,7 @@ time                   = { version = "0.3", features = ["formatting", "macros"] 
 tracing                = "0.1"
 tracing-appender       = "0.2"
 tracing-subscriber     = { version = "0.3", features = ["env-filter", "fmt", "time"] }
+toml                   = "1.0"
 unicode-width          = "0.2"
 rim-app                = { path = "rim-app" }
 rim-infra-storage      = { path = "rim-infra-storage" }

@@ -186,4 +186,5 @@ pub enum FileLoadSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SystemAction {
 	Quit,
+	ReloadCommandConfig,
 }

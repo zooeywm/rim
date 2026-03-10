@@ -1,7 +1,7 @@
 use std::{cell::RefCell, ops::ControlFlow, path::{Path, PathBuf}};
 
-use super::super::mode_flow::SequenceMatch;
-use crate::{action::{AppAction, KeyEvent}, ports::{FilePicker, FilePickerError, FileWatcher, FileWatcherError, StorageIo, StorageIoError, SwapEditOp}, state::{BufferId, NormalSequenceKey, PersistedBufferHistory, RimState, WorkspaceSessionSnapshot}};
+use super::super::mode_flow::{SequenceMatch, resolve_normal_sequence_with_registry};
+use crate::{action::{AppAction, KeyEvent}, command::CommandRegistry, ports::{FilePicker, FilePickerError, FileWatcher, FileWatcherError, StorageIo, StorageIoError, SwapEditOp}, state::{BufferId, NormalSequenceKey, PersistedBufferHistory, RimState, WorkspaceSessionSnapshot}};
 
 pub(super) struct TestPorts;
 
@@ -420,5 +420,5 @@ pub(super) fn map_normal_key(state: &RimState, key: KeyEvent) -> Option<NormalSe
 }
 
 pub(super) fn resolve_keys(keys: &[NormalSequenceKey]) -> SequenceMatch {
-	RimState::resolve_normal_sequence(keys)
+	resolve_normal_sequence_with_registry(&CommandRegistry::with_defaults(), keys)
 }

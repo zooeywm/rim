@@ -3,7 +3,7 @@ use std::{ops::ControlFlow, path::PathBuf};
 use tracing::error;
 
 use super::ActionHandlerError;
-use crate::{action::{AppAction, FileAction, KeyCode, KeyEvent, WindowAction}, ports::{FilePicker, FileWatcher, StorageIo}, state::RimState};
+use crate::{action::{AppAction, FileAction, KeyCode, KeyEvent, WindowAction}, command::{BuiltinCommand, CommandTarget, ResolvedCommand}, ports::{FilePicker, FileWatcher, StorageIo}, state::RimState};
 
 pub(super) fn handle_command_mode_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
 where P: StorageIo + FileWatcher + FilePicker {
@@ -15,128 +15,155 @@ where P: StorageIo + FileWatcher + FilePicker {
 		KeyCode::Esc => state.exit_command_mode(),
 		KeyCode::Enter => {
 			let command = state.take_command_line();
-			match command.as_str() {
-				"" => {}
-				"qa" => {
-					if state.has_dirty_buffers() {
-						state.status_bar.message = "quit all blocked: unsaved changes".to_string();
-						return ControlFlow::Continue(());
-					}
-					return RimState::dispatch_internal(
-						ports,
-						state,
-						AppAction::System(crate::action::SystemAction::Quit),
-					);
-				}
-				"qa!" => {
-					return RimState::dispatch_internal(
-						ports,
-						state,
-						AppAction::System(crate::action::SystemAction::Quit),
-					);
-				}
-				"q!" | "quit!" => {
-					if state.active_tab_window_ids().len() > 1 {
-						return RimState::dispatch_internal(ports, state, AppAction::Window(WindowAction::CloseActive));
-					} else if state.tabs.len() > 1 {
-						return RimState::dispatch_internal(
-							ports,
-							state,
-							AppAction::Tab(crate::action::TabAction::CloseCurrent),
-						);
-					} else {
-						return RimState::dispatch_internal(
-							ports,
-							state,
-							AppAction::System(crate::action::SystemAction::Quit),
-						);
-					}
-				}
-				"q" | "quit" => {
-					if state.has_dirty_buffers() {
-						state.status_bar.message = "quit blocked: unsaved changes (use :q!)".to_string();
-						return ControlFlow::Continue(());
-					}
-					if state.active_tab_window_ids().len() > 1 {
-						return RimState::dispatch_internal(ports, state, AppAction::Window(WindowAction::CloseActive));
-					} else if state.tabs.len() > 1 {
-						return RimState::dispatch_internal(
-							ports,
-							state,
-							AppAction::Tab(crate::action::TabAction::CloseCurrent),
-						);
-					} else {
-						return RimState::dispatch_internal(
-							ports,
-							state,
-							AppAction::System(crate::action::SystemAction::Quit),
-						);
-					}
-				}
-				"w" => enqueue_save_active_buffer(ports, state, false, false, None),
-				"w!" => enqueue_save_active_buffer(ports, state, false, true, None),
-				"wa" => enqueue_save_all_buffers(ports, state, false, false),
-				"wqa" => enqueue_save_all_buffers(ports, state, true, false),
-				"wqa!" => enqueue_save_all_buffers(ports, state, true, true),
-				"wq" => enqueue_save_active_buffer(ports, state, true, false, None),
-				"wq!" => enqueue_save_active_buffer(ports, state, true, true, None),
-				"yazi" | "files" => enqueue_open_with_picker(ports, state),
-				"e" => enqueue_reload_active_buffer(ports, state, false),
-				"e!" => enqueue_reload_active_buffer(ports, state, true),
-				_ if command.starts_with("e ") => {
-					let path = command[2..].trim();
-					if path.is_empty() {
-						state.status_bar.message = "open failed: empty path".to_string();
-					} else {
-						return RimState::dispatch_internal(
-							ports,
-							state,
-							AppAction::File(FileAction::OpenRequested { path: PathBuf::from(path) }),
-						);
-					}
-				}
-				_ if command.starts_with("w ") => {
-					let path = command[2..].trim();
-					if path.is_empty() {
-						state.status_bar.message = "save failed: empty path".to_string();
-					} else {
-						enqueue_save_active_buffer(ports, state, false, false, Some(PathBuf::from(path)));
-					}
-				}
-				_ if command.starts_with("w! ") => {
-					let path = command[3..].trim();
-					if path.is_empty() {
-						state.status_bar.message = "save failed: empty path".to_string();
-					} else {
-						enqueue_save_active_buffer(ports, state, false, true, Some(PathBuf::from(path)));
-					}
-				}
-				_ if command.starts_with("wq ") => {
-					let path = command[3..].trim();
-					if path.is_empty() {
-						state.status_bar.message = "save failed: empty path".to_string();
-					} else {
-						enqueue_save_active_buffer(ports, state, true, false, Some(PathBuf::from(path)));
-					}
-				}
-				_ if command.starts_with("wq! ") => {
-					let path = command[4..].trim();
-					if path.is_empty() {
-						state.status_bar.message = "save failed: empty path".to_string();
-					} else {
-						enqueue_save_active_buffer(ports, state, true, true, Some(PathBuf::from(path)));
-					}
-				}
-				_ => {
-					state.status_bar.message = format!("unknown command: {}", command);
-				}
+			if command.is_empty() {
+				return ControlFlow::Continue(());
 			}
+			let Some(resolved) = state.command_registry.resolve_command_input(command.as_str()) else {
+				state.status_bar.message = format!("unknown command: {}", command);
+				return ControlFlow::Continue(());
+			};
+			return execute_resolved_command(ports, state, resolved);
 		}
 		KeyCode::Backspace => state.pop_command_char(),
 		KeyCode::Char(ch) => state.push_command_char(ch),
 		_ => {}
 	}
 	ControlFlow::Continue(())
+}
+
+pub(super) fn execute_command_target<P>(
+	ports: &P,
+	state: &mut RimState,
+	target: CommandTarget,
+	argument: Option<String>,
+) -> ControlFlow<()>
+where
+	P: StorageIo + FileWatcher + FilePicker,
+{
+	match target {
+		CommandTarget::Builtin(builtin) => execute_builtin_command(ports, state, builtin, argument),
+		CommandTarget::Plugin { command_id, .. } => {
+			state.status_bar.message = format!("plugin command unavailable: {}", command_id);
+			ControlFlow::Continue(())
+		}
+	}
+}
+
+pub(super) fn execute_resolved_command<P>(
+	ports: &P,
+	state: &mut RimState,
+	resolved: ResolvedCommand,
+) -> ControlFlow<()>
+where
+	P: StorageIo + FileWatcher + FilePicker,
+{
+	execute_command_target(ports, state, resolved.spec.target, resolved.argument)
+}
+
+fn execute_builtin_command<P>(
+	ports: &P,
+	state: &mut RimState,
+	command: BuiltinCommand,
+	argument: Option<String>,
+) -> ControlFlow<()>
+where
+	P: StorageIo + FileWatcher + FilePicker,
+{
+	match command {
+		command if command.normal_mode_action().is_some() => {
+			let action = command.normal_mode_action().expect("checked above");
+			RimState::dispatch_internal(ports, state, action)
+		}
+		BuiltinCommand::Quit => quit_current_scope(ports, state, false),
+		BuiltinCommand::QuitForce => quit_current_scope(ports, state, true),
+		BuiltinCommand::QuitAll => quit_application(ports, state, false),
+		BuiltinCommand::QuitAllForce => quit_application(ports, state, true),
+		BuiltinCommand::Save => {
+			enqueue_save_active_buffer(ports, state, false, false, argument.map(PathBuf::from));
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::SaveForce => {
+			enqueue_save_active_buffer(ports, state, false, true, argument.map(PathBuf::from));
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::SaveAll => {
+			enqueue_save_all_buffers(ports, state, false, false);
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::SaveAndQuit => {
+			enqueue_save_active_buffer(ports, state, true, false, argument.map(PathBuf::from));
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::SaveAndQuitForce => {
+			enqueue_save_active_buffer(ports, state, true, true, argument.map(PathBuf::from));
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::SaveAllAndQuit => {
+			enqueue_save_all_buffers(ports, state, true, false);
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::SaveAllAndQuitForce => {
+			enqueue_save_all_buffers(ports, state, true, true);
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::Reload => {
+			if let Some(path) = argument {
+				RimState::dispatch_internal(
+					ports,
+					state,
+					AppAction::File(FileAction::OpenRequested { path: PathBuf::from(path) }),
+				)
+			} else {
+				enqueue_reload_active_buffer(ports, state, false);
+				ControlFlow::Continue(())
+			}
+		}
+		BuiltinCommand::ReloadForce => {
+			if let Some(path) = argument {
+				RimState::dispatch_internal(
+					ports,
+					state,
+					AppAction::File(FileAction::OpenRequested { path: PathBuf::from(path) }),
+				)
+			} else {
+				enqueue_reload_active_buffer(ports, state, true);
+				ControlFlow::Continue(())
+			}
+		}
+		BuiltinCommand::OpenPickerYazi => {
+			enqueue_open_with_picker(ports, state);
+			ControlFlow::Continue(())
+		}
+		_ => {
+			let action =
+				command.normal_mode_action().expect("normal-mode builtin command should map to app action");
+			RimState::dispatch_internal(ports, state, action)
+		}
+	}
+}
+
+fn quit_application<P>(ports: &P, state: &mut RimState, force: bool) -> ControlFlow<()>
+where P: StorageIo + FileWatcher + FilePicker {
+	if !force && state.has_dirty_buffers() {
+		state.status_bar.message = "quit all blocked: unsaved changes".to_string();
+		return ControlFlow::Continue(());
+	}
+	RimState::dispatch_internal(ports, state, AppAction::System(crate::action::SystemAction::Quit))
+}
+
+fn quit_current_scope<P>(ports: &P, state: &mut RimState, force: bool) -> ControlFlow<()>
+where P: StorageIo + FileWatcher + FilePicker {
+	if !force && state.has_dirty_buffers() {
+		state.status_bar.message = "quit blocked: unsaved changes (use :q!)".to_string();
+		return ControlFlow::Continue(());
+	}
+	if state.active_tab_window_ids().len() > 1 {
+		return RimState::dispatch_internal(ports, state, AppAction::Window(WindowAction::CloseActive));
+	}
+	if state.tabs.len() > 1 {
+		return RimState::dispatch_internal(ports, state, AppAction::Tab(crate::action::TabAction::CloseCurrent));
+	}
+	RimState::dispatch_internal(ports, state, AppAction::System(crate::action::SystemAction::Quit))
 }
 
 fn enqueue_save_active_buffer<P>(

@@ -1,8 +1,4 @@
-use std::{
-	sync::{Arc, atomic::{AtomicBool, Ordering}},
-	thread,
-	time::Duration,
-};
+use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, time::Duration};
 
 use crossterm::{event, event::{Event, KeyCode as CrosstermKeyCode, KeyEvent as CrosstermKeyEvent, KeyEventKind as CrosstermKeyEventKind, KeyModifiers as CrosstermKeyModifiers}};
 use rim_kernel::action::{AppAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction};

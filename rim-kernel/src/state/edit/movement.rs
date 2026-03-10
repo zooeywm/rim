@@ -1,10 +1,7 @@
 use ropey::Rope;
 use unicode_width::UnicodeWidthChar;
 
-use super::{
-	CursorState, RimState, rope_ends_with_newline, rope_line_count, rope_line_len_chars,
-	rope_line_without_newline,
-};
+use super::{CursorState, RimState, rope_ends_with_newline, rope_line_count, rope_line_len_chars, rope_line_without_newline};
 use crate::state::{WindowId, rope_is_empty};
 
 const TAB_DISPLAY_WIDTH: usize = 4;
@@ -202,9 +199,7 @@ impl RimState {
 		col
 	}
 
-	fn max_row(&self) -> u16 {
-		self.active_buffer_rope().map(|text| rope_line_count(text) as u16).unwrap_or(1)
-	}
+	fn max_row(&self) -> u16 { self.active_buffer_rope().map(|text| rope_line_count(text) as u16).unwrap_or(1) }
 
 	pub(super) fn max_col_for_row(&self, row: u16) -> u16 {
 		let row_index = row.saturating_sub(1) as usize;
@@ -213,9 +208,7 @@ impl RimState {
 		line_len.saturating_add(1)
 	}
 
-	fn max_navigable_col_for_row(&self, row: u16) -> u16 {
-		self.max_col_for_row(row).saturating_sub(1).max(1)
-	}
+	fn max_navigable_col_for_row(&self, row: u16) -> u16 { self.max_col_for_row(row).saturating_sub(1).max(1) }
 
 	fn max_visual_char_col_for_row(&self, row: u16) -> u16 {
 		let line_len = self.max_col_for_row(row).saturating_sub(1);
