@@ -85,3 +85,32 @@ jobs:
           name: rim-windows-x86_64
           path: target/release/rim.exe
           if-no-files-found: error
+
+  release:
+    name: Publish Release Assets
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - clippy-build-linux
+      - clippy-build-windows
+    permissions:
+      contents: write
+    steps:
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rim-linux-x86_64
+          path: dist
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rim-windows-x86_64
+          path: dist
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/rim
+            dist/rim.exe
