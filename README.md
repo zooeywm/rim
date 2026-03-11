@@ -20,6 +20,7 @@ This release focuses on runtime consistency and configuration ergonomics:
 - Config file changes are hot-reloaded through `FileWatcher` events (no polling loop in app runtime)
 - Override semantics are explicit:
   - `normal.keymap` uses full-table replacement when provided
+  - `visual.keymap` uses full-table replacement when provided
   - `command.commands` uses full-table replacement when provided
 
 ## Current Feature Set
@@ -188,15 +189,17 @@ Workspace session rules:
 
 - Built-in commands are registered under stable command IDs such as `core.quit`, `core.save`, and `core.picker.yazi`
 - Future plugins can register additional command IDs under their own namespace
-- Normal-mode key bindings and command-line aliases are both resolved through the same command registry
+- Normal-mode key bindings, visual-mode key bindings, and command-line aliases are all resolved through the same command registry
 
 User overrides are loaded from:
 
 ```text
 <config-root>/config.toml
+<config-root>/keymaps.toml
+<config-root>/commands.toml
 ```
 
-If the file does not exist yet, `rim` creates a full default config template automatically on startup.
+If the files do not exist yet, `rim` creates full default config templates automatically on startup.
 
 Typical config roots:
 
@@ -207,11 +210,32 @@ Typical config roots:
 Example:
 
 ```toml
+[editor]
+leader_key = " "
+cursor_scroll_threshold = 0
+key_hints_width = 42
+key_hints_max_height = 36
+
 [normal]
 keymap = [
-  { on = ["H"], run = "core.buffer.next", desc = "Switch to next buffer" },
-  { on = ["<leader>", "w", "v"], run = "core.window.split_vertical", desc = "Split vertically" },
-  { on = ["Q"], run = "quit", desc = "Quit application" },
+  { on = "H", run = "core.buffer.next", desc = "Switch to next buffer" },
+  { on = "<leader>wv", run = "core.window.split_vertical", desc = "Split vertically" },
+  { on = "<F1>", run = "core.help.keymap", desc = "Show current mode key hints" },
+  { on = "<Up>", run = "core.help.keymap_scroll_up", desc = "Scroll key hint window up" },
+  { on = "<Down>", run = "core.help.keymap_scroll_down", desc = "Scroll key hint window down" },
+  { on = "<C-p>", run = "core.help.keymap_scroll_up", desc = "Scroll key hint window up" },
+  { on = "<C-n>", run = "core.help.keymap_scroll_down", desc = "Scroll key hint window down" },
+  { on = ["<leader>wh", "<leader>w-"], run = "core.window.split_horizontal", desc = "Split horizontally" },
+]
+
+[visual]
+keymap = [
+  { on = "<Esc>", run = "core.visual.exit", desc = "Exit visual mode" },
+  { on = "<F1>", run = "core.help.keymap", desc = "Show current mode key hints" },
+  { on = "<Up>", run = "core.help.keymap_scroll_up", desc = "Scroll key hint window up" },
+  { on = "<Down>", run = "core.help.keymap_scroll_down", desc = "Scroll key hint window down" },
+  { on = "<C-p>", run = "core.help.keymap_scroll_up", desc = "Scroll key hint window up" },
+  { on = "<C-n>", run = "core.help.keymap_scroll_down", desc = "Scroll key hint window down" },
 ]
 
 [command]
@@ -224,20 +248,27 @@ commands = [
 Rules:
 
 - `run` must reference a registered command ID
-- `normal.keymap` accepts `on = "..."` and `on = ["...", "..."]`
+- `normal.keymap` and `visual.keymap` accept `on = "..."` and `on = ["...", "..."]`
+- A single string means one complete shortcut sequence such as `"<leader>wv"`
+- A string array means multiple complete shortcuts bound to the same command
 - `run` can be a command invocation such as `quit` or `quit!`, or a command ID such as `core.quit_all`
+- `desc` is part of the runtime model and hot-reloads together with `run`
 - `command.commands` defines command-line aliases entered after `:`
-- If `normal.keymap` is provided, it replaces the default normal keymap table
+- `normal.keymap` and `visual.keymap` are command-oriented overrides: configured commands replace their built-in bindings, while untouched commands keep built-in defaults
 - If `command.commands` is provided, it replaces the default command alias table
 - Missing sections keep the built-in code defaults
 - Invalid config entries are ignored and reported in the log
-- Config file edits are detected at runtime and reloaded automatically
+- `config.toml` covers editor-wide settings such as `leader_key`, `cursor_scroll_threshold`, `key_hints_width`, and `key_hints_max_height`
+- Config file edits are detected at runtime and fully reloaded automatically; removing an override falls back to built-in defaults
 
 ## UI Conventions
 
 - The top bar shows the current buffer name
 - A dirty buffer displays `*` after the title
 - The bottom status bar shows the current mode, messages, and any pending key sequence
+- A floating window overlay is available for reusable popup UI
+- The first consumer of that overlay is the current-mode key hint popup
+- Long key hint entries wrap inside the floating window body without consuming the footer or breaking page navigation
 
 ## Modes
 
@@ -290,6 +321,8 @@ The editor currently implements these modes:
 - `H` / `L`: switch to the previous / next buffer in the current tab
 - `{` / `}`: switch to the previous / next buffer in the current tab
 - `Ctrl+h` `Ctrl+j` `Ctrl+k` `Ctrl+l`: move focus to the left / down / up / right window
+- `F1`: show current-mode single-key bindings and multi-key entry points in a floating hint window
+- While the hint window is open, long entries wrap within the current page instead of pushing the footer out of view
 
 The default leader key is `Space`.
 
@@ -303,6 +336,16 @@ Leader sequences:
 - `<leader> <Tab> ]`: switch to the next tab
 - `<leader> b n`: create and bind a new empty `untitled` buffer
 - `<leader> b d`: close the current buffer
+
+Pending multi-key sequences:
+
+- Prefix-driven hints are not leader-specific; any pending multi-key sequence can open the same floating hint window
+- Examples: `<leader>`, `<leader> b`, `g`, `d`
+- When the floating hint window overflows, `Up` / `Down` scroll one line and `Ctrl+u` / `Ctrl+d` scroll half a page
+- `Ctrl+n` / `Ctrl+p` also scroll the floating hint window by one line
+- The floating hint footer shows the current page number
+- `Backspace`: step back one prefix level while the hint window is open
+- `Esc`: close the hint window and cancel the pending sequence
 
 ## Insert Mode
 
@@ -331,6 +374,7 @@ Notes:
 - `v`: switch to `VISUAL`
 - `V`: switch to `VISUAL LINE`
 - `Ctrl+v`: switch to `VISUAL BLOCK`
+- `F1`: show current-mode visual key hints in a floating window
 
 ### Selection Operations
 

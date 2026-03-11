@@ -49,6 +49,7 @@ impl RimState {
 		self.visual_anchor = None;
 		self.pending_block_insert = None;
 		self.status_bar.mode = StatusBarMode::Insert;
+		self.close_key_hints();
 	}
 
 	pub fn enter_block_insert_mode(&mut self, pending: PendingBlockInsert) {
@@ -56,6 +57,7 @@ impl RimState {
 		self.visual_anchor = None;
 		self.pending_block_insert = Some(pending);
 		self.status_bar.mode = StatusBarMode::InsertBlock;
+		self.close_key_hints();
 	}
 
 	pub fn exit_insert_mode(&mut self) {
@@ -63,6 +65,7 @@ impl RimState {
 		self.visual_anchor = None;
 		self.pending_block_insert = None;
 		self.status_bar.mode = StatusBarMode::Normal;
+		self.close_key_hints();
 		self.clamp_cursor_to_navigable_col();
 	}
 
@@ -71,6 +74,7 @@ impl RimState {
 		self.visual_anchor = None;
 		self.command_line.clear();
 		self.status_bar.mode = StatusBarMode::Command;
+		self.close_key_hints();
 	}
 
 	pub fn exit_command_mode(&mut self) {
@@ -78,6 +82,7 @@ impl RimState {
 		self.visual_anchor = None;
 		self.command_line.clear();
 		self.status_bar.mode = StatusBarMode::Normal;
+		self.close_key_hints();
 	}
 
 	pub fn enter_visual_mode(&mut self) {
@@ -86,6 +91,7 @@ impl RimState {
 			self.visual_anchor = Some(self.active_cursor());
 		}
 		self.status_bar.mode = StatusBarMode::Visual;
+		self.close_key_hints();
 	}
 
 	pub fn enter_visual_line_mode(&mut self) {
@@ -93,6 +99,7 @@ impl RimState {
 		self.mode = EditorMode::VisualLine;
 		self.visual_anchor = Some(CursorState { row: anchor_row, col: 1 });
 		self.status_bar.mode = StatusBarMode::VisualLine;
+		self.close_key_hints();
 	}
 
 	pub fn enter_visual_block_mode(&mut self) {
@@ -101,12 +108,14 @@ impl RimState {
 			self.visual_anchor = Some(self.active_cursor());
 		}
 		self.status_bar.mode = StatusBarMode::VisualBlock;
+		self.close_key_hints();
 	}
 
 	pub fn exit_visual_mode(&mut self) {
 		self.mode = EditorMode::Normal;
 		self.visual_anchor = None;
 		self.status_bar.mode = StatusBarMode::Normal;
+		self.close_key_hints();
 	}
 
 	pub fn push_command_char(&mut self, ch: char) { self.command_line.push(ch); }

@@ -13,6 +13,7 @@ pub enum KeyCode {
 	Down,
 	Tab,
 	Esc,
+	F1,
 	Char(char),
 }
 
@@ -89,6 +90,9 @@ pub enum EditorAction {
 	ScrollViewUp,
 	ScrollViewHalfPageDown,
 	ScrollViewHalfPageUp,
+	ShowKeyHints,
+	ScrollKeyHintsUp,
+	ScrollKeyHintsDown,
 	Undo,
 	Redo,
 	JoinLineBelow,

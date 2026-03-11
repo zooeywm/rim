@@ -57,6 +57,13 @@ where P: StorageIo + FileWatcher {
 		EditorAction::ScrollViewUp => state.scroll_view_up_one_line(),
 		EditorAction::ScrollViewHalfPageDown => state.scroll_view_down_half_page(),
 		EditorAction::ScrollViewHalfPageUp => state.scroll_view_up_half_page(),
+		EditorAction::ShowKeyHints => state.open_key_hints_overview(),
+		EditorAction::ScrollKeyHintsUp => {
+			let _ = state.scroll_key_hints_up();
+		}
+		EditorAction::ScrollKeyHintsDown => {
+			let _ = state.scroll_key_hints_down();
+		}
 		EditorAction::Undo => state.undo_active_buffer_edit(),
 		EditorAction::Redo => state.redo_active_buffer_edit(),
 		EditorAction::JoinLineBelow => state.join_line_below_at_cursor(),

@@ -24,6 +24,7 @@ where P: StorageIo + FileWatcher + FilePicker {
 	if key.modifiers.contains(KeyModifiers::ALT) {
 		state.normal_sequence.clear();
 		state.status_bar.key_sequence.clear();
+		state.close_key_hints();
 		return ControlFlow::Continue(());
 	}
 
@@ -75,9 +76,36 @@ where P: StorageIo + FileWatcher + FilePicker {
 
 pub(super) fn handle_normal_mode_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
 where P: StorageIo + FileWatcher + FilePicker {
+	if key.code == KeyCode::F1 {
+		state.normal_sequence.clear();
+		state.status_bar.key_sequence.clear();
+		state.open_key_hints_overview();
+		return ControlFlow::Continue(());
+	}
+	if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('d') && state.key_hints_open()
+	{
+		let _ = state.scroll_key_hints_half_page_down();
+		return ControlFlow::Continue(());
+	}
+	if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('u') && state.key_hints_open()
+	{
+		let _ = state.scroll_key_hints_half_page_up();
+		return ControlFlow::Continue(());
+	}
+	if key.code == KeyCode::Backspace && state.step_back_key_hint_prefix() {
+		return ControlFlow::Continue(());
+	}
+	if key.code == KeyCode::Esc && matches!(state.overlay, Some(crate::state::OverlayState::KeyHints(_))) {
+		state.normal_sequence.clear();
+		state.status_bar.key_sequence.clear();
+		state.close_key_hints();
+		return ControlFlow::Continue(());
+	}
+
 	let Some(normal_key) = to_normal_key(state, key) else {
 		state.normal_sequence.clear();
 		state.status_bar.key_sequence.clear();
+		state.close_key_hints();
 		return ControlFlow::Continue(());
 	};
 
@@ -88,27 +116,34 @@ where P: StorageIo + FileWatcher + FilePicker {
 			SequenceMatch::Action(action) => {
 				state.normal_sequence.clear();
 				state.status_bar.key_sequence.clear();
+				if !should_keep_key_hints_open_for_action(&action) {
+					state.close_key_hints();
+				}
 				return RimState::dispatch_internal(ports, state, action);
 			}
 			SequenceMatch::Command(target) => {
 				state.normal_sequence.clear();
 				state.status_bar.key_sequence.clear();
+				state.close_key_hints();
 				return command_flow::execute_command_target(ports, state, target, None);
 			}
 			SequenceMatch::Pending => {
 				state.status_bar.key_sequence = render_normal_sequence(&state.normal_sequence);
+				state.refresh_pending_key_hints();
 				return ControlFlow::Continue(());
 			}
 			SequenceMatch::NoMatch => {
 				if state.normal_sequence.len() <= 1 {
 					state.normal_sequence.clear();
 					state.status_bar.key_sequence.clear();
+					state.close_key_hints();
 					return ControlFlow::Continue(());
 				}
 				let last = *state.normal_sequence.last().expect("normal sequence has at least one key");
 				state.normal_sequence.clear();
 				state.normal_sequence.push(last);
 				state.status_bar.key_sequence = render_normal_sequence(&state.normal_sequence);
+				state.refresh_pending_key_hints();
 			}
 		}
 	}
@@ -143,6 +178,15 @@ pub(super) fn to_normal_key(state: &RimState, key: KeyEvent) -> Option<NormalSeq
 	}
 	if key.code == KeyCode::Esc {
 		return Some(NormalSequenceKey::Esc);
+	}
+	if key.code == KeyCode::F1 {
+		return Some(NormalSequenceKey::F1);
+	}
+	if key.code == KeyCode::Up {
+		return Some(NormalSequenceKey::Up);
+	}
+	if key.code == KeyCode::Down {
+		return Some(NormalSequenceKey::Down);
 	}
 
 	None
@@ -191,6 +235,9 @@ pub(super) fn render_normal_sequence(keys: &[NormalSequenceKey]) -> String {
 			NormalSequenceKey::Leader => "<leader>".to_string(),
 			NormalSequenceKey::Tab => "<tab>".to_string(),
 			NormalSequenceKey::Esc => "<Esc>".to_string(),
+			NormalSequenceKey::F1 => "<F1>".to_string(),
+			NormalSequenceKey::Up => "<Up>".to_string(),
+			NormalSequenceKey::Down => "<Down>".to_string(),
 			NormalSequenceKey::Char(ch) => ch.to_string(),
 			NormalSequenceKey::Ctrl(ch) => format!("<C-{}>", ch),
 		})
@@ -222,6 +269,7 @@ pub(super) fn handle_insert_mode_key(state: &mut RimState, key: KeyEvent) -> Con
 		KeyCode::Up => state.move_cursor_up(),
 		KeyCode::Right => state.move_cursor_right_for_insert(),
 		KeyCode::Tab => state.insert_char_at_cursor('\t'),
+		KeyCode::F1 => {}
 		KeyCode::Char(ch) => {
 			state.insert_char_at_cursor(ch);
 		}
@@ -239,6 +287,7 @@ fn handle_block_insert_mode_key(state: &mut RimState, key: KeyEvent) -> ControlF
 		KeyCode::Esc => state.exit_insert_mode(),
 		KeyCode::Backspace => state.backspace_at_block_cursor(),
 		KeyCode::Tab => state.insert_char_at_block_cursor('\t'),
+		KeyCode::F1 => {}
 		KeyCode::Char(ch) => state.insert_char_at_block_cursor(ch),
 		KeyCode::Enter | KeyCode::Left | KeyCode::Down | KeyCode::Up | KeyCode::Right => {
 			state.status_bar.message = "block insert supports text, tab, backspace, esc only".to_string();
@@ -250,9 +299,30 @@ fn handle_block_insert_mode_key(state: &mut RimState, key: KeyEvent) -> ControlF
 
 pub(super) fn handle_visual_mode_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
 where P: StorageIo + FileWatcher + FilePicker {
+	if key.code == KeyCode::F1 {
+		state.normal_sequence.clear();
+		state.status_bar.key_sequence.clear();
+		state.open_key_hints_overview();
+		return ControlFlow::Continue(());
+	}
+	if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('d') && state.key_hints_open()
+	{
+		let _ = state.scroll_key_hints_half_page_down();
+		return ControlFlow::Continue(());
+	}
+	if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('u') && state.key_hints_open()
+	{
+		let _ = state.scroll_key_hints_half_page_up();
+		return ControlFlow::Continue(());
+	}
+	if key.code == KeyCode::Backspace && state.step_back_key_hint_prefix() {
+		return ControlFlow::Continue(());
+	}
+
 	let Some(visual_key) = to_normal_key(state, key) else {
 		state.normal_sequence.clear();
 		state.status_bar.key_sequence.clear();
+		state.close_key_hints();
 		return ControlFlow::Continue(());
 	};
 	state.normal_sequence.push(visual_key);
@@ -262,28 +332,39 @@ where P: StorageIo + FileWatcher + FilePicker {
 			SequenceMatch::Action(action) => {
 				state.normal_sequence.clear();
 				state.status_bar.key_sequence.clear();
+				if !should_keep_key_hints_open_for_action(&action) {
+					state.close_key_hints();
+				}
 				return RimState::dispatch_internal(ports, state, action);
 			}
 			SequenceMatch::Command(target) => {
 				state.normal_sequence.clear();
 				state.status_bar.key_sequence.clear();
+				state.close_key_hints();
 				return command_flow::execute_command_target(ports, state, target, None);
 			}
 			SequenceMatch::Pending => {
 				state.status_bar.key_sequence = render_normal_sequence(&state.normal_sequence);
+				state.refresh_pending_key_hints();
 				return ControlFlow::Continue(());
 			}
 			SequenceMatch::NoMatch => {
 				if state.normal_sequence.len() <= 1 {
 					state.normal_sequence.clear();
 					state.status_bar.key_sequence.clear();
+					state.close_key_hints();
 					return ControlFlow::Continue(());
 				}
 				let last = *state.normal_sequence.last().expect("visual sequence has at least one key");
 				state.normal_sequence.clear();
 				state.normal_sequence.push(last);
 				state.status_bar.key_sequence = render_normal_sequence(&state.normal_sequence);
+				state.refresh_pending_key_hints();
 			}
 		}
 	}
+}
+
+fn should_keep_key_hints_open_for_action(action: &AppAction) -> bool {
+	matches!(action, AppAction::Editor(EditorAction::ScrollKeyHintsUp | EditorAction::ScrollKeyHintsDown))
 }

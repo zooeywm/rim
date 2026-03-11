@@ -162,13 +162,86 @@ pub enum SplitAxis {
 	Vertical,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum NormalSequenceKey {
 	Leader,
 	Tab,
 	Esc,
+	F1,
+	Up,
+	Down,
 	Char(char),
 	Ctrl(char),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeymapScope {
+	Normal,
+	Visual,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FloatingWindowPlacement {
+	Centered { width: u16, height: u16 },
+	BottomRight { width: u16, height: u16, margin_right: u16, margin_bottom: u16 },
+	Absolute { x: u16, y: u16, width: u16, height: u16 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FloatingWindowLine {
+	pub key:       String,
+	pub summary:   String,
+	pub is_prefix: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FloatingWindowState {
+	pub title:     String,
+	pub subtitle:  Option<String>,
+	pub footer:    Option<String>,
+	pub placement: FloatingWindowPlacement,
+	pub lines:     Vec<FloatingWindowLine>,
+	pub scroll:    usize,
+}
+
+impl FloatingWindowState {
+	pub fn visible_body_rows(&self) -> usize {
+		let outer_height = match self.placement {
+			FloatingWindowPlacement::Centered { height, .. }
+			| FloatingWindowPlacement::BottomRight { height, .. }
+			| FloatingWindowPlacement::Absolute { height, .. } => height as usize,
+		};
+		let border_rows = 2usize;
+		let footer_rows = if self.footer.is_some() { 2usize } else { 0 };
+		outer_height.saturating_sub(border_rows + footer_rows).max(1)
+	}
+
+	pub fn max_scroll(&self) -> usize { self.lines.len().saturating_sub(self.visible_body_rows()) }
+
+	pub fn total_pages(&self) -> usize {
+		let body_rows = self.visible_body_rows().max(1);
+		self.lines.len().max(1).div_ceil(body_rows)
+	}
+
+	pub fn current_page(&self) -> usize {
+		let body_rows = self.visible_body_rows().max(1);
+		let visible_end = self.scroll.saturating_add(body_rows).min(self.lines.len().max(1));
+		visible_end.div_ceil(body_rows).max(1).min(self.total_pages())
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyHintsOverlayState {
+	pub scope:    KeymapScope,
+	pub prefix:   Vec<NormalSequenceKey>,
+	pub overview: bool,
+	pub window:   FloatingWindowState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OverlayState {
+	KeyHints(KeyHintsOverlayState),
+	FloatingWindow(FloatingWindowState),
 }
 
 #[derive(Debug)]
@@ -259,6 +332,8 @@ pub struct RimState {
 	pub line_slot_line_wise:          bool,
 	pub line_slot_block_wise:         bool,
 	pub cursor_scroll_threshold:      u16,
+	pub key_hints_width:              u16,
+	pub key_hints_max_height:         u16,
 	pub normal_sequence:              Vec<NormalSequenceKey>,
 	pub visual_g_pending:             bool,
 	pub pending_insert_group:         Option<PendingInsertUndoGroup>,
@@ -267,6 +342,7 @@ pub struct RimState {
 	pub in_flight_internal_saves:     HashSet<BufferId>,
 	pub ignore_external_change_until: HashMap<BufferId, Instant>,
 	pub command_registry:             CommandRegistry,
+	pub overlay:                      Option<OverlayState>,
 	pub(crate) window_buffer_views:   HashMap<(WindowId, BufferId), WindowBufferViewState>,
 	pub buffers:                      SlotMap<BufferId, BufferState>,
 	pub buffer_order:                 Vec<BufferId>,
@@ -307,6 +383,8 @@ impl RimState {
 			line_slot_line_wise: false,
 			line_slot_block_wise: false,
 			cursor_scroll_threshold: 0,
+			key_hints_width: 42,
+			key_hints_max_height: 36,
 			normal_sequence: Vec::new(),
 			visual_g_pending: false,
 			pending_insert_group: None,
@@ -315,6 +393,7 @@ impl RimState {
 			in_flight_internal_saves: HashSet::new(),
 			ignore_external_change_until: HashMap::new(),
 			command_registry: CommandRegistry::with_defaults(),
+			overlay: None,
 			window_buffer_views: HashMap::new(),
 			buffers,
 			buffer_order: Vec::new(),
@@ -330,6 +409,152 @@ impl RimState {
 
 	pub fn register_plugin_command(&mut self, registration: PluginCommandRegistration) -> Result<(), String> {
 		self.command_registry.register_plugin_command(registration)
+	}
+
+	pub fn active_keymap_scope(&self) -> KeymapScope {
+		if self.is_visual_mode() { KeymapScope::Visual } else { KeymapScope::Normal }
+	}
+
+	pub fn floating_window(&self) -> Option<&FloatingWindowState> {
+		match self.overlay.as_ref() {
+			Some(OverlayState::KeyHints(overlay)) => Some(&overlay.window),
+			Some(OverlayState::FloatingWindow(window)) => Some(window),
+			None => None,
+		}
+	}
+
+	pub fn close_key_hints(&mut self) {
+		if matches!(self.overlay, Some(OverlayState::KeyHints(_))) {
+			self.overlay = None;
+		}
+	}
+
+	pub fn key_hints_open(&self) -> bool { matches!(self.overlay, Some(OverlayState::KeyHints(_))) }
+
+	pub fn open_key_hints_overview(&mut self) { self.open_key_hints(Vec::new(), true); }
+
+	pub fn scroll_key_hints_up(&mut self) -> bool { self.scroll_overlay_lines(-1) }
+
+	pub fn scroll_key_hints_down(&mut self) -> bool { self.scroll_overlay_lines(1) }
+
+	pub fn scroll_key_hints_half_page_up(&mut self) -> bool { self.scroll_overlay_half_page(-1) }
+
+	pub fn scroll_key_hints_half_page_down(&mut self) -> bool { self.scroll_overlay_half_page(1) }
+
+	pub fn refresh_key_hints_overlay_after_config_reload(&mut self) {
+		let Some(OverlayState::KeyHints(overlay)) = self.overlay.as_ref() else {
+			return;
+		};
+		self.open_key_hints(overlay.prefix.clone(), overlay.overview);
+	}
+
+	pub fn refresh_pending_key_hints(&mut self) {
+		if self.normal_sequence.is_empty() {
+			self.close_key_hints();
+			return;
+		}
+		self.open_key_hints(self.normal_sequence.clone(), false);
+	}
+
+	fn open_key_hints(&mut self, prefix: Vec<NormalSequenceKey>, overview: bool) {
+		let scope = self.active_keymap_scope();
+		let lines = self.command_registry.key_hints(scope, prefix.as_slice());
+		if lines.is_empty() {
+			self.close_key_hints();
+			return;
+		}
+		let title = if overview {
+			format!("{} keymap", self.active_keymap_scope_label(scope))
+		} else {
+			format!("{} {}", self.active_keymap_scope_label(scope), self.render_sequence(prefix.as_slice()))
+		};
+		let subtitle = Some("Scrollable".to_string());
+		let height = lines.len().saturating_add(4).min(self.key_hints_max_height as usize) as u16;
+		let window = FloatingWindowState {
+			title,
+			subtitle,
+			footer: Some("Esc close  Backspace back".to_string()),
+			placement: FloatingWindowPlacement::BottomRight {
+				width: self.key_hints_width,
+				height,
+				margin_right: 1,
+				margin_bottom: 1,
+			},
+			lines,
+			scroll: 0,
+		};
+		self.overlay = Some(OverlayState::KeyHints(KeyHintsOverlayState { scope, prefix, overview, window }));
+	}
+
+	fn active_keymap_scope_label(&self, scope: KeymapScope) -> &'static str {
+		match scope {
+			KeymapScope::Normal => "NORMAL",
+			KeymapScope::Visual => "VISUAL",
+		}
+	}
+
+	fn render_sequence(&self, keys: &[NormalSequenceKey]) -> String {
+		keys
+			.iter()
+			.map(|key| match key {
+				NormalSequenceKey::Leader => "<leader>".to_string(),
+				NormalSequenceKey::Tab => "<Tab>".to_string(),
+				NormalSequenceKey::Esc => "<Esc>".to_string(),
+				NormalSequenceKey::F1 => "<F1>".to_string(),
+				NormalSequenceKey::Up => "<Up>".to_string(),
+				NormalSequenceKey::Down => "<Down>".to_string(),
+				NormalSequenceKey::Char(ch) => ch.to_string(),
+				NormalSequenceKey::Ctrl(ch) => format!("<C-{}>", ch),
+			})
+			.collect::<Vec<_>>()
+			.join("")
+	}
+
+	pub fn step_back_key_hint_prefix(&mut self) -> bool {
+		if self.normal_sequence.pop().is_none() {
+			self.close_key_hints();
+			return false;
+		}
+		self.status_bar.key_sequence = self.render_sequence(self.normal_sequence.as_slice());
+		self.refresh_pending_key_hints();
+		true
+	}
+
+	fn scroll_overlay_lines(&mut self, delta: isize) -> bool {
+		let Some(window) = self.floating_window_mut() else {
+			return false;
+		};
+		let body_rows = window.visible_body_rows();
+		if body_rows == 0 {
+			return false;
+		}
+		let max_scroll = window.max_scroll();
+		let next_scroll = if delta.is_negative() {
+			window.scroll.saturating_sub(delta.unsigned_abs())
+		} else {
+			window.scroll.saturating_add(delta as usize).min(max_scroll)
+		};
+		if next_scroll == window.scroll {
+			return false;
+		}
+		window.scroll = next_scroll;
+		true
+	}
+
+	fn scroll_overlay_half_page(&mut self, direction: isize) -> bool {
+		let Some(window) = self.floating_window_mut() else {
+			return false;
+		};
+		let step = (window.visible_body_rows() / 2).max(1) as isize;
+		if direction.is_negative() { self.scroll_overlay_lines(-step) } else { self.scroll_overlay_lines(step) }
+	}
+
+	fn floating_window_mut(&mut self) -> Option<&mut FloatingWindowState> {
+		match self.overlay.as_mut() {
+			Some(OverlayState::KeyHints(overlay)) => Some(&mut overlay.window),
+			Some(OverlayState::FloatingWindow(window)) => Some(window),
+			None => None,
+		}
 	}
 
 	pub fn create_window(&mut self, buffer_id: Option<BufferId>) -> Option<WindowId> {

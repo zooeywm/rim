@@ -1,8 +1,10 @@
+mod floating_window;
 mod status_bar;
 mod terminal_session;
 mod top_bar;
 mod window_area;
 
+use floating_window::FloatingWindowWidget;
 use ratatui::layout::{Constraint, Layout, Rect};
 use rim_kernel::state::RimState;
 use status_bar::StatusBarWidget;
@@ -37,6 +39,9 @@ impl Renderer {
 
 		frame.render_widget(top_bar, chunks[0]);
 		frame.render_widget(window_area, chunks[1]);
+		if let Some(floating_window) = FloatingWindowWidget::from_state(state, chunks[1]) {
+			frame.render_widget(floating_window, chunks[1]);
+		}
 		frame.render_widget(status_bar, chunks[2]);
 		if let Some(cursor_to_draw) = cursor_position {
 			frame.set_cursor_position(cursor_to_draw);

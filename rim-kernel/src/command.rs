@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{action::{AppAction, BufferAction, EditorAction, LayoutAction, TabAction, WindowAction}, state::NormalSequenceKey};
+use crate::{action::{AppAction, BufferAction, EditorAction, LayoutAction, TabAction, WindowAction}, state::{FloatingWindowLine, KeymapScope, NormalSequenceKey}};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BuiltinCommand {
@@ -46,6 +46,9 @@ pub enum BuiltinCommand {
 	ScrollViewUp,
 	ScrollViewHalfPageDown,
 	ScrollViewHalfPageUp,
+	ShowKeyHints,
+	KeyHintScrollUp,
+	KeyHintScrollDown,
 	Quit,
 	QuitForce,
 	QuitAll,
@@ -114,6 +117,9 @@ impl BuiltinCommand {
 			Self::ScrollViewUp => Some(AppAction::Editor(EditorAction::ScrollViewUp)),
 			Self::ScrollViewHalfPageDown => Some(AppAction::Editor(EditorAction::ScrollViewHalfPageDown)),
 			Self::ScrollViewHalfPageUp => Some(AppAction::Editor(EditorAction::ScrollViewHalfPageUp)),
+			Self::ShowKeyHints => Some(AppAction::Editor(EditorAction::ShowKeyHints)),
+			Self::KeyHintScrollUp => Some(AppAction::Editor(EditorAction::ScrollKeyHintsUp)),
+			Self::KeyHintScrollDown => Some(AppAction::Editor(EditorAction::ScrollKeyHintsDown)),
 			_ => None,
 		}
 	}
@@ -133,6 +139,9 @@ impl BuiltinCommand {
 			Self::ScrollViewUp => Some(AppAction::Editor(EditorAction::ScrollViewUp)),
 			Self::ScrollViewHalfPageDown => Some(AppAction::Editor(EditorAction::ScrollViewHalfPageDown)),
 			Self::ScrollViewHalfPageUp => Some(AppAction::Editor(EditorAction::ScrollViewHalfPageUp)),
+			Self::ShowKeyHints => Some(AppAction::Editor(EditorAction::ShowKeyHints)),
+			Self::KeyHintScrollUp => Some(AppAction::Editor(EditorAction::ScrollKeyHintsUp)),
+			Self::KeyHintScrollDown => Some(AppAction::Editor(EditorAction::ScrollKeyHintsDown)),
 			Self::VisualExit => Some(AppAction::Editor(EditorAction::ExitVisualMode)),
 			Self::VisualDelete => Some(AppAction::Editor(EditorAction::DeleteVisualSelectionToSlot)),
 			Self::VisualYank => Some(AppAction::Editor(EditorAction::YankVisualSelectionToSlot)),
@@ -186,18 +195,21 @@ pub enum BindingMatch<T> {
 struct NormalKeyBinding {
 	keys:       Vec<NormalSequenceKey>,
 	command_id: String,
+	desc:       Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct VisualKeyBinding {
 	keys:       Vec<NormalSequenceKey>,
 	command_id: String,
+	desc:       Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CommandAlias {
 	name:       String,
 	command_id: String,
+	desc:       Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -218,13 +230,10 @@ impl CommandRegistry {
 	pub fn apply_config(&mut self, config: &CommandConfigFile) -> Vec<String> {
 		let mut errors = Vec::new();
 
-		if !config.normal.keymap.is_empty() {
-			// Treat configured key bindings as an authoritative replacement set.
-			self.normal_bindings.clear();
-		}
+		let mut overridden_normal_commands = Vec::new();
 		for binding in &config.normal.keymap {
-			let keys = match binding.on.parse_keys() {
-				Ok(keys) => keys,
+			let key_sets = match binding.on.parse_bindings() {
+				Ok(key_sets) => key_sets,
 				Err(err) => {
 					errors.push(format!("invalid normal key binding '{}': {}", binding.on.display_for_error(), err));
 					continue;
@@ -234,16 +243,24 @@ impl CommandRegistry {
 				errors.push(format!("unknown run directive in normal keymap: {}", binding.run));
 				continue;
 			};
-			self.normal_bindings.retain(|candidate| candidate.keys != keys);
-			self.normal_bindings.push(NormalKeyBinding { keys, command_id: resolved.spec.id.clone() });
+			if !overridden_normal_commands.iter().any(|command_id| command_id == &resolved.spec.id) {
+				self.normal_bindings.retain(|candidate| candidate.command_id != resolved.spec.id);
+				overridden_normal_commands.push(resolved.spec.id.clone());
+			}
+			for keys in key_sets {
+				self.normal_bindings.retain(|candidate| candidate.keys != keys);
+				self.normal_bindings.push(NormalKeyBinding {
+					keys,
+					command_id: resolved.spec.id.clone(),
+					desc: binding.desc.clone(),
+				});
+			}
 		}
 
-		if !config.visual.keymap.is_empty() {
-			self.visual_bindings.clear();
-		}
+		let mut overridden_visual_commands = Vec::new();
 		for binding in &config.visual.keymap {
-			let keys = match binding.on.parse_keys() {
-				Ok(keys) => keys,
+			let key_sets = match binding.on.parse_bindings() {
+				Ok(key_sets) => key_sets,
 				Err(err) => {
 					errors.push(format!("invalid visual key binding '{}': {}", binding.on.display_for_error(), err));
 					continue;
@@ -253,8 +270,18 @@ impl CommandRegistry {
 				errors.push(format!("unknown run directive in visual keymap: {}", binding.run));
 				continue;
 			};
-			self.visual_bindings.retain(|candidate| candidate.keys != keys);
-			self.visual_bindings.push(VisualKeyBinding { keys, command_id: resolved.spec.id.clone() });
+			if !overridden_visual_commands.iter().any(|command_id| command_id == &resolved.spec.id) {
+				self.visual_bindings.retain(|candidate| candidate.command_id != resolved.spec.id);
+				overridden_visual_commands.push(resolved.spec.id.clone());
+			}
+			for keys in key_sets {
+				self.visual_bindings.retain(|candidate| candidate.keys != keys);
+				self.visual_bindings.push(VisualKeyBinding {
+					keys,
+					command_id: resolved.spec.id.clone(),
+					desc: binding.desc.clone(),
+				});
+			}
 		}
 
 		if !config.command.commands.is_empty() {
@@ -266,9 +293,11 @@ impl CommandRegistry {
 				errors.push(format!("unknown run directive in command alias: {}", alias.run));
 				continue;
 			};
-			self
-				.command_aliases
-				.push(CommandAlias { name: alias.name.clone(), command_id: resolved.spec.id });
+			self.command_aliases.push(CommandAlias {
+				name:       alias.name.clone(),
+				command_id: resolved.spec.id,
+				desc:       alias.desc.clone(),
+			});
 		}
 
 		errors
@@ -294,6 +323,14 @@ impl CommandRegistry {
 
 	pub fn resolve_visual_sequence(&self, keys: &[NormalSequenceKey]) -> BindingMatch<CommandTarget> {
 		resolve_key_binding_set(&self.commands, &self.visual_bindings, keys)
+	}
+
+	pub fn key_hints(&self, scope: KeymapScope, prefix: &[NormalSequenceKey]) -> Vec<FloatingWindowLine> {
+		let bindings = match scope {
+			KeymapScope::Normal => KeyBindingSet::Normal(self.normal_bindings.as_slice()),
+			KeymapScope::Visual => KeyBindingSet::Visual(self.visual_bindings.as_slice()),
+		};
+		collect_key_hints(&self.commands, bindings, prefix)
 	}
 
 	pub fn resolve_command_input(&self, input: &str) -> Option<ResolvedCommand> {
@@ -376,7 +413,7 @@ impl CommandRegistry {
 			command.push(CommandAliasConfig {
 				name: alias.name.clone(),
 				run:  alias.command_id.clone(),
-				desc: Some(spec.description.clone()),
+				desc: alias.desc.clone().or_else(|| Some(spec.description.clone())),
 			});
 		}
 
@@ -657,6 +694,27 @@ impl CommandRegistry {
 			BuiltinCommand::ScrollViewHalfPageUp,
 		);
 		self.register_builtin(
+			"core.help.keymap",
+			"help",
+			"Show current mode key hints",
+			CommandArgKind::None,
+			BuiltinCommand::ShowKeyHints,
+		);
+		self.register_builtin(
+			"core.help.keymap_scroll_up",
+			"help",
+			"Scroll key hint window up",
+			CommandArgKind::None,
+			BuiltinCommand::KeyHintScrollUp,
+		);
+		self.register_builtin(
+			"core.help.keymap_scroll_down",
+			"help",
+			"Scroll key hint window down",
+			CommandArgKind::None,
+			BuiltinCommand::KeyHintScrollDown,
+		);
+		self.register_builtin(
 			"core.quit",
 			"command",
 			"Quit current scope",
@@ -852,6 +910,11 @@ impl CommandRegistry {
 		self.bind_default_normal("<C-d>", "core.view.scroll_half_page_down");
 		self.bind_default_normal("<C-u>", "core.view.scroll_half_page_up");
 		self.bind_default_normal("<C-r>", "core.edit.redo");
+		self.bind_default_normal("<F1>", "core.help.keymap");
+		self.bind_default_normal("<Up>", "core.help.keymap_scroll_up");
+		self.bind_default_normal("<Down>", "core.help.keymap_scroll_down");
+		self.bind_default_normal("<C-p>", "core.help.keymap_scroll_up");
+		self.bind_default_normal("<C-n>", "core.help.keymap_scroll_down");
 		self.bind_default_normal("<leader>wv", "core.window.split_vertical");
 		self.bind_default_normal("<leader>wh", "core.window.split_horizontal");
 		self.bind_default_normal("<leader><Tab>n", "core.tab.new");
@@ -883,6 +946,11 @@ impl CommandRegistry {
 		self.bind_default_visual("<C-y>", "core.view.scroll_up");
 		self.bind_default_visual("<C-d>", "core.view.scroll_half_page_down");
 		self.bind_default_visual("<C-u>", "core.view.scroll_half_page_up");
+		self.bind_default_visual("<F1>", "core.help.keymap");
+		self.bind_default_visual("<Up>", "core.help.keymap_scroll_up");
+		self.bind_default_visual("<Down>", "core.help.keymap_scroll_down");
+		self.bind_default_visual("<C-p>", "core.help.keymap_scroll_up");
+		self.bind_default_visual("<C-n>", "core.help.keymap_scroll_down");
 
 		self.bind_default_command("q", "core.quit");
 		self.bind_default_command("quit", "core.quit");
@@ -922,18 +990,20 @@ impl CommandRegistry {
 
 	fn bind_default_normal(&mut self, on: &str, command_id: &str) {
 		let keys = parse_normal_sequence(on).expect("default key binding should be valid");
-		self.normal_bindings.push(NormalKeyBinding { keys, command_id: command_id.to_string() });
+		self.normal_bindings.push(NormalKeyBinding { keys, command_id: command_id.to_string(), desc: None });
 	}
 
 	fn bind_default_visual(&mut self, on: &str, command_id: &str) {
 		let keys = parse_normal_sequence(on).expect("default key binding should be valid");
-		self.visual_bindings.push(VisualKeyBinding { keys, command_id: command_id.to_string() });
+		self.visual_bindings.push(VisualKeyBinding { keys, command_id: command_id.to_string(), desc: None });
 	}
 
 	fn bind_default_command(&mut self, name: &str, command_id: &str) {
-		self
-			.command_aliases
-			.push(CommandAlias { name: name.to_string(), command_id: command_id.to_string() });
+		self.command_aliases.push(CommandAlias {
+			name:       name.to_string(),
+			command_id: command_id.to_string(),
+			desc:       None,
+		});
 	}
 }
 
@@ -970,25 +1040,44 @@ pub struct KeymapBindingConfig {
 	pub desc: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum KeyBindingOn {
-	Single(String),
-	Many(Vec<String>),
-}
+#[derive(Debug, Clone, Serialize)]
+pub struct KeyBindingOn(Vec<String>);
 
 impl KeyBindingOn {
-	fn parse_keys(&self) -> Result<Vec<NormalSequenceKey>, String> {
-		match self {
-			Self::Single(token) => parse_normal_sequence(token),
-			Self::Many(tokens) => parse_key_token_array(tokens),
+	pub fn single(token: impl Into<String>) -> Self { Self(vec![token.into()]) }
+
+	pub fn many(tokens: Vec<String>) -> Self { Self(tokens) }
+
+	pub fn entries(&self) -> &[String] { self.0.as_slice() }
+
+	fn parse_bindings(&self) -> Result<Vec<Vec<NormalSequenceKey>>, String> {
+		if self.0.is_empty() {
+			return Err("empty key binding list".to_string());
 		}
+		self.0.iter().map(|token| parse_normal_sequence(token)).collect()
 	}
 
 	fn display_for_error(&self) -> String {
-		match self {
-			Self::Single(token) => token.clone(),
-			Self::Many(tokens) => format!("[{}]", tokens.join(",")),
+		match self.0.as_slice() {
+			[single] => single.clone(),
+			many => format!("[{}]", many.join(",")),
+		}
+	}
+}
+
+impl<'de> Deserialize<'de> for KeyBindingOn {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where D: serde::Deserializer<'de> {
+		#[derive(Deserialize)]
+		#[serde(untagged)]
+		enum KeyBindingOnSerde {
+			Single(String),
+			Many(Vec<String>),
+		}
+
+		match KeyBindingOnSerde::deserialize(deserializer)? {
+			KeyBindingOnSerde::Single(token) => Ok(Self::single(token)),
+			KeyBindingOnSerde::Many(tokens) => Ok(Self::many(tokens)),
 		}
 	}
 }
@@ -1003,18 +1092,37 @@ pub struct CommandAliasConfig {
 trait KeyBindingView {
 	fn keys(&self) -> &[NormalSequenceKey];
 	fn command_id(&self) -> &str;
+	fn desc(&self) -> Option<&str>;
 }
 
 impl KeyBindingView for NormalKeyBinding {
 	fn keys(&self) -> &[NormalSequenceKey] { self.keys.as_slice() }
 
 	fn command_id(&self) -> &str { self.command_id.as_str() }
+
+	fn desc(&self) -> Option<&str> { self.desc.as_deref() }
 }
 
 impl KeyBindingView for VisualKeyBinding {
 	fn keys(&self) -> &[NormalSequenceKey] { self.keys.as_slice() }
 
 	fn command_id(&self) -> &str { self.command_id.as_str() }
+
+	fn desc(&self) -> Option<&str> { self.desc.as_deref() }
+}
+
+enum KeyBindingSet<'a> {
+	Normal(&'a [NormalKeyBinding]),
+	Visual(&'a [VisualKeyBinding]),
+}
+
+impl<'a> KeyBindingSet<'a> {
+	fn iter(&self) -> Box<dyn Iterator<Item = &dyn KeyBindingView> + '_> {
+		match self {
+			Self::Normal(bindings) => Box::new(bindings.iter().map(|binding| binding as &dyn KeyBindingView)),
+			Self::Visual(bindings) => Box::new(bindings.iter().map(|binding| binding as &dyn KeyBindingView)),
+		}
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -1061,12 +1169,66 @@ where
 			continue;
 		};
 		exported.push(KeymapBindingConfig {
-			on:   KeyBindingOn::Single(render_normal_sequence(binding.keys())),
+			on:   KeyBindingOn::single(render_normal_sequence(binding.keys())),
 			run:  binding.command_id().to_string(),
-			desc: Some(spec.description.clone()),
+			desc: binding.desc().map(ToString::to_string).or_else(|| Some(spec.description.clone())),
 		});
 	}
 	exported
+}
+
+fn collect_key_hints(
+	commands: &HashMap<String, CommandSpec>,
+	bindings: KeyBindingSet<'_>,
+	prefix: &[NormalSequenceKey],
+) -> Vec<FloatingWindowLine> {
+	#[derive(Default)]
+	struct HintAggregate {
+		exact_description: Option<String>,
+		exact_category:    Option<String>,
+		child_categories:  Vec<String>,
+		has_children:      bool,
+	}
+
+	let mut aggregates: BTreeMap<NormalSequenceKey, HintAggregate> = BTreeMap::new();
+	for binding in bindings.iter() {
+		let keys = binding.keys();
+		if !keys.starts_with(prefix) || keys.len() <= prefix.len() {
+			continue;
+		}
+		let next = keys[prefix.len()];
+		let Some(spec) = commands.get(binding.command_id()) else {
+			continue;
+		};
+		let aggregate = aggregates.entry(next).or_default();
+		if keys.len() == prefix.len().saturating_add(1) {
+			aggregate.exact_description = Some(binding.desc().unwrap_or(spec.description.as_str()).to_string());
+			aggregate.exact_category = Some(spec.category.clone());
+		} else {
+			aggregate.has_children = true;
+			aggregate.child_categories.push(spec.category.clone());
+		}
+	}
+
+	aggregates
+		.into_iter()
+		.map(|(key, aggregate)| {
+			let summary = if aggregate.has_children {
+				let category = common_category_label(aggregate.child_categories.as_slice())
+					.or(aggregate.exact_category.as_deref())
+					.unwrap_or("more");
+				format!("+{}", category)
+			} else {
+				aggregate.exact_description.unwrap_or_else(|| "+more".to_string())
+			};
+			FloatingWindowLine { key: render_normal_sequence(&[key]), summary, is_prefix: aggregate.has_children }
+		})
+		.collect()
+}
+
+fn common_category_label(categories: &[String]) -> Option<&str> {
+	let first = categories.first()?;
+	if categories.iter().all(|candidate| candidate == first) { Some(first.as_str()) } else { None }
 }
 
 fn parse_normal_sequence(input: &str) -> Result<Vec<NormalSequenceKey>, String> {
@@ -1097,6 +1259,18 @@ fn parse_normal_sequence(input: &str) -> Result<Vec<NormalSequenceKey>, String> 
 				result.push(NormalSequenceKey::Esc);
 				continue;
 			}
+			if lowered == "f1" {
+				result.push(NormalSequenceKey::F1);
+				continue;
+			}
+			if lowered == "up" {
+				result.push(NormalSequenceKey::Up);
+				continue;
+			}
+			if lowered == "down" {
+				result.push(NormalSequenceKey::Down);
+				continue;
+			}
 			if let Some(rest) = lowered.strip_prefix("c-") {
 				let mut token_chars = rest.chars();
 				let Some(ctrl_char) = token_chars.next() else {
@@ -1118,18 +1292,6 @@ fn parse_normal_sequence(input: &str) -> Result<Vec<NormalSequenceKey>, String> 
 	Ok(result)
 }
 
-fn parse_key_token_array(tokens: &[String]) -> Result<Vec<NormalSequenceKey>, String> {
-	if tokens.is_empty() {
-		return Err("empty key token list".to_string());
-	}
-	let mut keys = Vec::new();
-	for token in tokens {
-		let parsed = parse_normal_sequence(token)?;
-		keys.extend(parsed);
-	}
-	Ok(keys)
-}
-
 fn render_normal_sequence(keys: &[NormalSequenceKey]) -> String {
 	keys
 		.iter()
@@ -1137,6 +1299,9 @@ fn render_normal_sequence(keys: &[NormalSequenceKey]) -> String {
 			NormalSequenceKey::Leader => "<leader>".to_string(),
 			NormalSequenceKey::Tab => "<Tab>".to_string(),
 			NormalSequenceKey::Esc => "<Esc>".to_string(),
+			NormalSequenceKey::F1 => "<F1>".to_string(),
+			NormalSequenceKey::Up => "<Up>".to_string(),
+			NormalSequenceKey::Down => "<Down>".to_string(),
 			NormalSequenceKey::Char(ch) => ch.to_string(),
 			NormalSequenceKey::Ctrl(ch) => format!("<C-{}>", ch),
 		})
@@ -1161,7 +1326,7 @@ mod tests {
 		let config = CommandConfigFile {
 			normal: CommandKeymapSection {
 				keymap: vec![KeymapBindingConfig {
-					on:   KeyBindingOn::Single("H".to_string()),
+					on:   KeyBindingOn::single("H"),
 					run:  "core.buffer.next".to_string(),
 					desc: Some("custom".to_string()),
 				}],
@@ -1177,6 +1342,10 @@ mod tests {
 			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::BufferSwitchNext))
 		);
 		assert_eq!(registry.resolve_normal_sequence(&[NormalSequenceKey::Char('L')]), BindingMatch::NoMatch);
+		assert_eq!(
+			registry.resolve_normal_sequence(&[NormalSequenceKey::Char('j')]),
+			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::MoveDown))
+		);
 	}
 
 	#[test]
@@ -1227,7 +1396,7 @@ mod tests {
 		let config = CommandConfigFile {
 			normal: CommandKeymapSection {
 				keymap: vec![KeymapBindingConfig {
-					on:   KeyBindingOn::Many(vec!["g".to_string(), "g".to_string()]),
+					on:   KeyBindingOn::many(vec!["gg".to_string(), "G".to_string()]),
 					run:  "core.cursor.file_end".to_string(),
 					desc: Some("custom".to_string()),
 				}],
@@ -1242,6 +1411,10 @@ mod tests {
 			registry.resolve_normal_sequence(&[NormalSequenceKey::Char('g'), NormalSequenceKey::Char('g')]),
 			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::MoveFileEnd))
 		);
+		assert_eq!(
+			registry.resolve_normal_sequence(&[NormalSequenceKey::Char('G')]),
+			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::MoveFileEnd))
+		);
 	}
 
 	#[test]
@@ -1250,7 +1423,7 @@ mod tests {
 		let config = CommandConfigFile {
 			normal: CommandKeymapSection {
 				keymap: vec![KeymapBindingConfig {
-					on:   KeyBindingOn::Many(vec!["c".to_string(), "m".to_string()]),
+					on:   KeyBindingOn::many(vec!["cm".to_string(), "mc".to_string()]),
 					run:  "plugin chmod".to_string(),
 					desc: Some("plugin".to_string()),
 				}],
@@ -1261,8 +1434,67 @@ mod tests {
 		let errors = registry.apply_config(&config);
 		let resolved =
 			registry.resolve_normal_sequence(&[NormalSequenceKey::Char('c'), NormalSequenceKey::Char('m')]);
+		let alternate =
+			registry.resolve_normal_sequence(&[NormalSequenceKey::Char('m'), NormalSequenceKey::Char('c')]);
 
 		assert!(errors.is_empty());
 		assert!(matches!(resolved, BindingMatch::Exact(CommandTarget::Plugin { .. })));
+		assert!(matches!(alternate, BindingMatch::Exact(CommandTarget::Plugin { .. })));
+	}
+
+	#[test]
+	fn key_hints_should_group_multi_key_prefixes() {
+		let registry = CommandRegistry::with_defaults();
+
+		let leader_hints = registry.key_hints(KeymapScope::Normal, &[NormalSequenceKey::Leader]);
+
+		assert!(leader_hints.iter().any(|hint| hint.key == "b" && hint.summary == "+buffer" && hint.is_prefix));
+		assert!(leader_hints.iter().any(|hint| hint.key == "w" && hint.summary == "+window" && hint.is_prefix));
+	}
+
+	#[test]
+	fn key_hints_should_describe_non_leader_multi_key_sequences() {
+		let registry = CommandRegistry::with_defaults();
+
+		let hints = registry.key_hints(KeymapScope::Normal, &[NormalSequenceKey::Char('g')]);
+
+		assert_eq!(hints.len(), 1);
+		assert_eq!(hints[0].key, "g");
+		assert_eq!(hints[0].summary, "Move to file start");
+		assert!(!hints[0].is_prefix);
+	}
+
+	#[test]
+	fn configured_keymap_desc_should_override_key_hint_summary() {
+		let mut registry = CommandRegistry::with_defaults();
+		let config = CommandConfigFile {
+			normal: CommandKeymapSection {
+				keymap: vec![KeymapBindingConfig {
+					on:   KeyBindingOn::single("gg"),
+					run:  "core.cursor.file_start".to_string(),
+					desc: Some("Jump to beginning".to_string()),
+				}],
+			},
+			..CommandConfigFile::default()
+		};
+
+		let errors = registry.apply_config(&config);
+		let hints = registry.key_hints(KeymapScope::Normal, &[NormalSequenceKey::Char('g')]);
+
+		assert!(errors.is_empty());
+		assert_eq!(hints.len(), 1);
+		assert_eq!(hints[0].summary, "Jump to beginning");
+	}
+
+	#[test]
+	fn default_export_should_include_f1_key_hint_binding() {
+		let config = CommandRegistry::with_defaults().export_config();
+
+		assert!(config.normal.keymap.iter().any(|binding| {
+			matches!(binding.on.entries(), [token] if token == "<F1>") && binding.run == "core.help.keymap"
+		}));
+		assert!(config.visual.keymap.iter().any(|binding| {
+			matches!(binding.on.entries(), [token] if token == "<F1>") && binding.run == "core.help.keymap"
+		}));
 	}
 }

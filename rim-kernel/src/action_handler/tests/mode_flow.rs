@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use super::{super::mode_flow::SequenceMatch, support::{RecordingPorts, dispatch_test_action, map_normal_key, resolve_keys}};
-use crate::{action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction}, command::{CommandConfigFile, CommandKeymapSection, KeyBindingOn, KeymapBindingConfig}, state::{NormalSequenceKey, RimState}};
+use crate::{action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction}, command::{CommandConfigFile, CommandKeymapSection, KeyBindingOn, KeymapBindingConfig}, state::{FloatingWindowPlacement, NormalSequenceKey, RimState}};
 
 #[test]
 fn to_normal_key_should_map_leader_char_to_leader_token() {
@@ -184,6 +184,13 @@ fn to_normal_key_should_map_shift_g_to_upper_g() {
 }
 
 #[test]
+fn to_normal_key_should_map_f1_token() {
+	let state = RimState::new();
+	let mapped = map_normal_key(&state, KeyEvent::new(KeyCode::F1, KeyModifiers::NONE));
+	assert_eq!(mapped, Some(NormalSequenceKey::F1));
+}
+
+#[test]
 fn resolve_normal_sequence_should_map_leader_b_d_to_close_active_buffer() {
 	let seq = vec![NormalSequenceKey::Leader, NormalSequenceKey::Char('b'), NormalSequenceKey::Char('d')];
 	let resolved = resolve_keys(&seq);
@@ -208,7 +215,7 @@ fn configured_normal_key_binding_should_override_builtin_mapping() {
 	let errors = state.apply_command_config(&CommandConfigFile {
 		normal: CommandKeymapSection {
 			keymap: vec![KeymapBindingConfig {
-				on:   KeyBindingOn::Single("H".to_string()),
+				on:   KeyBindingOn::single("H"),
 				run:  "core.buffer.next".to_string(),
 				desc: Some("custom".to_string()),
 			}],
@@ -610,4 +617,248 @@ fn open_line_above_insert_should_be_grouped_into_single_undo_step() {
 	);
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
 	assert_eq!(buffer.text.to_string(), "a");
+}
+
+#[test]
+fn f1_should_open_current_mode_key_hint_overview() {
+	let mut state = RimState::new();
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::F1, KeyModifiers::NONE))),
+	);
+
+	let floating = state.floating_window().expect("floating window should open");
+	assert!(floating.title.contains("NORMAL"));
+	assert!(floating.lines.iter().any(|line| line.key == "g" && line.summary == "+cursor"));
+	assert!(floating.lines.iter().any(|line| line.key == "<leader>" && line.summary == "+more"));
+}
+
+#[test]
+fn pending_multi_key_sequence_should_refresh_key_hint_popup() {
+	let mut state = RimState::new();
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE))),
+	);
+	let floating = state.floating_window().expect("pending g should open hints");
+	assert!(floating.title.ends_with("g"));
+	assert_eq!(floating.lines.len(), 1);
+	assert_eq!(floating.lines[0].key, "g");
+	assert_eq!(floating.lines[0].summary, "Move to file start");
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE))),
+	);
+	assert!(state.floating_window().is_none());
+}
+
+#[test]
+fn leader_prefix_should_drill_into_next_level_hints() {
+	let mut state = RimState::new();
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE))),
+	);
+	let floating = state.floating_window().expect("leader should open hints");
+	assert!(floating.lines.iter().any(|line| line.key == "b" && line.summary == "+buffer"));
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE))),
+	);
+	let floating = state.floating_window().expect("leader b should narrow hints");
+	assert!(floating.title.ends_with("<leader>b"));
+	assert!(floating.lines.iter().any(|line| line.key == "d" && line.summary == "Close active buffer"));
+	assert!(floating.lines.iter().any(|line| line.key == "n" && line.summary == "Create an empty buffer"));
+}
+
+#[test]
+fn open_key_hint_popup_should_refresh_after_config_reload() {
+	let mut state = RimState::new();
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::F1, KeyModifiers::NONE))),
+	);
+	assert!(state.floating_window().is_some());
+
+	let errors = state.apply_command_config(&CommandConfigFile {
+		normal: CommandKeymapSection {
+			keymap: vec![KeymapBindingConfig {
+				on:   KeyBindingOn::single("H"),
+				run:  "core.buffer.next".to_string(),
+				desc: Some("custom".to_string()),
+			}],
+		},
+		..CommandConfigFile::default()
+	});
+	assert!(errors.is_empty());
+
+	state.refresh_key_hints_overlay_after_config_reload();
+
+	let floating = state.floating_window().expect("floating window should still be open");
+	assert!(floating.lines.iter().any(|line| line.key == "H" && line.summary == "custom"));
+	assert!(!floating.lines.iter().any(|line| line.key == "L"));
+}
+
+#[test]
+fn key_hint_popup_should_scroll_with_arrow_keys() {
+	let mut state = RimState::new();
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::F1, KeyModifiers::NONE))),
+	);
+	let initial_scroll = state.floating_window().expect("floating window should open").scroll;
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))),
+	);
+	assert_eq!(state.floating_window().expect("floating window should stay open").scroll, initial_scroll + 1);
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))),
+	);
+	assert_eq!(state.floating_window().expect("floating window should stay open").scroll, initial_scroll);
+}
+
+#[test]
+fn key_hint_popup_should_scroll_half_page_with_ctrl_u_and_ctrl_d() {
+	let mut state = RimState::new();
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::F1, KeyModifiers::NONE))),
+	);
+	let page_step =
+		(state.floating_window().expect("floating window should open").visible_body_rows() / 2).max(1);
+	let max_scroll = state.floating_window().expect("floating window should open").max_scroll();
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL))),
+	);
+	assert_eq!(
+		state.floating_window().expect("floating window should stay open").scroll,
+		page_step.min(max_scroll)
+	);
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL))),
+	);
+	assert_eq!(state.floating_window().expect("floating window should stay open").scroll, 0);
+}
+
+#[test]
+fn key_hint_popup_should_stay_open_when_scrolling_hits_boundaries() {
+	let mut state = RimState::new();
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::F1, KeyModifiers::NONE))),
+	);
+	assert!(state.floating_window().is_some());
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))),
+	);
+	assert!(state.floating_window().is_some());
+	assert_eq!(state.floating_window().expect("floating window should stay open").scroll, 0);
+
+	let max_scroll = state.floating_window().expect("floating window should stay open").max_scroll();
+	for _ in 0..=max_scroll {
+		let _ = dispatch_test_action(
+			&mut state,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))),
+		);
+	}
+	assert!(state.floating_window().is_some());
+	assert_eq!(state.floating_window().expect("floating window should stay open").scroll, max_scroll);
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))),
+	);
+	assert!(state.floating_window().is_some());
+	assert_eq!(state.floating_window().expect("floating window should stay open").scroll, max_scroll);
+}
+
+#[test]
+fn key_hint_popup_should_report_last_page_when_scrolled_to_bottom() {
+	let mut state = RimState::new();
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::F1, KeyModifiers::NONE))),
+	);
+	let max_scroll = state.floating_window().expect("floating window should open").max_scroll();
+	for _ in 0..=max_scroll {
+		let _ = dispatch_test_action(
+			&mut state,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))),
+		);
+	}
+
+	let floating = state.floating_window().expect("floating window should stay open");
+	assert_eq!(floating.scroll, max_scroll);
+	assert_eq!(floating.current_page(), floating.total_pages());
+}
+
+#[test]
+fn key_hint_popup_should_use_taller_window_budget() {
+	let mut state = RimState::new();
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::F1, KeyModifiers::NONE))),
+	);
+
+	let floating = state.floating_window().expect("floating window should open");
+	assert_eq!(floating.visible_body_rows(), 32);
+}
+
+#[test]
+fn key_hint_popup_should_use_configured_size() {
+	let mut state = RimState::new();
+	state.key_hints_width = 64;
+	state.key_hints_max_height = 28;
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::F1, KeyModifiers::NONE))),
+	);
+
+	let floating = state.floating_window().expect("floating window should open");
+	assert_eq!(floating.visible_body_rows(), 24);
+	assert!(matches!(floating.placement, FloatingWindowPlacement::BottomRight { width: 64, height: 28, .. }));
+}
+
+#[test]
+fn key_hint_popup_should_scroll_one_line_with_ctrl_n_and_ctrl_p() {
+	let mut state = RimState::new();
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::F1, KeyModifiers::NONE))),
+	);
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL))),
+	);
+	assert_eq!(state.floating_window().expect("floating window should stay open").scroll, 1);
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL))),
+	);
+	assert_eq!(state.floating_window().expect("floating window should stay open").scroll, 0);
 }

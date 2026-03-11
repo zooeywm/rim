@@ -37,6 +37,7 @@ impl InputHandler {
 			CrosstermKeyCode::Down => KeyCode::Down,
 			CrosstermKeyCode::Tab => KeyCode::Tab,
 			CrosstermKeyCode::Esc => KeyCode::Esc,
+			CrosstermKeyCode::F(1) => KeyCode::F1,
 			CrosstermKeyCode::Char(ch) => KeyCode::Char(ch),
 			_ => return None,
 		};
@@ -168,6 +169,25 @@ mod tests {
 				assert_eq!(height, 40);
 			}
 			_ => panic!("expected resize action"),
+		}
+	}
+
+	#[test]
+	fn should_map_f1_key_event() {
+		let input_handler = InputHandler;
+		let action = input_handler.action(&Event::Key(CrosstermKeyEvent {
+			code:      CrosstermKeyCode::F(1),
+			modifiers: CrosstermKeyModifiers::NONE,
+			kind:      CrosstermKeyEventKind::Press,
+			state:     CrosstermKeyEventState::NONE,
+		}));
+
+		match action {
+			Some(AppAction::Editor(EditorAction::KeyPressed(key))) => {
+				assert_eq!(key.code, KeyCode::F1);
+				assert_eq!(key.modifiers, KeyModifiers::NONE);
+			}
+			_ => panic!("expected mapped F1 action"),
 		}
 	}
 }

@@ -1,22 +1,19 @@
 use std::{fs, io::ErrorKind, path::{Path, PathBuf}};
 
 use anyhow::{Context, Result};
-use rim_kernel::command::{CommandAliasConfig, CommandAliasSection, CommandConfigFile, CommandKeymapSection, KeyBindingOn, KeymapBindingConfig};
+use rim_kernel::command::{CommandAliasConfig, CommandAliasSection, CommandConfigFile, CommandKeymapSection, KeymapBindingConfig};
 use rim_paths::user_config_root;
 use serde::{Deserialize, Serialize};
 
 pub(crate) fn load_keymap_config() -> Result<Option<CommandConfigFile>> {
-	ensure_config_files()?;
 	load_keymap_config_from_path(keymaps_config_path().as_path())
 }
 
 pub(crate) fn load_command_alias_config() -> Result<Option<CommandConfigFile>> {
-	ensure_config_files()?;
 	load_command_alias_config_from_path(commands_config_path().as_path())
 }
 
 pub(crate) fn load_app_config() -> Result<Option<AppConfigFile>> {
-	ensure_config_files()?;
 	load_app_config_from_path(app_config_path().as_path())
 }
 
@@ -26,7 +23,7 @@ pub(crate) fn commands_config_path() -> PathBuf { user_config_root().join("comma
 
 pub(crate) fn app_config_path() -> PathBuf { user_config_root().join("config.toml") }
 
-fn ensure_config_files() -> Result<()> {
+pub(crate) fn initialize_config_files() -> Result<()> {
 	let config_root = user_config_root();
 	fs::create_dir_all(config_root.as_path())
 		.with_context(|| format!("create config directory failed: {}", config_root.display()))?;
@@ -183,13 +180,15 @@ fn render_app_config_toml(config: &AppConfigFile) -> String {
 		format!("leader_key = {}\n", toml_string_literal(config.editor.leader_key.to_string().as_str())).as_str(),
 	);
 	output.push_str(format!("cursor_scroll_threshold = {}\n", config.editor.cursor_scroll_threshold).as_str());
+	output.push_str(format!("key_hints_width = {}\n", config.editor.key_hints_width).as_str());
+	output.push_str(format!("key_hints_max_height = {}\n", config.editor.key_hints_max_height).as_str());
 	output
 }
 
 fn render_keymap_binding(binding: &KeymapBindingConfig) -> String {
-	let on = match &binding.on {
-		KeyBindingOn::Single(token) => toml_string_literal(token),
-		KeyBindingOn::Many(tokens) => render_string_array(tokens.as_slice()),
+	let on = match binding.on.entries() {
+		[single] => toml_string_literal(single),
+		many => render_string_array(many),
 	};
 	match &binding.desc {
 		Some(desc) => format!(
@@ -253,13 +252,28 @@ pub(crate) struct EditorConfigSection {
 	pub leader_key:              char,
 	#[serde(default)]
 	pub cursor_scroll_threshold: u16,
+	#[serde(default = "default_key_hints_width")]
+	pub key_hints_width:         u16,
+	#[serde(default = "default_key_hints_max_height")]
+	pub key_hints_max_height:    u16,
 }
 
 impl Default for EditorConfigSection {
-	fn default() -> Self { Self { leader_key: default_leader_key(), cursor_scroll_threshold: 0 } }
+	fn default() -> Self {
+		Self {
+			leader_key:              default_leader_key(),
+			cursor_scroll_threshold: 0,
+			key_hints_width:         default_key_hints_width(),
+			key_hints_max_height:    default_key_hints_max_height(),
+		}
+	}
 }
 
 fn default_leader_key() -> char { ' ' }
+
+fn default_key_hints_width() -> u16 { 42 }
+
+fn default_key_hints_max_height() -> u16 { 36 }
 
 #[cfg(test)]
 mod tests {
@@ -291,8 +305,15 @@ mod tests {
 
 		assert!(keymaps_text.contains("[normal]\nkeymap = ["));
 		assert!(keymaps_text.contains("[visual]\nkeymap = ["));
+		assert!(keymaps_text.contains(r#"{ on = "<F1>", run = "core.help.keymap""#));
+		assert!(keymaps_text.contains(r#"{ on = "<Up>", run = "core.help.keymap_scroll_up""#));
+		assert!(keymaps_text.contains(r#"{ on = "<Down>", run = "core.help.keymap_scroll_down""#));
+		assert!(keymaps_text.contains(r#"{ on = "<C-p>", run = "core.help.keymap_scroll_up""#));
+		assert!(keymaps_text.contains(r#"{ on = "<C-n>", run = "core.help.keymap_scroll_down""#));
 		assert!(commands_text.contains("[command]\ncommands = ["));
 		assert!(app_text.contains("[editor]\nleader_key = "));
+		assert!(app_text.contains("key_hints_width = 42"));
+		assert!(app_text.contains("key_hints_max_height = 36"));
 		let _ = fs::remove_dir_all(config_dir);
 	}
 
@@ -356,6 +377,8 @@ commands = [
 [editor]
 leader_key = ","
 cursor_scroll_threshold = 3
+key_hints_width = 64
+key_hints_max_height = 28
 "#,
 		)
 		.expect("app config should be written");
@@ -364,6 +387,8 @@ cursor_scroll_threshold = 3
 			load_app_config_from_path(app_path.as_path()).expect("app config should load").expect("config");
 		assert_eq!(loaded.editor.leader_key, ',');
 		assert_eq!(loaded.editor.cursor_scroll_threshold, 3);
+		assert_eq!(loaded.editor.key_hints_width, 64);
+		assert_eq!(loaded.editor.key_hints_max_height, 28);
 		let _ = fs::remove_dir_all(config_dir);
 	}
 }

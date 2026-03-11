@@ -5,10 +5,10 @@ use rim_infra_file_watcher::FileWatcherState;
 use rim_infra_input::InputPumpService;
 use rim_infra_storage::StorageIoState;
 use rim_infra_ui::{Renderer, TerminalSession};
-use rim_kernel::{action::{AppAction, FileAction, SystemAction}, ports::{FilePicker, FilePickerError, StorageIo}, state::RimState};
+use rim_kernel::{action::{AppAction, FileAction, SystemAction}, command::CommandRegistry, ports::{FilePicker, FilePickerError, StorageIo}, state::RimState};
 use tracing::trace;
 
-use crate::config::{app_config_path, commands_config_path, keymaps_config_path, load_app_config, load_command_alias_config, load_keymap_config};
+use crate::config::{app_config_path, commands_config_path, initialize_config_files, keymaps_config_path, load_app_config, load_command_alias_config, load_keymap_config};
 
 #[derive(derive_more::AsRef, derive_more::AsMut)]
 pub struct App {
@@ -48,6 +48,7 @@ impl App {
 	pub fn new() -> Result<Self> {
 		// One bounded queue coordinates input, IO callbacks, and kernel actions.
 		let (event_tx, event_rx) = flume::bounded(1024);
+		initialize_config_files()?;
 		let mut state = RimState::new();
 		Self::apply_all_configs(&mut state)?;
 		Ok(Self {
@@ -164,6 +165,7 @@ impl App {
 	fn reload_all_configs(&mut self) -> ControlFlow<()> {
 		match Self::apply_all_configs(&mut self.state) {
 			Ok(()) => {
+				self.state.refresh_key_hints_overlay_after_config_reload();
 				self.state.status_bar.message = "config reloaded".to_string();
 			}
 			Err(err) => {
@@ -175,9 +177,12 @@ impl App {
 	}
 
 	fn apply_all_configs(state: &mut RimState) -> Result<()> {
+		Self::reset_config_state_to_defaults(state);
 		if let Some(config) = load_app_config()? {
 			state.leader_key = config.editor.leader_key;
 			state.cursor_scroll_threshold = config.editor.cursor_scroll_threshold;
+			state.key_hints_width = config.editor.key_hints_width;
+			state.key_hints_max_height = config.editor.key_hints_max_height;
 		}
 		if let Some(config) = load_keymap_config()? {
 			for error in state.apply_command_config(&config) {
@@ -190,6 +195,14 @@ impl App {
 			}
 		}
 		Ok(())
+	}
+
+	fn reset_config_state_to_defaults(state: &mut RimState) {
+		state.leader_key = ' ';
+		state.cursor_scroll_threshold = 0;
+		state.key_hints_width = 42;
+		state.key_hints_max_height = 36;
+		state.command_registry = CommandRegistry::with_defaults();
 	}
 }
 
@@ -243,5 +256,82 @@ impl FilePicker for AppPorts<'_> {
 		};
 		let _ = fs::remove_file(&chooser_file);
 		Ok(selected_path)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use rim_kernel::{command::{BindingMatch, BuiltinCommand, CommandConfigFile, CommandKeymapSection, CommandTarget, KeyBindingOn, KeymapBindingConfig}, state::{NormalSequenceKey, RimState}};
+
+	use super::App;
+
+	#[test]
+	fn reset_config_state_to_defaults_should_restore_removed_user_keymap_override() {
+		let mut state = RimState::new();
+		let errors = state.apply_command_config(&CommandConfigFile {
+			normal: CommandKeymapSection {
+				keymap: vec![KeymapBindingConfig {
+					on:   KeyBindingOn::single("go"),
+					run:  "core.cursor.file_start".to_string(),
+					desc: Some("custom".to_string()),
+				}],
+			},
+			..CommandConfigFile::default()
+		});
+		assert!(errors.is_empty());
+		assert_eq!(
+			state
+				.command_registry
+				.resolve_normal_sequence(&[NormalSequenceKey::Char('g'), NormalSequenceKey::Char('g')]),
+			BindingMatch::NoMatch
+		);
+
+		App::reset_config_state_to_defaults(&mut state);
+
+		assert_eq!(
+			state
+				.command_registry
+				.resolve_normal_sequence(&[NormalSequenceKey::Char('g'), NormalSequenceKey::Char('g')]),
+			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::MoveFileStart))
+		);
+		assert_eq!(
+			state
+				.command_registry
+				.resolve_normal_sequence(&[NormalSequenceKey::Char('g'), NormalSequenceKey::Char('o')]),
+			BindingMatch::NoMatch
+		);
+	}
+
+	#[test]
+	fn reset_config_state_to_defaults_should_restore_default_key_hint_description() {
+		let mut state = RimState::new();
+		let errors = state.apply_command_config(&CommandConfigFile {
+			normal: CommandKeymapSection {
+				keymap: vec![KeymapBindingConfig {
+					on:   KeyBindingOn::single("gg"),
+					run:  "core.cursor.file_start".to_string(),
+					desc: Some("Jump to beginning".to_string()),
+				}],
+			},
+			..CommandConfigFile::default()
+		});
+		assert!(errors.is_empty());
+		assert_eq!(
+			state
+				.command_registry
+				.key_hints(rim_kernel::state::KeymapScope::Normal, &[NormalSequenceKey::Char('g')])[0]
+				.summary,
+			"Jump to beginning"
+		);
+
+		App::reset_config_state_to_defaults(&mut state);
+
+		assert_eq!(
+			state
+				.command_registry
+				.key_hints(rim_kernel::state::KeymapScope::Normal, &[NormalSequenceKey::Char('g')])[0]
+				.summary,
+			"Move to file start"
+		);
 	}
 }
