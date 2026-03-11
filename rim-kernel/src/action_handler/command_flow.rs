@@ -7,6 +7,14 @@ use crate::{action::{AppAction, FileAction, KeyCode, KeyEvent, WindowAction}, co
 
 pub(super) fn handle_command_mode_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
 where P: StorageIo + FileWatcher + FilePicker {
+	if key.modifiers.contains(crate::action::KeyModifiers::CONTROL) && key.code == KeyCode::Char('n') {
+		let _ = state.move_command_palette_selection(1);
+		return ControlFlow::Continue(());
+	}
+	if key.modifiers.contains(crate::action::KeyModifiers::CONTROL) && key.code == KeyCode::Char('p') {
+		let _ = state.move_command_palette_selection(-1);
+		return ControlFlow::Continue(());
+	}
 	if key.modifiers.contains(crate::action::KeyModifiers::CONTROL) {
 		return ControlFlow::Continue(());
 	}
@@ -14,17 +22,37 @@ where P: StorageIo + FileWatcher + FilePicker {
 	match key.code {
 		KeyCode::Esc => state.exit_command_mode(),
 		KeyCode::Enter => {
-			let command = state.take_command_line();
+			let command = state.command_line.trim().to_string();
 			if command.is_empty() {
+				state.exit_command_mode();
 				return ControlFlow::Continue(());
 			}
-			let Some(resolved) = state.command_registry.resolve_command_input(command.as_str()) else {
+			let argument = command.split_once(' ').map(|(_, tail)| tail.trim().to_string());
+			let resolved = state.command_registry.resolve_command_input(command.as_str()).or_else(|| {
+				state.selected_command_palette_match().and_then(|palette_item| {
+					state.command_registry.resolve_command_id_with_argument(palette_item.command_id.as_str(), argument)
+				})
+			});
+			let Some(resolved) = resolved else {
+				if let Some(palette_item) = state.selected_command_palette_match()
+					&& palette_item.is_error
+				{
+					state.status_bar.message = format!("invalid command config: {}", palette_item.name);
+					return ControlFlow::Continue(());
+				}
 				state.status_bar.message = format!("unknown command: {}", command);
 				return ControlFlow::Continue(());
 			};
+			state.exit_command_mode();
 			return execute_resolved_command(ports, state, resolved);
 		}
 		KeyCode::Backspace => state.pop_command_char(),
+		KeyCode::Up => {
+			let _ = state.move_command_palette_selection(-1);
+		}
+		KeyCode::Down => {
+			let _ = state.move_command_palette_selection(1);
+		}
 		KeyCode::Char(ch) => state.push_command_char(ch),
 		_ => {}
 	}

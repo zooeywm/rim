@@ -23,6 +23,7 @@ crossterm              = "0.29"
 dep-inj                = "0.1"
 derive_more            = { version = "2.1", features = ["as_ref"] }
 flume                  = "0.12"
+frizbee                = "0.8.3"
 notify                 = "8.2"
 ratatui                = "0.30"
 ropey                  = "1.6"

@@ -166,6 +166,7 @@ impl App {
 		match Self::apply_all_configs(&mut self.state) {
 			Ok(()) => {
 				self.state.refresh_key_hints_overlay_after_config_reload();
+				self.state.refresh_command_palette();
 				self.state.status_bar.message = "config reloaded".to_string();
 			}
 			Err(err) => {

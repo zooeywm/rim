@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use super::{super::mode_flow::SequenceMatch, support::{RecordingPorts, dispatch_test_action, map_normal_key, resolve_keys}};
-use crate::{action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction}, command::{CommandConfigFile, CommandKeymapSection, KeyBindingOn, KeymapBindingConfig}, state::{FloatingWindowPlacement, NormalSequenceKey, RimState}};
+use crate::{action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction}, command::{CommandAliasConfig, CommandAliasSection, CommandConfigFile, CommandKeymapSection, KeyBindingOn, KeymapBindingConfig}, state::{FloatingWindowPlacement, NormalSequenceKey, RimState}};
 
 #[test]
 fn to_normal_key_should_map_leader_char_to_leader_token() {
@@ -706,6 +706,36 @@ fn open_key_hint_popup_should_refresh_after_config_reload() {
 }
 
 #[test]
+fn open_command_palette_should_refresh_after_config_reload() {
+	let mut state = RimState::new();
+
+	state.enter_command_mode();
+	state.push_command_char('y');
+	assert_eq!(
+		state.command_palette().expect("command palette should open").items[0].description,
+		"Open the yazi picker"
+	);
+
+	let errors = state.apply_command_config(&CommandConfigFile {
+		command: CommandAliasSection {
+			commands: vec![CommandAliasConfig {
+				name: "y".to_string(),
+				run:  "core.picker.yazi".to_string(),
+				desc: Some("Open custom picker".to_string()),
+			}],
+		},
+		..CommandConfigFile::default()
+	});
+	assert!(errors.is_empty());
+
+	state.refresh_command_palette();
+
+	let palette = state.command_palette().expect("command palette should still be open");
+	assert_eq!(palette.items[0].name, "y");
+	assert_eq!(palette.items[0].description, "Open custom picker");
+}
+
+#[test]
 fn key_hint_popup_should_scroll_with_arrow_keys() {
 	let mut state = RimState::new();
 
@@ -861,4 +891,45 @@ fn key_hint_popup_should_scroll_one_line_with_ctrl_n_and_ctrl_p() {
 		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL))),
 	);
 	assert_eq!(state.floating_window().expect("floating window should stay open").scroll, 0);
+}
+
+#[test]
+fn command_mode_should_show_palette_matches_for_command_ids() {
+	let mut state = RimState::new();
+
+	state.enter_command_mode();
+	for ch in "yazi".chars() {
+		let _ = dispatch_test_action(
+			&mut state,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))),
+		);
+	}
+
+	let palette = state.command_palette().expect("command palette should open in command mode");
+	assert!(!palette.items.is_empty());
+	assert_eq!(palette.items[0].name, "yazi");
+	assert_eq!(palette.items[0].command_id, "core.picker.yazi");
+}
+
+#[test]
+fn command_mode_should_execute_selected_palette_command_on_enter() {
+	let mut state = RimState::new();
+	let initial_tabs = state.tabs.len();
+
+	state.enter_command_mode();
+	for ch in "core.tab.new".chars() {
+		let _ = dispatch_test_action(
+			&mut state,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))),
+		);
+	}
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
+	);
+
+	assert_eq!(state.tabs.len(), initial_tabs + 1);
+	assert!(!state.is_command_mode());
+	assert!(state.command_palette().is_none());
 }

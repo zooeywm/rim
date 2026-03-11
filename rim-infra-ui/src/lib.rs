@@ -1,9 +1,11 @@
+mod command_palette;
 mod floating_window;
 mod status_bar;
 mod terminal_session;
 mod top_bar;
 mod window_area;
 
+use command_palette::CommandPaletteWidgets;
 use floating_window::FloatingWindowWidget;
 use ratatui::layout::{Constraint, Layout, Rect};
 use rim_kernel::state::RimState;
@@ -36,11 +38,19 @@ impl Renderer {
 		let top_bar = TopBarWidget::from_state(state);
 		let (window_area, cursor_position) = WindowAreaWidget::from_state(state, chunks[1]);
 		let status_bar = StatusBarWidget::from_state(state);
+		let command_palette = CommandPaletteWidgets::from_state(state, chunks[1]);
 
 		frame.render_widget(top_bar, chunks[0]);
 		frame.render_widget(window_area, chunks[1]);
 		if let Some(floating_window) = FloatingWindowWidget::from_state(state, chunks[1]) {
 			frame.render_widget(floating_window, chunks[1]);
+		}
+		if let Some(command_palette) = command_palette {
+			let cursor_to_draw = command_palette.cursor_position();
+			frame.render_widget(command_palette, chunks[1]);
+			frame.render_widget(status_bar, chunks[2]);
+			frame.set_cursor_position(cursor_to_draw);
+			return;
 		}
 		frame.render_widget(status_bar, chunks[2]);
 		if let Some(cursor_to_draw) = cursor_position {

@@ -248,6 +248,8 @@ commands = [
 Rules:
 
 - `run` must reference a registered command ID
+- `keymaps.toml`, `commands.toml`, and `config.toml` are always reloaded as full snapshots
+- If an alias in `commands.toml` points to an unsupported `run`, the command palette still shows it as an error entry so the misconfiguration is visible
 - `normal.keymap` and `visual.keymap` accept `on = "..."` and `on = ["...", "..."]`
 - A single string means one complete shortcut sequence such as `"<leader>wv"`
 - A string array means multiple complete shortcuts bound to the same command
@@ -413,6 +415,15 @@ The status bar will show: `block insert supports text, tab, backspace, esc only`
 - `Enter`: execute the command
 - `Backspace`: delete one command-line character
 - Printable characters: edit the command line
+
+### Command Palette
+
+- Entering `:` opens a floating command palette
+- The command line input wraps long text and keeps the cursor visible by scrolling the tail
+- The candidate list is fuzzy-matched from configured command names with `frizbee`
+- Each row shows `name`, `command_id`, and `desc`
+- If `commands.toml` contains an invalid `run`, that row is still shown and marked as an error
+- Reloading `commands.toml` fully rebuilds the palette data immediately, including `name`, `run`, and `desc`
 
 ### Implemented Commands
 

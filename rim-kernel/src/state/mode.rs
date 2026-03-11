@@ -75,6 +75,7 @@ impl RimState {
 		self.command_line.clear();
 		self.status_bar.mode = StatusBarMode::Command;
 		self.close_key_hints();
+		self.refresh_command_palette();
 	}
 
 	pub fn exit_command_mode(&mut self) {
@@ -83,6 +84,7 @@ impl RimState {
 		self.command_line.clear();
 		self.status_bar.mode = StatusBarMode::Normal;
 		self.close_key_hints();
+		self.close_command_palette();
 	}
 
 	pub fn enter_visual_mode(&mut self) {
@@ -118,9 +120,15 @@ impl RimState {
 		self.close_key_hints();
 	}
 
-	pub fn push_command_char(&mut self, ch: char) { self.command_line.push(ch); }
+	pub fn push_command_char(&mut self, ch: char) {
+		self.command_line.push(ch);
+		self.refresh_command_palette();
+	}
 
-	pub fn pop_command_char(&mut self) { let _ = self.command_line.pop(); }
+	pub fn pop_command_char(&mut self) {
+		let _ = self.command_line.pop();
+		self.refresh_command_palette();
+	}
 
 	pub fn take_command_line(&mut self) -> String {
 		let command = self.command_line.trim().to_string();

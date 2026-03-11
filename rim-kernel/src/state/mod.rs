@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use slotmap::{SlotMap, new_key_type};
 use tracing::error;
 
-use crate::command::{CommandConfigFile, CommandRegistry, PluginCommandRegistration};
+use crate::command::{CommandConfigFile, CommandPaletteMatch, CommandRegistry, PluginCommandRegistration};
 
 mod buffer;
 mod edit;
@@ -231,6 +231,13 @@ impl FloatingWindowState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandPaletteState {
+	pub query:    String,
+	pub items:    Vec<CommandPaletteMatch>,
+	pub selected: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyHintsOverlayState {
 	pub scope:    KeymapScope,
 	pub prefix:   Vec<NormalSequenceKey>,
@@ -343,6 +350,7 @@ pub struct RimState {
 	pub ignore_external_change_until: HashMap<BufferId, Instant>,
 	pub command_registry:             CommandRegistry,
 	pub overlay:                      Option<OverlayState>,
+	pub command_palette:              Option<CommandPaletteState>,
 	pub(crate) window_buffer_views:   HashMap<(WindowId, BufferId), WindowBufferViewState>,
 	pub buffers:                      SlotMap<BufferId, BufferState>,
 	pub buffer_order:                 Vec<BufferId>,
@@ -394,6 +402,7 @@ impl RimState {
 			ignore_external_change_until: HashMap::new(),
 			command_registry: CommandRegistry::with_defaults(),
 			overlay: None,
+			command_palette: None,
 			window_buffer_views: HashMap::new(),
 			buffers,
 			buffer_order: Vec::new(),
@@ -409,6 +418,43 @@ impl RimState {
 
 	pub fn register_plugin_command(&mut self, registration: PluginCommandRegistration) -> Result<(), String> {
 		self.command_registry.register_plugin_command(registration)
+	}
+
+	pub fn command_palette(&self) -> Option<&CommandPaletteState> { self.command_palette.as_ref() }
+
+	pub fn refresh_command_palette(&mut self) {
+		if !self.is_command_mode() {
+			self.command_palette = None;
+			return;
+		}
+		let command_query = self.command_line.split_whitespace().next().unwrap_or_default();
+		let items = self.command_registry.command_palette_matches(command_query, 12);
+		let selected = self
+			.command_palette
+			.as_ref()
+			.map(|palette| palette.selected.min(items.len().saturating_sub(1)))
+			.unwrap_or_default();
+		self.command_palette = Some(CommandPaletteState { query: self.command_line.clone(), items, selected });
+	}
+
+	pub fn close_command_palette(&mut self) { self.command_palette = None; }
+
+	pub fn move_command_palette_selection(&mut self, delta: isize) -> bool {
+		let Some(palette) = self.command_palette.as_mut() else {
+			return false;
+		};
+		if palette.items.is_empty() {
+			return false;
+		}
+		let next = palette.selected.saturating_add_signed(delta).min(palette.items.len().saturating_sub(1));
+		let changed = next != palette.selected;
+		palette.selected = next;
+		changed
+	}
+
+	pub fn selected_command_palette_match(&self) -> Option<&CommandPaletteMatch> {
+		let palette = self.command_palette.as_ref()?;
+		palette.items.get(palette.selected)
 	}
 
 	pub fn active_keymap_scope(&self) -> KeymapScope {

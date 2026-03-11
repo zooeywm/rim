@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
+use frizbee::{Config as FrizbeeConfig, match_list_indices};
 use serde::{Deserialize, Serialize};
 
 use crate::{action::{AppAction, BufferAction, EditorAction, LayoutAction, TabAction, WindowAction}, state::{FloatingWindowLine, KeymapScope, NormalSequenceKey}};
@@ -185,6 +186,25 @@ pub struct ResolvedCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandPaletteMatch {
+	pub name:                      String,
+	pub command_id:                String,
+	pub description:               String,
+	pub name_match_indices:        Vec<usize>,
+	pub command_id_match_indices:  Vec<usize>,
+	pub description_match_indices: Vec<usize>,
+	pub is_error:                  bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommandPaletteCandidate {
+	name:        String,
+	command_id:  String,
+	description: String,
+	is_error:    bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BindingMatch<T> {
 	Exact(T),
 	Pending,
@@ -207,9 +227,11 @@ struct VisualKeyBinding {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CommandAlias {
-	name:       String,
-	command_id: String,
-	desc:       Option<String>,
+	name:                String,
+	resolved_command_id: Option<String>,
+	run:                 String,
+	desc:                Option<String>,
+	error:               Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -290,13 +312,23 @@ impl CommandRegistry {
 		}
 		for alias in &config.command.commands {
 			let Some(resolved) = self.resolve_or_register_run_directive(alias.run.as_str()) else {
+				let error = format!("invalid run directive: {}", alias.run);
 				errors.push(format!("unknown run directive in command alias: {}", alias.run));
+				self.command_aliases.push(CommandAlias {
+					name:                alias.name.clone(),
+					resolved_command_id: None,
+					run:                 alias.run.clone(),
+					desc:                alias.desc.clone(),
+					error:               Some(error),
+				});
 				continue;
 			};
 			self.command_aliases.push(CommandAlias {
-				name:       alias.name.clone(),
-				command_id: resolved.spec.id,
-				desc:       alias.desc.clone(),
+				name:                alias.name.clone(),
+				resolved_command_id: Some(resolved.spec.id),
+				run:                 alias.run.clone(),
+				desc:                alias.desc.clone(),
+				error:               None,
 			});
 		}
 
@@ -339,8 +371,12 @@ impl CommandRegistry {
 			Some((name, argument)) => (name, Some(argument.trim().to_string())),
 			None => (trimmed, None),
 		};
-		let alias = self.command_aliases.iter().find(|alias| alias.name == name)?;
-		let spec = self.commands.get(alias.command_id.as_str())?.clone();
+		let spec = if let Some(spec) = self.commands.get(name).cloned() {
+			spec
+		} else {
+			let alias = self.command_aliases.iter().find(|alias| alias.name == name)?;
+			self.commands.get(alias.resolved_command_id.as_deref()?)?.clone()
+		};
 
 		match spec.arg_kind {
 			CommandArgKind::None if argument.as_deref().is_some_and(|arg| !arg.is_empty()) => None,
@@ -349,6 +385,101 @@ impl CommandRegistry {
 				Some(ResolvedCommand { spec, argument: argument.filter(|arg| !arg.is_empty()) })
 			}
 		}
+	}
+
+	pub fn resolve_command_id_with_argument(
+		&self,
+		command_id: &str,
+		argument: Option<String>,
+	) -> Option<ResolvedCommand> {
+		let spec = self.commands.get(command_id)?.clone();
+		match spec.arg_kind {
+			CommandArgKind::None if argument.as_deref().is_some_and(|arg| !arg.is_empty()) => None,
+			CommandArgKind::None => Some(ResolvedCommand { spec, argument: None }),
+			CommandArgKind::OptionalPath | CommandArgKind::RawTail => {
+				Some(ResolvedCommand { spec, argument: argument.filter(|arg| !arg.is_empty()) })
+			}
+		}
+	}
+
+	pub fn command_palette_matches(&self, input: &str, limit: usize) -> Vec<CommandPaletteMatch> {
+		let query = input.trim();
+		let candidates = self.command_palette_candidates();
+		let mut matches = candidates
+			.into_iter()
+			.filter_map(|candidate| {
+				if query.is_empty() {
+					return Some((0u16, CommandPaletteMatch {
+						name:                      candidate.name,
+						command_id:                candidate.command_id,
+						description:               candidate.description,
+						name_match_indices:        Vec::new(),
+						command_id_match_indices:  Vec::new(),
+						description_match_indices: Vec::new(),
+						is_error:                  candidate.is_error,
+					}));
+				}
+
+				let name_match = frizbee_match(query, candidate.name.as_str());
+				let command_match = frizbee_match(query, candidate.command_id.as_str());
+				let description_match = frizbee_match(query, candidate.description.as_str());
+				let score = [name_match.as_ref(), command_match.as_ref(), description_match.as_ref()]
+					.into_iter()
+					.flatten()
+					.map(|(score, _)| *score)
+					.max()?;
+				let name_match_indices = name_match.map(|(_, indices)| indices).unwrap_or_default();
+				let command_id_match_indices = command_match.map(|(_, indices)| indices).unwrap_or_default();
+				let description_match_indices = description_match.map(|(_, indices)| indices).unwrap_or_default();
+
+				Some((score, CommandPaletteMatch {
+					name: candidate.name,
+					command_id: candidate.command_id,
+					description: candidate.description,
+					name_match_indices,
+					command_id_match_indices,
+					description_match_indices,
+					is_error: candidate.is_error,
+				}))
+			})
+			.collect::<Vec<_>>();
+
+		matches.sort_by(|left, right| {
+			right
+				.0
+				.cmp(&left.0)
+				.then_with(|| left.1.name.cmp(&right.1.name))
+				.then_with(|| left.1.command_id.cmp(&right.1.command_id))
+		});
+
+		matches.into_iter().take(limit).map(|(_, item)| item).collect()
+	}
+
+	fn command_palette_candidates(&self) -> Vec<CommandPaletteCandidate> {
+		let mut candidates = Vec::with_capacity(self.command_aliases.len().max(self.commands.len()));
+
+		for alias in &self.command_aliases {
+			candidates.push(CommandPaletteCandidate {
+				name:        alias.name.clone(),
+				command_id:  alias.resolved_command_id.clone().unwrap_or_else(|| alias.run.clone()),
+				description: match (
+					alias.error.as_deref(),
+					alias.desc.as_deref(),
+					alias.resolved_command_id.as_deref(),
+				) {
+					(Some(error), Some(desc), _) => format!("Error: {} ({})", desc, error),
+					(Some(error), None, _) => format!("Error: {}. Check commands.toml", error),
+					(None, Some(desc), _) => desc.to_string(),
+					(None, None, Some(command_id)) => {
+						self.commands.get(command_id).map(|spec| spec.description.clone()).unwrap_or_default()
+					}
+					(None, None, None) => "Error: invalid command alias. Check commands.toml".to_string(),
+				},
+				is_error:    alias.error.is_some(),
+			});
+		}
+
+		candidates
 	}
 
 	fn resolve_run_directive(&self, run: &str) -> Option<ResolvedCommand> {
@@ -407,12 +538,15 @@ impl CommandRegistry {
 
 		let mut command = Vec::with_capacity(self.command_aliases.len());
 		for alias in &self.command_aliases {
-			let Some(spec) = self.commands.get(alias.command_id.as_str()) else {
+			let Some(command_id) = alias.resolved_command_id.as_deref() else {
+				continue;
+			};
+			let Some(spec) = self.commands.get(command_id) else {
 				continue;
 			};
 			command.push(CommandAliasConfig {
 				name: alias.name.clone(),
-				run:  alias.command_id.clone(),
+				run:  alias.run.clone(),
 				desc: alias.desc.clone().or_else(|| Some(spec.description.clone())),
 			});
 		}
@@ -1000,11 +1134,21 @@ impl CommandRegistry {
 
 	fn bind_default_command(&mut self, name: &str, command_id: &str) {
 		self.command_aliases.push(CommandAlias {
-			name:       name.to_string(),
-			command_id: command_id.to_string(),
-			desc:       None,
+			name:                name.to_string(),
+			resolved_command_id: Some(command_id.to_string()),
+			run:                 command_id.to_string(),
+			desc:                None,
+			error:               None,
 		});
 	}
+}
+
+fn frizbee_match(query: &str, haystack: &str) -> Option<(u16, Vec<usize>)> {
+	let config = FrizbeeConfig::default();
+	let matched = match_list_indices(query, &[haystack], &config).into_iter().next()?;
+	let mut indices = matched.indices;
+	indices.sort_unstable();
+	Some((matched.score, indices))
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -1496,5 +1640,64 @@ mod tests {
 		assert!(config.visual.keymap.iter().any(|binding| {
 			matches!(binding.on.entries(), [token] if token == "<F1>") && binding.run == "core.help.keymap"
 		}));
+	}
+
+	#[test]
+	fn command_palette_should_match_command_ids_and_descriptions() {
+		let registry = CommandRegistry::with_defaults();
+
+		let id_matches = registry.command_palette_matches("yazi", 12);
+		let desc_matches = registry.command_palette_matches("yazi picker", 12);
+
+		assert!(id_matches.iter().any(|item| item.command_id == "core.picker.yazi"));
+		assert!(desc_matches.iter().any(|item| item.command_id == "core.picker.yazi"));
+		assert!(id_matches.iter().any(|item| item.name == "yazi" && item.command_id == "core.picker.yazi"));
+		assert!(
+			id_matches
+				.iter()
+				.find(|item| item.command_id == "core.picker.yazi")
+				.is_some_and(|item| !item.name_match_indices.is_empty())
+		);
+	}
+
+	#[test]
+	fn empty_command_palette_should_prefer_alias_names_only() {
+		let registry = CommandRegistry::with_defaults();
+
+		let matches = registry.command_palette_matches("", 128);
+
+		assert!(matches.iter().any(|item| item.name == "yazi" && item.command_id == "core.picker.yazi"));
+		assert!(!matches.iter().any(|item| item.name == "core.window.split_vertical"));
+	}
+
+	#[test]
+	fn resolve_command_input_should_accept_direct_command_id() {
+		let registry = CommandRegistry::with_defaults();
+
+		let resolved = registry.resolve_command_input("core.tab.new").expect("direct command id should resolve");
+
+		assert_eq!(resolved.spec.id, "core.tab.new");
+	}
+
+	#[test]
+	fn invalid_command_alias_should_still_appear_in_command_palette_as_error() {
+		let mut registry = CommandRegistry::with_defaults();
+		let errors = registry.apply_config(&CommandConfigFile {
+			command: CommandAliasSection {
+				commands: vec![CommandAliasConfig {
+					name: "bad".to_string(),
+					run:  "core.not.exists".to_string(),
+					desc: Some("Broken alias".to_string()),
+				}],
+			},
+			..CommandConfigFile::default()
+		});
+
+		assert_eq!(errors.len(), 1);
+
+		let matches = registry.command_palette_matches("bad", 16);
+		let item = matches.iter().find(|item| item.name == "bad").expect("invalid alias should be visible");
+		assert!(item.is_error);
+		assert!(item.description.contains("Broken alias"));
 	}
 }
