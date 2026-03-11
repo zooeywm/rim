@@ -111,6 +111,11 @@ jobs:
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
+          body: |
+            Release assets:
+
+            - `rim`: Linux binary
+            - `rim.exe`: Windows binary
           files: |
             dist/rim
             dist/rim.exe
