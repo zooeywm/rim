@@ -10,7 +10,7 @@
 
 This release focuses on runtime consistency and configuration ergonomics:
 
-- Workspace session persistence is aligned with runtime state (tabs, windows, buffers, undo/redo, per-window view state)
+- Workspace session persistence is aligned with runtime state (tabs, windows, buffers, per-window view state, and scratch-buffer history)
 - `:qa` is blocked when any buffer is dirty; `:qa!`, `:wqa`, and `:wqa!` are implemented
 - `:wq` now persists workspace session consistently
 - `:yazi` picker integration is stabilized for cursor/window restore behavior
@@ -31,7 +31,7 @@ This release focuses on runtime consistency and configuration ergonomics:
 - File watching: automatic reload after external changes
 - Swap recovery: restore unsaved text after a crash
 - Persistent undo/redo: reopen a file and restore history
-- Workspace session restore: reopen `rim` without file arguments and restore tabs, windows, buffers, undo stacks, and per-window view state
+- Workspace session restore: reopen `rim` without file arguments and restore tabs, windows, buffers, per-window view state, and scratch-buffer history
 - Windows MSVC cross compilation: `cargo win-release`
 
 ## Workspace Layout
@@ -177,9 +177,10 @@ Workspace session rules:
   - buffer order
   - tab and window layout
   - active tab and active window
-  - buffer text, clean baseline, undo stack, and redo stack
+  - buffer text and clean baseline
   - per `window + buffer` cursor and scroll state
-- File-backed buffers are rebound to file watching and swap tracking after restore
+- Scratch / untitled buffers also keep undo / redo in the session snapshot
+- File-backed buffers are rebound to file watching and swap tracking after restore, then reload undo / redo from `undo/`
 
 ## Command Registry And Keymap
 
@@ -286,8 +287,8 @@ The editor currently implements these modes:
 
 ### Buffer / Window / Tab
 
-- `H` / `L`: switch to the previous / next buffer
-- `{` / `}`: switch to the previous / next buffer
+- `H` / `L`: switch to the previous / next buffer in the current tab
+- `{` / `}`: switch to the previous / next buffer in the current tab
 - `Ctrl+h` `Ctrl+j` `Ctrl+k` `Ctrl+l`: move focus to the left / down / up / right window
 
 The default leader key is `Space`.
@@ -442,8 +443,9 @@ The status bar will show: `block insert supports text, tab, backspace, esc only`
 - Opened files are deduplicated by normalized absolute path
 - Reopening the same file reuses the existing buffer instead of creating a duplicate
 - New empty buffers are named `untitled`
+- If the current tab contains exactly one clean `untitled` buffer, opening a file replaces that buffer instead of adding another one
 - File-backed buffers support watch / reload / persistent history
-- Closing a buffer stops file watching and closes the corresponding persistence session
+- Closing a buffer is tab-local first: it removes the buffer from the current tab, and only tears down watch / persistence when no tab references that buffer anymore
 
 ## Dirty Semantics
 
@@ -499,6 +501,7 @@ Each file keeps:
 
 Behavior:
 
+- Workspace session does not replace per-file undo storage for file-backed buffers
 - After opening a file, if the current text matches the persisted history state, undo / redo stacks are restored automatically
 - After an external reload or swap recovery, `rim` tries to restore history again
 - Normal `undo` / `redo` mostly update only `meta`

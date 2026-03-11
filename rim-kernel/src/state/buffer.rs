@@ -6,6 +6,60 @@ use slotmap::Key;
 use super::{BufferEditSnapshot, BufferHistoryEntry, BufferId, BufferState, BufferSwitchDirection, CursorState, EditorMode, PersistedBufferHistory, RimState, apply_text_delta_redo, apply_text_delta_undo, buffer_name_from_path, clamp_cursor_for_rope, compute_rope_text_diff, merge_adjacent_insert_history_edits, rope_line_count};
 
 impl RimState {
+	pub(crate) fn tab_id_for_window(&self, window_id: super::WindowId) -> Option<super::TabId> {
+		self.tabs.iter().find_map(|(tab_id, tab)| tab.windows.contains(&window_id).then_some(*tab_id))
+	}
+
+	pub(crate) fn register_buffer_in_tab_order(
+		&mut self,
+		tab_id: super::TabId,
+		buffer_id: BufferId,
+		anchor_buffer_id: Option<BufferId>,
+	) {
+		let Some(tab) = self.tabs.get_mut(&tab_id) else {
+			return;
+		};
+		if tab.buffer_order.contains(&buffer_id) {
+			return;
+		}
+		if let Some(anchor_buffer_id) = anchor_buffer_id
+			&& let Some(anchor_idx) = tab.buffer_order.iter().position(|id| *id == anchor_buffer_id)
+		{
+			tab.buffer_order.insert(anchor_idx + 1, buffer_id);
+			return;
+		}
+		tab.buffer_order.push(buffer_id);
+	}
+
+	pub(crate) fn remove_buffer_from_tab_orders(&mut self, buffer_id: BufferId) {
+		for tab in self.tabs.values_mut() {
+			tab.buffer_order.retain(|id| *id != buffer_id);
+		}
+	}
+
+	pub(crate) fn move_buffer_after_in_tab(
+		&mut self,
+		tab_id: super::TabId,
+		buffer_id: BufferId,
+		anchor_id: BufferId,
+	) {
+		let Some(tab) = self.tabs.get_mut(&tab_id) else {
+			return;
+		};
+		if buffer_id == anchor_id {
+			return;
+		}
+		let Some(from_idx) = tab.buffer_order.iter().position(|id| *id == buffer_id) else {
+			return;
+		};
+		tab.buffer_order.remove(from_idx);
+		if let Some(anchor_idx) = tab.buffer_order.iter().position(|id| *id == anchor_id) {
+			tab.buffer_order.insert(anchor_idx + 1, buffer_id);
+		} else {
+			tab.buffer_order.push(buffer_id);
+		}
+	}
+
 	pub fn find_buffer_by_path(&self, path: &std::path::Path) -> Option<BufferId> {
 		self
 			.buffers
@@ -30,6 +84,7 @@ impl RimState {
 			redo_stack: Vec::new(),
 		});
 		self.buffer_order.push(id);
+		self.register_buffer_in_tab_order(self.active_tab, id, None);
 		id
 	}
 
@@ -38,7 +93,8 @@ impl RimState {
 			self.status_bar.message = "buffer close failed: no active buffer".to_string();
 			return;
 		};
-		self.close_buffer(active_buffer_id);
+		let active_tab_id = self.active_tab;
+		let _ = self.close_buffer_in_tab(active_tab_id, active_buffer_id);
 	}
 
 	pub fn close_buffer(&mut self, target_buffer_id: BufferId) {
@@ -58,6 +114,7 @@ impl RimState {
 			_ => None,
 		};
 		self.buffer_order.retain(|id| *id != target_buffer_id);
+		self.remove_buffer_from_tab_orders(target_buffer_id);
 		self.in_flight_internal_saves.remove(&target_buffer_id);
 		self.ignore_external_change_until.remove(&target_buffer_id);
 
@@ -81,6 +138,108 @@ impl RimState {
 
 		self.align_active_window_scroll_to_cursor();
 		self.status_bar.message = "buffer closed".to_string();
+	}
+
+	pub fn close_active_buffer_and_report_global_removal(&mut self) -> Option<(BufferId, bool)> {
+		let active_buffer_id = self.active_buffer_id()?;
+		let active_tab_id = self.active_tab;
+		let removed_globally = self.close_buffer_in_tab(active_tab_id, active_buffer_id);
+		Some((active_buffer_id, removed_globally))
+	}
+
+	pub fn replaceable_active_untitled_buffer_id(&self) -> Option<BufferId> {
+		let active_buffer_id = self.active_buffer_id()?;
+		let active_tab = self.tabs.get(&self.active_tab)?;
+		if active_tab.buffer_order.as_slice() != [active_buffer_id] {
+			return None;
+		}
+		let buffer = self.buffers.get(active_buffer_id)?;
+		(buffer.path.is_none() && !buffer.dirty && !buffer.externally_modified).then_some(active_buffer_id)
+	}
+
+	pub fn prepare_buffer_for_open(&mut self, buffer_id: BufferId, path: PathBuf) {
+		let Some(buffer) = self.buffers.get_mut(buffer_id) else {
+			return;
+		};
+		buffer.path = Some(path.clone());
+		buffer.name = buffer_name_from_path(&path).unwrap_or_else(|| "untitled".to_string());
+		buffer.text = Rope::new();
+		buffer.clean_text = Rope::new();
+		buffer.dirty = false;
+		buffer.externally_modified = false;
+		buffer.undo_stack.clear();
+		buffer.redo_stack.clear();
+		self.pending_insert_group = self.pending_insert_group.take().filter(|group| group.buffer_id != buffer_id);
+	}
+
+	pub fn detach_buffer_from_active_tab_and_try_remove(&mut self, buffer_id: BufferId) -> bool {
+		if let Some(tab) = self.tabs.get_mut(&self.active_tab) {
+			tab.buffer_order.retain(|id| *id != buffer_id);
+		}
+		self.try_remove_buffer_globally(buffer_id)
+	}
+
+	fn close_buffer_in_tab(&mut self, tab_id: super::TabId, target_buffer_id: BufferId) -> bool {
+		if !self.buffers.contains_key(target_buffer_id) {
+			self.status_bar.message = "buffer close failed: target buffer missing".to_string();
+			return false;
+		}
+
+		let window_ids = self.tabs.get(&tab_id).map(|tab| tab.windows.clone()).unwrap_or_default();
+		let tab_buffer_order_before =
+			self.tabs.get(&tab_id).map(|tab| tab.buffer_order.clone()).unwrap_or_default();
+		let fallback = match tab_buffer_order_before.iter().position(|id| *id == target_buffer_id) {
+			Some(idx) if tab_buffer_order_before.len() > 1 => {
+				if idx > 0 {
+					Some(tab_buffer_order_before[idx - 1])
+				} else {
+					Some(tab_buffer_order_before[1])
+				}
+			}
+			_ => None,
+		};
+
+		if let Some(tab) = self.tabs.get_mut(&tab_id) {
+			tab.buffer_order.retain(|id| *id != target_buffer_id);
+		}
+
+		let rebound_window_ids = window_ids
+			.into_iter()
+			.filter(|window_id| {
+				self.windows.get(*window_id).is_some_and(|window| window.buffer_id == Some(target_buffer_id))
+			})
+			.collect::<Vec<_>>();
+
+		self.window_buffer_views.retain(|(window_id, buffer_id), _| {
+			!(*buffer_id == target_buffer_id && rebound_window_ids.contains(window_id))
+		});
+
+		let fallback_id = fallback.unwrap_or_else(|| self.create_buffer(None, String::new()));
+		for window_id in rebound_window_ids {
+			self.bind_buffer_to_window(window_id, fallback_id, false);
+		}
+		self.clamp_window_cursors_for_buffer(fallback_id);
+
+		let removed_globally = self.try_remove_buffer_globally(target_buffer_id);
+		self.align_active_window_scroll_to_cursor();
+		self.status_bar.message = "buffer closed".to_string();
+		removed_globally
+	}
+
+	fn try_remove_buffer_globally(&mut self, target_buffer_id: BufferId) -> bool {
+		let still_visible_in_tab = self.tabs.values().any(|tab| tab.buffer_order.contains(&target_buffer_id));
+		let still_bound_to_window =
+			self.windows.values().any(|window| window.buffer_id == Some(target_buffer_id));
+		if still_visible_in_tab || still_bound_to_window {
+			return false;
+		}
+
+		self.buffer_order.retain(|id| *id != target_buffer_id);
+		self.in_flight_internal_saves.remove(&target_buffer_id);
+		self.ignore_external_change_until.remove(&target_buffer_id);
+		self.window_buffer_views.retain(|(_, buffer_id), _| *buffer_id != target_buffer_id);
+		let _ = self.buffers.remove(target_buffer_id);
+		true
 	}
 
 	pub fn replace_buffer_text_preserving_cursor(&mut self, buffer_id: BufferId, text: String) {
@@ -123,6 +282,7 @@ impl RimState {
 		let buffer_id = self.create_buffer(None, String::new());
 		if let Some(active_buffer_id) = previous_active {
 			self.move_buffer_after(buffer_id, active_buffer_id);
+			self.move_buffer_after_in_tab(self.active_tab, buffer_id, active_buffer_id);
 		}
 		self.bind_buffer_to_active_window(buffer_id);
 		self.status_bar.message = "new buffer".to_string();
@@ -131,7 +291,8 @@ impl RimState {
 
 	pub fn switch_active_window_buffer(&mut self, direction: BufferSwitchDirection) {
 		let active_window_id = self.active_window_id();
-		if self.buffer_order.is_empty() {
+		let active_tab_buffers = self.active_tab_buffer_ids();
+		if active_tab_buffers.is_empty() {
 			return;
 		}
 
@@ -140,26 +301,26 @@ impl RimState {
 			.get(active_window_id)
 			.expect("invariant: active window id must exist in windows")
 			.buffer_id;
-		let target = match current.and_then(|id| self.buffer_order.iter().position(|x| *x == id)) {
+		let target = match current.and_then(|id| active_tab_buffers.iter().position(|x| *x == id)) {
 			Some(idx) => match direction {
 				BufferSwitchDirection::Prev => {
 					if idx == 0 {
-						*self.buffer_order.last().expect("non-empty by construction")
+						*active_tab_buffers.last().expect("non-empty by construction")
 					} else {
-						self.buffer_order[idx.saturating_sub(1)]
+						active_tab_buffers[idx.saturating_sub(1)]
 					}
 				}
 				BufferSwitchDirection::Next => {
-					if idx + 1 >= self.buffer_order.len() {
-						self.buffer_order[0]
+					if idx + 1 >= active_tab_buffers.len() {
+						active_tab_buffers[0]
 					} else {
-						self.buffer_order[idx + 1]
+						active_tab_buffers[idx + 1]
 					}
 				}
 			},
 			None => match direction {
-				BufferSwitchDirection::Prev => *self.buffer_order.last().expect("non-empty by construction"),
-				BufferSwitchDirection::Next => self.buffer_order[0],
+				BufferSwitchDirection::Prev => *active_tab_buffers.last().expect("non-empty by construction"),
+				BufferSwitchDirection::Next => active_tab_buffers[0],
 			},
 		};
 

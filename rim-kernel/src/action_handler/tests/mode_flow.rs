@@ -1,4 +1,6 @@
-use super::{super::mode_flow::SequenceMatch, support::{dispatch_test_action, map_normal_key, resolve_keys}};
+use std::path::PathBuf;
+
+use super::{super::mode_flow::SequenceMatch, support::{RecordingPorts, dispatch_test_action, map_normal_key, resolve_keys}};
 use crate::{action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction}, command::{CommandConfigFile, CommandKeymapSection, KeyBindingOn, KeymapBindingConfig}, state::{NormalSequenceKey, RimState}};
 
 #[test]
@@ -37,6 +39,28 @@ fn resolve_normal_sequence_should_map_leader_tab_n_to_new_tab() {
 	let seq = vec![NormalSequenceKey::Leader, NormalSequenceKey::Tab, NormalSequenceKey::Char('n')];
 	let resolved = resolve_keys(&seq);
 	assert!(matches!(resolved, SequenceMatch::Action(AppAction::Tab(TabAction::New))));
+}
+
+#[test]
+fn close_active_buffer_should_not_teardown_runtime_bindings_when_other_tab_still_uses_it() {
+	let mut state = RimState::new();
+	let ports = RecordingPorts::default();
+	let shared_path = PathBuf::from("shared.rs");
+	let shared = state.create_buffer(Some(shared_path.clone()), "shared");
+	state.bind_buffer_to_active_window(shared);
+	let second_tab = state.open_new_tab();
+	state.bind_buffer_to_active_window(shared);
+
+	let _ = state.apply_action(&ports, AppAction::Editor(EditorAction::CloseActiveBuffer));
+
+	assert!(state.buffers.contains_key(shared));
+	assert!(ports.unwatches.borrow().is_empty());
+	assert!(ports.closes.borrow().is_empty());
+	state.switch_tab(crate::state::TabId(1));
+	assert_eq!(state.active_buffer_id(), Some(shared));
+	assert_eq!(state.buffers.get(shared).and_then(|buffer| buffer.path.clone()), Some(shared_path));
+	assert_eq!(state.active_tab, crate::state::TabId(1));
+	assert_eq!(second_tab.0, 2);
 }
 
 #[test]

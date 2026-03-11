@@ -98,6 +98,7 @@ where P: StorageIo + FileWatcher {
 			let err = ActionHandlerError::PersistenceSwapInitializeBase { source };
 			error!("session restore enqueue_initialize_base failed: {}", err);
 		}
+		enqueue_history_load_for_buffer(ports, state, buffer_id, false);
 	}
 }
 
@@ -351,13 +352,27 @@ where P: StorageIo + FileWatcher + FilePicker {
 		FileAction::OpenRequested { path } => {
 			tracing::info!("open_file: {}", path.display());
 			let normalized_path = normalize_file_path(path.as_path());
+			let replaceable_untitled = state.replaceable_active_untitled_buffer_id();
 			if let Some(buffer_id) = state.find_buffer_by_path(normalized_path.as_path()) {
-				state.bind_buffer_to_active_window(buffer_id);
+				if let Some(untitled_buffer_id) = replaceable_untitled
+					&& untitled_buffer_id != buffer_id
+				{
+					state.bind_buffer_to_active_window(buffer_id);
+					state.detach_buffer_from_active_tab_and_try_remove(untitled_buffer_id);
+				} else {
+					state.bind_buffer_to_active_window(buffer_id);
+				}
 				state.status_bar.message = format!("switched {}", path.display());
 				return ControlFlow::Continue(());
 			}
-			let buffer_id = state.create_buffer(Some(normalized_path.clone()), String::new());
-			state.bind_buffer_to_active_window(buffer_id);
+			let buffer_id = if let Some(untitled_buffer_id) = replaceable_untitled {
+				state.prepare_buffer_for_open(untitled_buffer_id, normalized_path.clone());
+				untitled_buffer_id
+			} else {
+				let buffer_id = state.create_buffer(Some(normalized_path.clone()), String::new());
+				state.bind_buffer_to_active_window(buffer_id);
+				buffer_id
+			};
 			if let Err(source) = ports.enqueue_open(buffer_id, normalized_path.clone()) {
 				let err = ActionHandlerError::PersistenceOpen { source };
 				error!("persistence worker unavailable while enqueueing swap open: {}", err);

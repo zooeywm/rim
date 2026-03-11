@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use ropey::Rope;
+use serde::Deserialize;
 use slotmap::SlotMap;
 
-use super::{BufferState, EditorMode, RimState, StatusBarState, TabId, TabState, WindowBufferViewState, WindowState, WorkspaceBufferSnapshot, WorkspaceSessionSnapshot, WorkspaceTabSnapshot, WorkspaceWindowBufferViewSnapshot, WorkspaceWindowSnapshot, buffer_name_from_path, clamp_cursor_for_rope};
+use super::{BufferHistoryEntry, BufferState, EditorMode, RimState, StatusBarState, TabId, TabState, WindowBufferViewState, WindowState, WorkspaceBufferHistorySnapshot, WorkspaceBufferSnapshot, WorkspaceSessionSnapshot, WorkspaceTabSnapshot, WorkspaceWindowBufferViewSnapshot, WorkspaceWindowSnapshot, buffer_name_from_path, clamp_cursor_for_rope};
 
 const WORKSPACE_SESSION_VERSION: u32 = 1;
 
@@ -25,13 +26,22 @@ impl RimState {
 			buffer_ids.iter().enumerate().map(|(index, buffer_id)| (*buffer_id, index)).collect::<HashMap<_, _>>();
 		let buffers = buffer_ids
 			.iter()
-			.filter_map(|buffer_id| self.buffers.get(*buffer_id))
-			.map(|buffer| WorkspaceBufferSnapshot {
-				path:       buffer.path.clone(),
-				text:       buffer.text.to_string(),
-				clean_text: buffer.clean_text.to_string(),
-				undo_stack: buffer.undo_stack.clone(),
-				redo_stack: buffer.redo_stack.clone(),
+			.filter_map(|buffer_id| {
+				let buffer = self.buffers.get(*buffer_id)?;
+				let history = if buffer.path.is_none() {
+					self.buffer_persisted_history_snapshot(*buffer_id).map(|history| WorkspaceBufferHistorySnapshot {
+						undo_stack: history.undo_stack,
+						redo_stack: history.redo_stack,
+					})
+				} else {
+					None
+				};
+				Some(WorkspaceBufferSnapshot {
+					path: buffer.path.clone(),
+					text: buffer.text.to_string(),
+					clean_text: buffer.clean_text.to_string(),
+					history,
+				})
 			})
 			.collect::<Vec<_>>();
 		let buffer_order = self
@@ -93,6 +103,11 @@ impl RimState {
 					.iter()
 					.position(|window_id| *window_id == tab.active_window)
 					.unwrap_or(0),
+				buffer_order:        tab
+					.buffer_order
+					.iter()
+					.filter_map(|buffer_id| buffer_index_by_id.get(buffer_id).copied())
+					.collect(),
 			})
 			.collect::<Vec<_>>();
 
@@ -136,6 +151,12 @@ impl RimState {
 
 		let mut restored_buffer_ids = Vec::with_capacity(snapshot.buffers.len());
 		for buffer_snapshot in snapshot.buffers {
+			let history = buffer_snapshot
+				.path
+				.is_none()
+				.then_some(buffer_snapshot.history)
+				.flatten()
+				.unwrap_or(WorkspaceBufferHistorySnapshot { undo_stack: Vec::new(), redo_stack: Vec::new() });
 			let rope = Rope::from_str(buffer_snapshot.text.as_str());
 			let clean_rope = Rope::from_str(buffer_snapshot.clean_text.as_str());
 			let name = buffer_snapshot
@@ -150,8 +171,8 @@ impl RimState {
 				clean_text: clean_rope,
 				dirty: rope != buffer_snapshot.clean_text.as_str(),
 				externally_modified: false,
-				undo_stack: buffer_snapshot.undo_stack,
-				redo_stack: buffer_snapshot.redo_stack,
+				undo_stack: history.undo_stack,
+				redo_stack: history.redo_stack,
 			});
 			restored_buffer_ids.push(buffer_id);
 		}
@@ -224,7 +245,20 @@ impl RimState {
 				.get(tab_snapshot.active_window_index.min(window_ids.len().saturating_sub(1)))
 				.copied()
 				.unwrap_or(window_ids[0]);
-			self.tabs.insert(tab_id, TabState { windows: window_ids, active_window });
+			let mut buffer_order = tab_snapshot
+				.buffer_order
+				.into_iter()
+				.filter_map(|index| restored_buffer_ids.get(index).copied())
+				.collect::<Vec<_>>();
+			for window_id in &window_ids {
+				let Some(buffer_id) = self.windows.get(*window_id).and_then(|window| window.buffer_id) else {
+					continue;
+				};
+				if !buffer_order.contains(&buffer_id) {
+					buffer_order.push(buffer_id);
+				}
+			}
+			self.tabs.insert(tab_id, TabState { windows: window_ids, active_window, buffer_order });
 			tab_ids.push(tab_id);
 		}
 
@@ -240,4 +274,30 @@ impl RimState {
 	}
 
 	pub fn has_restorable_workspace_session(&self) -> bool { !self.tabs.is_empty() }
+}
+
+#[derive(Deserialize)]
+struct WorkspaceBufferSnapshotCompat {
+	path:       Option<std::path::PathBuf>,
+	text:       String,
+	clean_text: String,
+	#[serde(default)]
+	history:    Option<WorkspaceBufferHistorySnapshot>,
+	#[serde(default)]
+	undo_stack: Vec<BufferHistoryEntry>,
+	#[serde(default)]
+	redo_stack: Vec<BufferHistoryEntry>,
+}
+
+impl<'de> Deserialize<'de> for WorkspaceBufferSnapshot {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where D: serde::Deserializer<'de> {
+		let compat = WorkspaceBufferSnapshotCompat::deserialize(deserializer)?;
+		let history = compat.history.or_else(|| {
+			((compat.path.is_none()) && (!compat.undo_stack.is_empty() || !compat.redo_stack.is_empty())).then_some(
+				WorkspaceBufferHistorySnapshot { undo_stack: compat.undo_stack, redo_stack: compat.redo_stack },
+			)
+		});
+		Ok(Self { path: compat.path, text: compat.text, clean_text: compat.clean_text, history })
+	}
 }

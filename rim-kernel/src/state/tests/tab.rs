@@ -1,5 +1,5 @@
 use super::common::test_state;
-use crate::state::TabId;
+use crate::state::{BufferSwitchDirection, TabId};
 
 #[test]
 fn switch_and_remove_tab_flow() {
@@ -55,6 +55,44 @@ fn open_new_tab_should_create_default_window_with_untitled_buffer() {
 	assert_eq!(buffer.path, None);
 	assert_eq!(buffer.text.to_string(), "");
 	assert_eq!(tab.active_window, window_id);
+	assert_eq!(tab.buffer_order, vec![buffer_id]);
+}
+
+#[test]
+fn open_new_tab_should_not_inherit_previous_tab_buffer_order() {
+	let mut state = test_state();
+	let first = state.active_buffer_id().expect("active buffer should exist");
+	let second = state.create_buffer(None, "scratch");
+	state.bind_buffer_to_active_window(second);
+
+	let tab2 = state.open_new_tab();
+	let previous_tab = state.tabs.get(&TabId(1)).expect("first tab should exist");
+	let new_tab = state.tabs.get(&tab2).expect("new tab should exist");
+
+	assert_eq!(previous_tab.buffer_order, vec![first, second]);
+	assert_eq!(new_tab.buffer_order.len(), 1);
+	assert_ne!(new_tab.buffer_order, previous_tab.buffer_order);
+}
+
+#[test]
+fn switch_active_window_buffer_should_use_active_tab_buffer_order() {
+	let mut state = test_state();
+	let first = state.active_buffer_id().expect("active buffer should exist");
+	let second = state.create_buffer(None, "second");
+	state.bind_buffer_to_active_window(second);
+	let tab2 = state.open_new_tab();
+	let tab2_only = state.active_buffer_id().expect("new tab should have active buffer");
+
+	state.switch_active_window_buffer(BufferSwitchDirection::Next);
+	assert_eq!(state.active_buffer_id(), Some(tab2_only));
+
+	state.switch_tab(TabId(1));
+	state.bind_buffer_to_active_window(first);
+	state.switch_active_window_buffer(BufferSwitchDirection::Next);
+	assert_eq!(state.active_buffer_id(), Some(second));
+
+	state.switch_tab(tab2);
+	assert_eq!(state.active_buffer_id(), Some(tab2_only));
 }
 
 #[test]

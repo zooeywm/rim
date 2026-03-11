@@ -1,7 +1,7 @@
 use std::{ops::ControlFlow, path::PathBuf, time::{Duration, Instant}};
 
 use super::support::{FilePickerPorts, RecordingPorts, SwapDecisionPorts, dispatch_test_action, normalize_test_path};
-use crate::{action::{AppAction, EditorAction, FileAction, KeyCode, KeyEvent, KeyModifiers, SwapConflictInfo, SystemAction}, command::{CommandAliasConfig, CommandAliasSection, CommandConfigFile}, state::{BufferEditSnapshot, BufferHistoryEntry, CursorState, PendingSwapDecision, PersistedBufferHistory, RimState, WorkspaceBufferSnapshot, WorkspaceSessionSnapshot, WorkspaceTabSnapshot, WorkspaceWindowBufferViewSnapshot, WorkspaceWindowSnapshot}};
+use crate::{action::{AppAction, EditorAction, FileAction, KeyCode, KeyEvent, KeyModifiers, SwapConflictInfo, SystemAction}, command::{CommandAliasConfig, CommandAliasSection, CommandConfigFile}, state::{BufferEditSnapshot, BufferHistoryEntry, CursorState, PendingSwapDecision, PersistedBufferHistory, RimState, WorkspaceBufferHistorySnapshot, WorkspaceBufferSnapshot, WorkspaceSessionSnapshot, WorkspaceTabSnapshot, WorkspaceWindowBufferViewSnapshot, WorkspaceWindowSnapshot}};
 
 #[test]
 fn file_load_completed_should_mark_buffer_clean() {
@@ -64,15 +64,24 @@ fn workspace_session_loaded_should_restore_state_and_enqueue_runtime_bindings() 
 				path:       Some(source_path.clone()),
 				text:       "alpha\nbeta\n".to_string(),
 				clean_text: "alpha\nbeta\n".to_string(),
-				undo_stack: Vec::new(),
-				redo_stack: Vec::new(),
+				history:    None,
 			},
 			WorkspaceBufferSnapshot {
 				path:       None,
 				text:       "scratch".to_string(),
 				clean_text: "scratch".to_string(),
-				undo_stack: Vec::new(),
-				redo_stack: Vec::new(),
+				history:    Some(WorkspaceBufferHistorySnapshot {
+					undo_stack: vec![BufferHistoryEntry {
+						edits:         vec![BufferEditSnapshot {
+							start_byte:    0,
+							deleted_text:  String::new(),
+							inserted_text: "scratch".to_string(),
+						}],
+						before_cursor: CursorState { row: 1, col: 1 },
+						after_cursor:  CursorState { row: 1, col: 8 },
+					}],
+					redo_stack: Vec::new(),
+				}),
 			},
 		],
 		buffer_order:     vec![0, 1],
@@ -91,6 +100,7 @@ fn workspace_session_loaded_should_restore_state_and_enqueue_runtime_bindings() 
 				}],
 			}],
 			active_window_index: 0,
+			buffer_order:        vec![0],
 		}],
 		active_tab_index: 0,
 	};
@@ -104,11 +114,20 @@ fn workspace_session_loaded_should_restore_state_and_enqueue_runtime_bindings() 
 	assert_eq!(ports.open_requests.borrow().len(), 1);
 	assert_eq!(ports.watch_requests.borrow().len(), 1);
 	assert_eq!(ports.initialize_bases.borrow().len(), 1);
+	assert_eq!(ports.history_loads.borrow().len(), 1);
 	assert_eq!(ports.open_requests.borrow()[0].1, source_path);
+	assert!(!ports.history_loads.borrow()[0].3);
 	assert_eq!(state.active_cursor(), CursorState { row: 2, col: 3 });
 	let active_window = state.windows.get(state.active_window_id()).expect("active window should exist");
 	assert_eq!(active_window.scroll_x, 1);
 	assert_eq!(active_window.scroll_y, 4);
+	let scratch_buffer_id = state
+		.buffers
+		.iter()
+		.find_map(|(buffer_id, buffer)| buffer.path.is_none().then_some(buffer_id))
+		.expect("scratch buffer should exist");
+	let scratch_buffer = state.buffers.get(scratch_buffer_id).expect("scratch buffer should exist");
+	assert_eq!(scratch_buffer.undo_stack.len(), 1);
 }
 
 #[test]
@@ -612,7 +631,7 @@ fn command_e_bang_should_reload_even_when_buffer_is_dirty() {
 }
 
 #[test]
-fn command_e_with_path_should_open_new_file_buffer() {
+fn command_e_with_path_should_replace_clean_single_untitled_buffer() {
 	let mut state = RimState::new();
 	let initial = state.create_buffer(None, "old");
 	state.bind_buffer_to_active_window(initial);
@@ -632,11 +651,55 @@ fn command_e_with_path_should_open_new_file_buffer() {
 
 	assert!(matches!(flow, ControlFlow::Continue(())));
 	let active_id = state.active_buffer_id().expect("active buffer exists");
-	assert_ne!(active_id, initial);
+	assert_eq!(active_id, initial);
 	let buffer = state.buffers.get(active_id).expect("buffer exists");
 	let expected = normalize_test_path("b.txt");
 	assert_eq!(buffer.path.as_deref(), Some(expected.as_path()));
 	assert_eq!(state.status_bar.message, "loading b.txt");
+}
+
+#[test]
+fn open_requested_should_replace_clean_single_untitled_buffer_in_tab() {
+	let mut state = RimState::new();
+	state.create_untitled_buffer();
+	let ports = RecordingPorts::default();
+	let original_buffer_id = state.active_buffer_id().expect("active buffer should exist");
+	let path = normalize_test_path("replace.rs");
+
+	let flow = state.apply_action(&ports, AppAction::File(FileAction::OpenRequested { path: path.clone() }));
+
+	assert!(matches!(flow, ControlFlow::Continue(())));
+	assert_eq!(state.buffers.len(), 1);
+	assert_eq!(state.active_buffer_id(), Some(original_buffer_id));
+	let buffer = state.buffers.get(original_buffer_id).expect("buffer should exist");
+	assert_eq!(buffer.path.as_ref(), Some(&path));
+	assert_eq!(buffer.name, "replace.rs");
+	assert_eq!(state.active_tab_buffer_ids(), vec![original_buffer_id]);
+	assert_eq!(ports.file_loads.borrow().as_slice(), &[(original_buffer_id, path.clone())]);
+	assert_eq!(ports.open_requests.borrow().as_slice(), &[(original_buffer_id, path.clone())]);
+	assert_eq!(ports.watch_requests.borrow().as_slice(), &[(original_buffer_id, path)]);
+}
+
+#[test]
+fn open_requested_should_drop_clean_single_untitled_when_switching_to_existing_buffer() {
+	let mut state = RimState::new();
+	let ports = RecordingPorts::default();
+	let shared_path = normalize_test_path("shared.rs");
+	let shared = state.create_buffer(Some(shared_path.clone()), "shared");
+	let second_tab = state.open_new_tab();
+	let untitled = state.active_buffer_id().expect("active buffer should exist");
+
+	let flow =
+		state.apply_action(&ports, AppAction::File(FileAction::OpenRequested { path: shared_path.clone() }));
+
+	assert!(matches!(flow, ControlFlow::Continue(())));
+	assert_eq!(state.active_tab, second_tab);
+	assert_eq!(state.active_buffer_id(), Some(shared));
+	assert!(!state.buffers.contains_key(untitled));
+	assert_eq!(state.active_tab_buffer_ids(), vec![shared]);
+	assert!(ports.file_loads.borrow().is_empty());
+	assert!(ports.open_requests.borrow().is_empty());
+	assert!(ports.watch_requests.borrow().is_empty());
 }
 
 #[test]

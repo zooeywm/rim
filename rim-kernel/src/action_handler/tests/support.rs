@@ -100,7 +100,10 @@ pub(super) struct RecordingPorts {
 	pub(super) file_loads:       RefCell<Vec<(BufferId, PathBuf)>>,
 	pub(super) external_loads:   RefCell<Vec<(BufferId, PathBuf)>>,
 	pub(super) swap_edits:       RefCell<Vec<(BufferId, PathBuf, SwapEditOp)>>,
+	pub(super) history_loads:    RefCell<Vec<(BufferId, PathBuf, String, bool)>>,
 	pub(super) history_saves:    RefCell<Vec<(BufferId, PathBuf, PersistedBufferHistory)>>,
+	pub(super) unwatches:        RefCell<Vec<BufferId>>,
+	pub(super) closes:           RefCell<Vec<BufferId>>,
 	pub(super) open_requests:    RefCell<Vec<(BufferId, PathBuf)>>,
 	pub(super) watch_requests:   RefCell<Vec<(BufferId, PathBuf)>>,
 	pub(super) initialize_bases: RefCell<Vec<(BufferId, PathBuf, String, bool)>>,
@@ -113,7 +116,10 @@ impl FileWatcher for RecordingPorts {
 		Ok(())
 	}
 
-	fn enqueue_unwatch(&self, _buffer_id: BufferId) -> Result<(), FileWatcherError> { Ok(()) }
+	fn enqueue_unwatch(&self, buffer_id: BufferId) -> Result<(), FileWatcherError> {
+		self.unwatches.borrow_mut().push(buffer_id);
+		Ok(())
+	}
 }
 
 impl FilePicker for RecordingPorts {
@@ -189,11 +195,12 @@ impl StorageIo for RecordingPorts {
 
 	fn enqueue_load_history(
 		&self,
-		_buffer_id: BufferId,
-		_source_path: PathBuf,
-		_expected_text: String,
-		_restore_view: bool,
+		buffer_id: BufferId,
+		source_path: PathBuf,
+		expected_text: String,
+		restore_view: bool,
 	) -> Result<(), StorageIoError> {
+		self.history_loads.borrow_mut().push((buffer_id, source_path, expected_text, restore_view));
 		Ok(())
 	}
 
@@ -207,7 +214,10 @@ impl StorageIo for RecordingPorts {
 		Ok(())
 	}
 
-	fn enqueue_close(&self, _buffer_id: BufferId) -> Result<(), StorageIoError> { Ok(()) }
+	fn enqueue_close(&self, buffer_id: BufferId) -> Result<(), StorageIoError> {
+		self.closes.borrow_mut().push(buffer_id);
+		Ok(())
+	}
 }
 
 #[derive(Default)]

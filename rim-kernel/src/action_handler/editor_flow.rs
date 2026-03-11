@@ -53,14 +53,14 @@ where P: StorageIo + FileWatcher {
 			if let Some(buffer_id) = closed_buffer_id {
 				enqueue_history_save_for_buffer(ports, state, buffer_id);
 			}
-			state.close_active_buffer();
-			if let Some(buffer_id) = closed_buffer_id
+			let close_result = state.close_active_buffer_and_report_global_removal();
+			if let Some((buffer_id, true)) = close_result
 				&& let Err(source) = ports.enqueue_unwatch(buffer_id)
 			{
 				let err = ActionHandlerError::CloseBufferUnwatch { source };
 				error!("watch worker unavailable while enqueueing file unwatch: {}", err);
 			}
-			if let Some(buffer_id) = closed_buffer_id
+			if let Some((buffer_id, true)) = close_result
 				&& let Err(source) = ports.enqueue_close(buffer_id)
 			{
 				let err = ActionHandlerError::PersistenceSwapClose { source };

@@ -13,8 +13,7 @@ impl TopBarWidget {
 		let active_buffer_id = state.active_buffer_id();
 		let active_tab_id = state.active_tab;
 
-		let buffer_ids =
-			state.buffer_order.iter().copied().filter(|id| state.buffers.get(*id).is_some()).collect::<Vec<_>>();
+		let buffer_ids = state.active_tab_buffer_ids();
 
 		let mut buffer_spans = Vec::new();
 		for (idx, id) in buffer_ids.iter().enumerate() {
@@ -94,6 +93,8 @@ mod tests {
 		let clean = state.create_buffer(Some(PathBuf::from("clean.rs")), "");
 		let dirty = state.create_buffer(Some(PathBuf::from("dirty.rs")), "");
 		state.bind_buffer_to_active_window(clean);
+		state.bind_buffer_to_active_window(dirty);
+		state.bind_buffer_to_active_window(clean);
 		state.set_buffer_dirty(dirty, true);
 
 		let widget = TopBarWidget::from_state(&state);
@@ -108,5 +109,28 @@ mod tests {
 
 		assert!(labels.iter().any(|label| label == "clean.rs"));
 		assert!(labels.iter().any(|label| label == "dirty.rs*"));
+	}
+
+	#[test]
+	fn top_bar_should_only_show_buffers_from_active_tab() {
+		let mut state = RimState::new();
+		let first = state.create_buffer(Some(PathBuf::from("first.rs")), "");
+		state.bind_buffer_to_active_window(first);
+		let second = state.create_buffer(Some(PathBuf::from("second.rs")), "");
+		state.bind_buffer_to_active_window(second);
+		let second_tab = state.open_new_tab();
+		state.switch_tab(second_tab);
+
+		let widget = TopBarWidget::from_state(&state);
+		let labels = widget
+			.buffer_spans
+			.iter()
+			.filter_map(|span| match span.content.as_ref() {
+				" " => None,
+				content => Some(content.to_string()),
+			})
+			.collect::<Vec<_>>();
+
+		assert_eq!(labels, vec!["untitled".to_string()]);
 	}
 }

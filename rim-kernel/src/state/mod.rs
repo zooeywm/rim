@@ -86,6 +86,7 @@ pub(crate) struct WindowBufferViewState {
 pub struct TabState {
 	pub windows:       Vec<WindowId>,
 	pub active_window: WindowId,
+	pub buffer_order:  Vec<BufferId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,11 +198,17 @@ pub struct WorkspaceSessionSnapshot {
 	pub active_tab_index: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WorkspaceBufferSnapshot {
 	pub path:       Option<PathBuf>,
 	pub text:       String,
 	pub clean_text: String,
+	#[serde(default)]
+	pub history:    Option<WorkspaceBufferHistorySnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceBufferHistorySnapshot {
 	pub undo_stack: Vec<BufferHistoryEntry>,
 	pub redo_stack: Vec<BufferHistoryEntry>,
 }
@@ -210,6 +217,8 @@ pub struct WorkspaceBufferSnapshot {
 pub struct WorkspaceTabSnapshot {
 	pub windows:             Vec<WorkspaceWindowSnapshot>,
 	pub active_window_index: usize,
+	#[serde(default)]
+	pub buffer_order:        Vec<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -273,7 +282,11 @@ impl RimState {
 		let tab_id = TabId(1);
 		let window_id = windows.insert(WindowState::default());
 
-		tabs.insert(tab_id, TabState { windows: vec![window_id], active_window: window_id });
+		tabs.insert(tab_id, TabState {
+			windows:       vec![window_id],
+			active_window: window_id,
+			buffer_order:  Vec::new(),
+		});
 
 		Self {
 			title: "Rim".to_string(),
@@ -347,6 +360,7 @@ impl RimState {
 		let Some(window_snapshot) = self.windows.get(window_id).copied() else {
 			return;
 		};
+		let previous_buffer_id = window_snapshot.buffer_id;
 		if persist_previous_cursor && let Some(previous_buffer_id) = window_snapshot.buffer_id {
 			self.window_buffer_views.insert((window_id, previous_buffer_id), WindowBufferViewState {
 				cursor:   window_snapshot.cursor,
@@ -372,6 +386,9 @@ impl RimState {
 			scroll_x: restored_view.scroll_x,
 			scroll_y: restored_view.scroll_y,
 		});
+		if let Some(tab_id) = self.tab_id_for_window(window_id) {
+			self.register_buffer_in_tab_order(tab_id, buffer_id, previous_buffer_id);
+		}
 	}
 
 	pub(crate) fn sync_window_view_binding(&mut self, window_id: WindowId) {

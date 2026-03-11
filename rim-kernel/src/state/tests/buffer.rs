@@ -285,6 +285,41 @@ fn close_active_buffer_should_fallback_to_left_buffer_when_available() {
 }
 
 #[test]
+fn close_active_buffer_should_not_pull_buffers_from_other_tabs() {
+	let mut state = test_state();
+	let first_tab_second = state.create_buffer(Some(PathBuf::from("second.rs")), "second");
+	state.bind_buffer_to_active_window(first_tab_second);
+	let second_tab = state.open_new_tab();
+	state.switch_tab(second_tab);
+	let second_tab_untitled = state.active_buffer_id().expect("active buffer should exist");
+
+	state.close_active_buffer();
+
+	assert_eq!(state.active_tab, second_tab);
+	let active_buffer_id = state.active_buffer_id().expect("active buffer should exist");
+	let active_buffer = state.buffers.get(active_buffer_id).expect("buffer should exist");
+	assert_eq!(active_buffer.path, None);
+	assert_ne!(active_buffer_id, first_tab_second);
+	assert_ne!(active_buffer_id, second_tab_untitled);
+	assert_eq!(state.active_tab_buffer_ids(), vec![active_buffer_id]);
+}
+
+#[test]
+fn close_active_buffer_in_one_tab_should_not_delete_shared_buffer_in_other_tab() {
+	let mut state = test_state();
+	let shared = state.active_buffer_id().expect("active buffer should exist");
+	let second_tab = state.open_new_tab();
+	state.bind_buffer_to_active_window(shared);
+
+	state.close_active_buffer();
+
+	assert_eq!(state.active_tab, second_tab);
+	assert!(state.buffers.contains_key(shared));
+	state.switch_tab(crate::state::TabId(1));
+	assert_eq!(state.active_buffer_id(), Some(shared));
+}
+
+#[test]
 fn create_untitled_buffer_should_bind_new_untitled_to_active_window() {
 	let mut state = test_state();
 	let old = state.active_buffer_id().expect("buffer id exists");

@@ -46,6 +46,21 @@ impl RimState {
 		self.tabs.get(&self.active_tab).map(|tab| tab.windows.clone()).unwrap_or_default()
 	}
 
+	pub fn active_tab_buffer_ids(&self) -> Vec<super::BufferId> {
+		self
+			.tabs
+			.get(&self.active_tab)
+			.map(|tab| {
+				tab
+					.buffer_order
+					.iter()
+					.copied()
+					.filter(|buffer_id| self.buffers.contains_key(*buffer_id))
+					.collect::<Vec<_>>()
+			})
+			.unwrap_or_default()
+	}
+
 	pub fn active_window_id(&self) -> WindowId {
 		self.tabs.get(&self.active_tab).map(|tab| tab.active_window).expect("active tab must exist")
 	}
@@ -79,6 +94,9 @@ impl RimState {
 		let current = self.active_tab.0;
 		let new_id = TabId(current.saturating_add(1));
 		let buffer_id = self.create_buffer(None, String::new());
+		if let Some(current_tab) = self.tabs.get_mut(&self.active_tab) {
+			current_tab.buffer_order.retain(|id| *id != buffer_id);
+		}
 		let window_id = self.create_window(Some(buffer_id)).expect("create default tab window should never fail");
 		let old_tabs = std::mem::take(&mut self.tabs);
 		let mut rebuilt_tabs = BTreeMap::new();
@@ -88,7 +106,11 @@ impl RimState {
 			rebuilt_tabs.insert(target_id, tab);
 		}
 
-		rebuilt_tabs.insert(new_id, TabState { windows: vec![window_id], active_window: window_id });
+		rebuilt_tabs.insert(new_id, TabState {
+			windows:       vec![window_id],
+			active_window: window_id,
+			buffer_order:  vec![buffer_id],
+		});
 		self.tabs = rebuilt_tabs;
 		new_id
 	}
