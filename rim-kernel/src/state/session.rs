@@ -203,6 +203,10 @@ impl RimState {
 					y: window_snapshot.y,
 					width: window_snapshot.width.max(1),
 					height: window_snapshot.height.max(1),
+					layout_x: u32::from(window_snapshot.x),
+					layout_y: u32::from(window_snapshot.y),
+					layout_w: u32::from(window_snapshot.width.max(1)),
+					layout_h: u32::from(window_snapshot.height.max(1)),
 					..WindowState::default()
 				};
 				if let Some(view) = current_view {

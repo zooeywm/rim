@@ -74,12 +74,15 @@ pub enum EditorAction {
 	EnterVisualMode,
 	EnterVisualLineMode,
 	EnterVisualBlockMode,
+	ExitVisualMode,
 	MoveLeft,
+	MoveLeftInVisual,
 	MoveLineStart,
 	MoveLineEnd,
 	MoveDown,
 	MoveUp,
 	MoveRight,
+	MoveRightInVisual,
 	MoveFileStart,
 	MoveFileEnd,
 	ScrollViewDown,
@@ -92,6 +95,12 @@ pub enum EditorAction {
 	CutCharToSlot,
 	PasteSlotAfterCursor,
 	DeleteCurrentLineToSlot,
+	DeleteVisualSelectionToSlot,
+	YankVisualSelectionToSlot,
+	ReplaceVisualSelectionWithSlot,
+	ChangeVisualSelectionToInsertMode,
+	BeginVisualBlockInsertBefore,
+	BeginVisualBlockInsertAfter,
 	CloseActiveBuffer,
 	NewEmptyBuffer,
 }
@@ -186,5 +195,5 @@ pub enum FileLoadSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SystemAction {
 	Quit,
-	ReloadCommandConfig,
+	ReloadConfig,
 }

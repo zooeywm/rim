@@ -1,4 +1,6 @@
+use ropey::Rope;
 use tracing::{error, trace};
+use unicode_width::UnicodeWidthChar;
 
 use super::{FocusDirection, RimState, SplitAxis, WindowId, WindowState};
 
@@ -84,7 +86,10 @@ impl RimState {
 			self.tabs.get(&tab_id).map(|t| t.active_window).expect("invariant: active tab must exist");
 		let active_window =
 			*self.windows.get(active_window_id).expect("invariant: active window id must exist in windows");
+		let logical_active_window = ensure_layout_geometry(&active_window);
 		let (updated_active, new_window_layout) = split_window_layout(&active_window, axis);
+		let (updated_active_layout, new_window_logical_layout) =
+			split_window_layout(&logical_active_window, axis);
 
 		let Some(new_window_id) = self.create_window(active_window.buffer_id) else {
 			error!(
@@ -95,9 +100,17 @@ impl RimState {
 		};
 		if let Some(window) = self.windows.get_mut(active_window_id) {
 			*window = updated_active;
+			window.layout_x = updated_active_layout.x.into();
+			window.layout_y = updated_active_layout.y.into();
+			window.layout_w = updated_active_layout.width.into();
+			window.layout_h = updated_active_layout.height.into();
 		}
 		if let Some(window) = self.windows.get_mut(new_window_id) {
 			*window = new_window_layout;
+			window.layout_x = new_window_logical_layout.x.into();
+			window.layout_y = new_window_logical_layout.y.into();
+			window.layout_w = new_window_logical_layout.width.into();
+			window.layout_h = new_window_logical_layout.height.into();
 		}
 		self.sync_window_view_binding(active_window_id);
 		self.sync_window_view_binding(new_window_id);
@@ -142,6 +155,10 @@ impl RimState {
 					window.y = 0;
 					window.width = width.max(1);
 					window.height = height.max(1);
+					window.layout_x = 0;
+					window.layout_y = 0;
+					window.layout_w = width.max(1).into();
+					window.layout_h = height.max(1).into();
 				}
 				for id in window_ids.iter().skip(1) {
 					if let Some(window) = self.windows.get_mut(*id) {
@@ -149,25 +166,56 @@ impl RimState {
 						window.y = 0;
 						window.width = width.max(1);
 						window.height = height.max(1);
+						window.layout_x = 0;
+						window.layout_y = 0;
+						window.layout_w = width.max(1).into();
+						window.layout_h = height.max(1).into();
 					}
 				}
 			}
 			return;
 		}
 
+		let logical_bounds = window_ids
+			.iter()
+			.filter_map(|id| self.windows.get(*id))
+			.map(ensure_layout_geometry)
+			.collect::<Vec<_>>();
+		let max_layout_right =
+			logical_bounds.iter().map(|window| window.layout_x.saturating_add(window.layout_w)).max().unwrap_or(0);
+		let max_layout_bottom =
+			logical_bounds.iter().map(|window| window.layout_y.saturating_add(window.layout_h)).max().unwrap_or(0);
+
+		let previous_windows = window_ids
+			.iter()
+			.filter_map(|id| self.windows.get(*id).copied().map(|window| (*id, window)))
+			.collect::<std::collections::HashMap<_, _>>();
+
 		for id in &window_ids {
 			if let Some(window) = self.windows.get_mut(*id) {
-				let old_right = window.x.saturating_add(window.width);
-				let old_bottom = window.y.saturating_add(window.height);
-				let new_x = (u32::from(window.x) * u32::from(width) / u32::from(max_right)) as u16;
-				let new_y = (u32::from(window.y) * u32::from(height) / u32::from(max_bottom)) as u16;
-				let new_right = (u32::from(old_right) * u32::from(width) / u32::from(max_right)) as u16;
-				let new_bottom = (u32::from(old_bottom) * u32::from(height) / u32::from(max_bottom)) as u16;
+				if window.layout_w == 0 || window.layout_h == 0 {
+					window.layout_x = window.x.into();
+					window.layout_y = window.y.into();
+					window.layout_w = window.width.max(1).into();
+					window.layout_h = window.height.max(1).into();
+				}
+				let old_right = window.layout_x.saturating_add(window.layout_w);
+				let old_bottom = window.layout_y.saturating_add(window.layout_h);
+				let new_x = (window.layout_x * u32::from(width) / max_layout_right.max(1)) as u16;
+				let new_y = (window.layout_y * u32::from(height) / max_layout_bottom.max(1)) as u16;
+				let new_right = (old_right * u32::from(width) / max_layout_right.max(1)) as u16;
+				let new_bottom = (old_bottom * u32::from(height) / max_layout_bottom.max(1)) as u16;
 				window.x = new_x.min(width.saturating_sub(1));
 				window.y = new_y.min(height.saturating_sub(1));
 				window.width = new_right.saturating_sub(new_x).max(1).min(width.saturating_sub(window.x).max(1));
 				window.height = new_bottom.saturating_sub(new_y).max(1).min(height.saturating_sub(window.y).max(1));
 			}
+		}
+
+		for window_id in window_ids {
+			let previous_window = previous_windows.get(&window_id).copied();
+			self.reconcile_window_view_to_layout(window_id, previous_window);
+			self.sync_window_view_binding(window_id);
 		}
 	}
 
@@ -179,6 +227,7 @@ impl RimState {
 			if w.y == closed.y && w.height == closed.height && w.x.saturating_add(w.width) == closed.x {
 				if let Some(target) = self.windows.get_mut(*id) {
 					target.width = target.width.saturating_add(closed.width);
+					target.layout_w = target.layout_w.saturating_add(closed.layout_w);
 				}
 				return Some(*id);
 			}
@@ -186,12 +235,15 @@ impl RimState {
 				if let Some(target) = self.windows.get_mut(*id) {
 					target.x = closed.x;
 					target.width = target.width.saturating_add(closed.width);
+					target.layout_x = closed.layout_x;
+					target.layout_w = target.layout_w.saturating_add(closed.layout_w);
 				}
 				return Some(*id);
 			}
 			if w.x == closed.x && w.width == closed.width && w.y.saturating_add(w.height) == closed.y {
 				if let Some(target) = self.windows.get_mut(*id) {
 					target.height = target.height.saturating_add(closed.height);
+					target.layout_h = target.layout_h.saturating_add(closed.layout_h);
 				}
 				return Some(*id);
 			}
@@ -199,6 +251,8 @@ impl RimState {
 				if let Some(target) = self.windows.get_mut(*id) {
 					target.y = closed.y;
 					target.height = target.height.saturating_add(closed.height);
+					target.layout_y = closed.layout_y;
+					target.layout_h = target.layout_h.saturating_add(closed.layout_h);
 				}
 				return Some(*id);
 			}
@@ -235,6 +289,8 @@ impl RimState {
 			if let Some(target) = self.windows.get_mut(id) {
 				target.x = closed.x;
 				target.width = target.width.saturating_add(closed.width);
+				target.layout_x = closed.layout_x;
+				target.layout_w = target.layout_w.saturating_add(closed.layout_w);
 			}
 		}
 		true
@@ -261,6 +317,7 @@ impl RimState {
 		for (id, _) in group {
 			if let Some(target) = self.windows.get_mut(id) {
 				target.width = target.width.saturating_add(closed.width);
+				target.layout_w = target.layout_w.saturating_add(closed.layout_w);
 			}
 		}
 		true
@@ -288,6 +345,8 @@ impl RimState {
 			if let Some(target) = self.windows.get_mut(id) {
 				target.y = closed.y;
 				target.height = target.height.saturating_add(closed.height);
+				target.layout_y = closed.layout_y;
+				target.layout_h = target.layout_h.saturating_add(closed.layout_h);
 			}
 		}
 		true
@@ -314,9 +373,75 @@ impl RimState {
 		for (id, _) in group {
 			if let Some(target) = self.windows.get_mut(id) {
 				target.height = target.height.saturating_add(closed.height);
+				target.layout_h = target.layout_h.saturating_add(closed.layout_h);
 			}
 		}
 		true
+	}
+}
+
+impl RimState {
+	fn reconcile_window_view_to_layout(&mut self, window_id: WindowId, previous_window: Option<WindowState>) {
+		let Some(window_snapshot) = self.windows.get(window_id).copied() else {
+			return;
+		};
+		let Some(buffer_id) = window_snapshot.buffer_id else {
+			return;
+		};
+		let Some(buffer) = self.buffers.get(buffer_id) else {
+			return;
+		};
+
+		let cursor = crate::state::clamp_cursor_for_rope(&buffer.text, window_snapshot.cursor);
+		let visible_rows = window_visible_rows(&window_snapshot);
+		let visible_cols = window_visible_text_cols(&window_snapshot, &buffer.text);
+		let cursor_line = cursor.row.saturating_sub(1);
+		let cursor_display_col = cursor_display_col_for_window(&buffer.text, cursor);
+		let max_scroll_y = (crate::state::rope_line_count(&buffer.text) as u16).saturating_sub(visible_rows);
+		let visible_row_tail = visible_rows.saturating_sub(1);
+		let max_visible_col_tail = visible_cols.saturating_sub(1);
+		let line_display_width = line_display_width_for_window(&buffer.text, cursor);
+		let max_scroll_x = line_display_width.saturating_sub(max_visible_col_tail);
+
+		let mut next_scroll_y = window_snapshot.scroll_y.min(max_scroll_y);
+		if let Some(previous_window) = previous_window {
+			let previous_visible_rows = window_visible_rows(&previous_window);
+			let previous_bottom = previous_window.scroll_y.saturating_add(previous_visible_rows.saturating_sub(1));
+			if cursor_line == previous_bottom {
+				next_scroll_y = cursor_line.saturating_sub(visible_row_tail).min(max_scroll_y);
+			} else if cursor_line == previous_window.scroll_y {
+				next_scroll_y = cursor_line.min(max_scroll_y);
+			}
+		}
+		let bottom = next_scroll_y.saturating_add(visible_row_tail);
+		if cursor_line < next_scroll_y {
+			next_scroll_y = cursor_line;
+		} else if cursor_line > bottom {
+			next_scroll_y = cursor_line.saturating_sub(visible_row_tail).min(max_scroll_y);
+		}
+
+		let mut next_scroll_x = window_snapshot.scroll_x.min(max_scroll_x);
+		if let Some(previous_window) = previous_window {
+			let previous_visible_cols = window_visible_text_cols(&previous_window, &buffer.text);
+			let previous_right = previous_window.scroll_x.saturating_add(previous_visible_cols.saturating_sub(1));
+			if cursor_display_col == previous_right {
+				next_scroll_x = cursor_display_col.saturating_sub(max_visible_col_tail).min(max_scroll_x);
+			} else if cursor_display_col == previous_window.scroll_x {
+				next_scroll_x = cursor_display_col.min(max_scroll_x);
+			}
+		}
+		let right = next_scroll_x.saturating_add(max_visible_col_tail);
+		if cursor_display_col < next_scroll_x {
+			next_scroll_x = cursor_display_col;
+		} else if cursor_display_col > right {
+			next_scroll_x = cursor_display_col.saturating_sub(max_visible_col_tail).min(max_scroll_x);
+		}
+
+		if let Some(window) = self.windows.get_mut(window_id) {
+			window.cursor = cursor;
+			window.scroll_y = next_scroll_y;
+			window.scroll_x = next_scroll_x;
+		}
 	}
 }
 
@@ -390,4 +515,56 @@ fn split_window_layout(window: &WindowState, axis: SplitAxis) -> (WindowState, W
 		}
 	}
 	(first, second)
+}
+
+fn ensure_layout_geometry(window: &WindowState) -> WindowState {
+	let mut layout_window = *window;
+	if layout_window.layout_w == 0 || layout_window.layout_h == 0 {
+		layout_window.layout_x = u32::from(layout_window.x);
+		layout_window.layout_y = u32::from(layout_window.y);
+		layout_window.layout_w = u32::from(layout_window.width.max(1));
+		layout_window.layout_h = u32::from(layout_window.height.max(1));
+	}
+	layout_window.x = layout_window.layout_x.min(u32::from(u16::MAX)) as u16;
+	layout_window.y = layout_window.layout_y.min(u32::from(u16::MAX)) as u16;
+	layout_window.width = layout_window.layout_w.min(u32::from(u16::MAX)) as u16;
+	layout_window.height = layout_window.layout_h.min(u32::from(u16::MAX)) as u16;
+	layout_window
+}
+
+fn window_visible_rows(window: &WindowState) -> u16 {
+	let reserved_for_split_line = u16::from(window.y > 0);
+	window.height.saturating_sub(reserved_for_split_line).max(1)
+}
+
+fn window_visible_text_cols(window: &WindowState, text: &Rope) -> u16 {
+	let reserved_for_split_line = u16::from(window.x > 0);
+	let local_width = window.width.saturating_sub(reserved_for_split_line).max(1);
+	let total_lines = crate::state::rope_line_count(text);
+	let desired_number_col_width = total_lines.to_string().len() as u16 + 1;
+	let number_col_width = if local_width <= desired_number_col_width { 0 } else { desired_number_col_width };
+	local_width.saturating_sub(number_col_width).max(1)
+}
+
+fn cursor_display_col_for_window(text: &Rope, cursor: crate::state::CursorState) -> u16 {
+	let row_index = cursor.row.saturating_sub(1) as usize;
+	let char_index = cursor.col.saturating_sub(1) as usize;
+	crate::state::rope_line_without_newline(text, row_index)
+		.map(|line| display_width_of_char_prefix(line.as_str(), char_index) as u16)
+		.unwrap_or(0)
+}
+
+fn line_display_width_for_window(text: &Rope, cursor: crate::state::CursorState) -> u16 {
+	let row_index = cursor.row.saturating_sub(1) as usize;
+	crate::state::rope_line_without_newline(text, row_index)
+		.map(|line| line.chars().map(|ch| char_display_width(ch) as u16).sum())
+		.unwrap_or(0)
+}
+
+fn display_width_of_char_prefix(line: &str, char_count: usize) -> usize {
+	line.chars().take(char_count).map(char_display_width).sum()
+}
+
+fn char_display_width(ch: char) -> usize {
+	if ch == '\t' { 4 } else { UnicodeWidthChar::width(ch).unwrap_or(0) }
 }

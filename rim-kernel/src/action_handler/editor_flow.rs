@@ -30,12 +30,27 @@ where P: StorageIo + FileWatcher {
 		EditorAction::EnterVisualMode => state.enter_visual_mode(),
 		EditorAction::EnterVisualLineMode => state.enter_visual_line_mode(),
 		EditorAction::EnterVisualBlockMode => state.enter_visual_block_mode(),
+		EditorAction::ExitVisualMode => state.exit_visual_mode(),
 		EditorAction::MoveLeft => state.move_cursor_left(),
+		EditorAction::MoveLeftInVisual => {
+			if state.is_visual_line_mode() {
+				state.move_cursor_left();
+			} else {
+				state.move_cursor_left_for_visual_char();
+			}
+		}
 		EditorAction::MoveLineStart => state.move_cursor_line_start(),
 		EditorAction::MoveLineEnd => state.move_cursor_line_end(),
 		EditorAction::MoveDown => state.move_cursor_down(),
 		EditorAction::MoveUp => state.move_cursor_up(),
 		EditorAction::MoveRight => state.move_cursor_right(),
+		EditorAction::MoveRightInVisual => {
+			if state.is_visual_line_mode() {
+				state.move_cursor_right();
+			} else {
+				state.move_cursor_right_for_visual_char();
+			}
+		}
 		EditorAction::MoveFileStart => state.move_cursor_file_start(),
 		EditorAction::MoveFileEnd => state.move_cursor_file_end(),
 		EditorAction::ScrollViewDown => state.scroll_view_down_one_line(),
@@ -48,6 +63,20 @@ where P: StorageIo + FileWatcher {
 		EditorAction::CutCharToSlot => state.cut_current_char_to_slot(),
 		EditorAction::PasteSlotAfterCursor => state.paste_slot_at_cursor(),
 		EditorAction::DeleteCurrentLineToSlot => state.delete_current_line_to_slot(),
+		EditorAction::DeleteVisualSelectionToSlot => {
+			let _ = state.delete_visual_selection_to_slot();
+		}
+		EditorAction::YankVisualSelectionToSlot => state.yank_visual_selection_to_slot(),
+		EditorAction::ReplaceVisualSelectionWithSlot => state.replace_visual_selection_with_slot(),
+		EditorAction::ChangeVisualSelectionToInsertMode => state.change_visual_selection_to_insert_mode(),
+		EditorAction::BeginVisualBlockInsertBefore => {
+			state.begin_insert_history_group();
+			state.begin_visual_block_insert(false);
+		}
+		EditorAction::BeginVisualBlockInsertAfter => {
+			state.begin_insert_history_group();
+			state.begin_visual_block_insert(true);
+		}
 		EditorAction::CloseActiveBuffer => {
 			let closed_buffer_id = state.active_buffer_id();
 			if let Some(buffer_id) = closed_buffer_id {

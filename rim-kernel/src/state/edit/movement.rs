@@ -163,27 +163,31 @@ impl RimState {
 	pub fn scroll_view_down_half_page(&mut self) {
 		let target_col = self.capture_preferred_col_for_vertical();
 		let step = self.active_window_visible_rows().saturating_div(2).max(1) as i16;
-		self.scroll_view_with_col_memory(step, target_col);
+		self.move_cursor_and_scroll_half_page(step, target_col);
 	}
 
 	pub fn scroll_view_up_half_page(&mut self) {
 		let target_col = self.capture_preferred_col_for_vertical();
 		let step = self.active_window_visible_rows().saturating_div(2).max(1) as i16;
-		self.scroll_view_with_col_memory(-step, target_col);
+		self.move_cursor_and_scroll_half_page(-step, target_col);
 	}
 
-	fn scroll_view_with_col_memory(&mut self, delta: i16, target_col: u16) {
+	fn scroll_view_with_col_memory(&mut self, delta: i16, target_col: u16) -> bool {
 		let active_window_id = self.active_window_id();
 		let visible_rows = self.active_window_visible_rows();
 		let max_scroll = self.max_row().saturating_sub(visible_rows);
+		let mut changed = false;
 		if let Some(window) = self.windows.get_mut(active_window_id) {
+			let previous_scroll = window.scroll_y;
 			if delta >= 0 {
 				window.scroll_y = window.scroll_y.saturating_add(delta as u16).min(max_scroll);
 			} else {
 				window.scroll_y = window.scroll_y.saturating_sub((-delta) as u16);
 			}
+			changed = window.scroll_y != previous_scroll;
 		}
 		self.keep_cursor_in_view_after_scroll(target_col);
+		changed
 	}
 
 	pub fn active_cursor(&self) -> CursorState {
@@ -197,6 +201,32 @@ impl RimState {
 		let col = self.active_cursor().col;
 		self.preferred_col = Some(col);
 		col
+	}
+
+	fn move_cursor_and_scroll_half_page(&mut self, delta: i16, target_col: u16) {
+		let active_window_id = self.active_window_id();
+		let Some(window_snapshot) = self.windows.get(active_window_id).copied() else {
+			return;
+		};
+		let visible_rows = self.active_window_visible_rows();
+		let max_row = self.max_row();
+		let max_scroll = max_row.saturating_sub(visible_rows);
+		let current_row = window_snapshot.cursor.row;
+		let next_row = if delta >= 0 {
+			current_row.saturating_add(delta as u16).min(max_row)
+		} else {
+			current_row.saturating_sub((-delta) as u16).max(1)
+		};
+		let relative_row = current_row.saturating_sub(window_snapshot.scroll_y.saturating_add(1));
+		let next_cursor_line = next_row.saturating_sub(1);
+		let next_scroll = next_cursor_line.saturating_sub(relative_row).min(max_scroll);
+		let max_col = self.max_navigable_col_for_row(next_row);
+
+		if let Some(window) = self.windows.get_mut(active_window_id) {
+			window.cursor.row = next_row;
+			window.cursor.col = target_col.min(max_col).max(1);
+			window.scroll_y = next_scroll;
+		}
 	}
 
 	fn max_row(&self) -> u16 { self.active_buffer_rope().map(|text| rope_line_count(text) as u16).unwrap_or(1) }
@@ -247,14 +277,17 @@ impl RimState {
 			return;
 		};
 		let visible_rows = self.active_window_visible_rows();
+		let threshold = self.cursor_scroll_threshold.min(visible_rows.saturating_sub(1));
 		let top_row = window.scroll_y.saturating_add(1);
 		let bottom_row = top_row.saturating_add(visible_rows.saturating_sub(1));
+		let top_safe_row = top_row.saturating_add(threshold);
+		let bottom_safe_row = bottom_row.saturating_sub(threshold);
 		let row = self.active_cursor().row;
 
-		let target_row = if row < top_row {
-			top_row
-		} else if row > bottom_row {
-			bottom_row
+		let target_row = if row < top_safe_row {
+			top_safe_row
+		} else if row > bottom_safe_row {
+			bottom_safe_row.max(top_safe_row)
 		} else {
 			return;
 		};

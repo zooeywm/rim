@@ -83,7 +83,7 @@ impl RimState {
 					}
 					return ControlFlow::Break(());
 				}
-				SystemAction::ReloadCommandConfig => {}
+				SystemAction::ReloadConfig => {}
 			},
 		}
 		ControlFlow::Continue(())

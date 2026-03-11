@@ -138,7 +138,7 @@ impl FileWatcherState {
 				return false;
 			}
 		}
-		if config_changed && event_tx.send(AppAction::System(SystemAction::ReloadCommandConfig)).is_err() {
+		if config_changed && event_tx.send(AppAction::System(SystemAction::ReloadConfig)).is_err() {
 			return false;
 		}
 

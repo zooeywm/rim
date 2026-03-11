@@ -42,9 +42,7 @@ where P: StorageIo + FileWatcher + FilePicker {
 		state.status_bar.key_sequence.clear();
 		command_flow::handle_command_mode_key(ports, state, key)
 	} else if state.is_visual_mode() {
-		state.normal_sequence.clear();
-		state.status_bar.key_sequence.clear();
-		handle_visual_mode_key(state, key)
+		handle_visual_mode_key(ports, state, key)
 	} else if state.is_insert_mode() {
 		state.normal_sequence.clear();
 		state.status_bar.key_sequence.clear();
@@ -143,6 +141,9 @@ pub(super) fn to_normal_key(state: &RimState, key: KeyEvent) -> Option<NormalSeq
 	if key.code == KeyCode::Tab {
 		return Some(NormalSequenceKey::Tab);
 	}
+	if key.code == KeyCode::Esc {
+		return Some(NormalSequenceKey::Esc);
+	}
 
 	None
 }
@@ -165,12 +166,31 @@ pub(super) fn resolve_normal_sequence_with_registry(
 	}
 }
 
+pub(super) fn resolve_visual_sequence_with_registry(
+	registry: &CommandRegistry,
+	keys: &[NormalSequenceKey],
+) -> SequenceMatch {
+	match registry.resolve_visual_sequence(keys) {
+		BindingMatch::Pending => SequenceMatch::Pending,
+		BindingMatch::NoMatch => SequenceMatch::NoMatch,
+		BindingMatch::Exact(CommandTarget::Builtin(builtin)) => {
+			if let Some(action) = builtin.visual_mode_action() {
+				SequenceMatch::Action(action)
+			} else {
+				SequenceMatch::Command(CommandTarget::Builtin(builtin))
+			}
+		}
+		BindingMatch::Exact(target) => SequenceMatch::Command(target),
+	}
+}
+
 pub(super) fn render_normal_sequence(keys: &[NormalSequenceKey]) -> String {
 	keys
 		.iter()
 		.map(|key| match key {
 			NormalSequenceKey::Leader => "<leader>".to_string(),
 			NormalSequenceKey::Tab => "<tab>".to_string(),
+			NormalSequenceKey::Esc => "<Esc>".to_string(),
 			NormalSequenceKey::Char(ch) => ch.to_string(),
 			NormalSequenceKey::Ctrl(ch) => format!("<C-{}>", ch),
 		})
@@ -228,74 +248,42 @@ fn handle_block_insert_mode_key(state: &mut RimState, key: KeyEvent) -> ControlF
 	ControlFlow::Continue(())
 }
 
-pub(super) fn handle_visual_mode_key(state: &mut RimState, key: KeyEvent) -> ControlFlow<()> {
-	if key.modifiers.contains(KeyModifiers::CONTROL) {
-		state.visual_g_pending = false;
-		match key.code {
-			KeyCode::Char('e') => state.scroll_view_down_one_line(),
-			KeyCode::Char('y') => state.scroll_view_up_one_line(),
-			KeyCode::Char('d') => state.scroll_view_down_half_page(),
-			KeyCode::Char('u') => state.scroll_view_up_half_page(),
-			KeyCode::Char('v') => state.enter_visual_block_mode(),
-			_ => {}
-		}
+pub(super) fn handle_visual_mode_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
+where P: StorageIo + FileWatcher + FilePicker {
+	let Some(visual_key) = to_normal_key(state, key) else {
+		state.normal_sequence.clear();
+		state.status_bar.key_sequence.clear();
 		return ControlFlow::Continue(());
-	}
+	};
+	state.normal_sequence.push(visual_key);
 
-	match key.code {
-		KeyCode::Esc => {
-			state.visual_g_pending = false;
-			state.exit_visual_mode();
-		}
-		KeyCode::Char('v') => state.enter_visual_mode(),
-		KeyCode::Char('V') => state.enter_visual_line_mode(),
-		KeyCode::Char('c') => state.change_visual_selection_to_insert_mode(),
-		KeyCode::Char('d') => {
-			let _ = state.delete_visual_selection_to_slot();
-		}
-		KeyCode::Char('x') => {
-			let _ = state.delete_visual_selection_to_slot();
-		}
-		KeyCode::Char('y') => state.yank_visual_selection_to_slot(),
-		KeyCode::Char('p') => state.replace_visual_selection_with_slot(),
-		KeyCode::Char('I') if state.is_visual_block_mode() => {
-			state.begin_insert_history_group();
-			state.begin_visual_block_insert(false);
-		}
-		KeyCode::Char('A') if state.is_visual_block_mode() => {
-			state.begin_insert_history_group();
-			state.begin_visual_block_insert(true);
-		}
-		KeyCode::Char('h') => {
-			if state.is_visual_line_mode() {
-				state.move_cursor_left();
-			} else {
-				state.move_cursor_left_for_visual_char();
+	loop {
+		match resolve_visual_sequence_with_registry(&state.command_registry, &state.normal_sequence) {
+			SequenceMatch::Action(action) => {
+				state.normal_sequence.clear();
+				state.status_bar.key_sequence.clear();
+				return RimState::dispatch_internal(ports, state, action);
+			}
+			SequenceMatch::Command(target) => {
+				state.normal_sequence.clear();
+				state.status_bar.key_sequence.clear();
+				return command_flow::execute_command_target(ports, state, target, None);
+			}
+			SequenceMatch::Pending => {
+				state.status_bar.key_sequence = render_normal_sequence(&state.normal_sequence);
+				return ControlFlow::Continue(());
+			}
+			SequenceMatch::NoMatch => {
+				if state.normal_sequence.len() <= 1 {
+					state.normal_sequence.clear();
+					state.status_bar.key_sequence.clear();
+					return ControlFlow::Continue(());
+				}
+				let last = *state.normal_sequence.last().expect("visual sequence has at least one key");
+				state.normal_sequence.clear();
+				state.normal_sequence.push(last);
+				state.status_bar.key_sequence = render_normal_sequence(&state.normal_sequence);
 			}
 		}
-		KeyCode::Char('j') => state.move_cursor_down(),
-		KeyCode::Char('k') => state.move_cursor_up(),
-		KeyCode::Char('l') => {
-			if state.is_visual_line_mode() {
-				state.move_cursor_right();
-			} else {
-				state.move_cursor_right_for_visual_char();
-			}
-		}
-		KeyCode::Char('0') => state.move_cursor_line_start(),
-		KeyCode::Char('$') => state.move_cursor_line_end(),
-		KeyCode::Char('g') => {
-			if state.visual_g_pending {
-				state.visual_g_pending = false;
-				state.move_cursor_file_start();
-			} else {
-				state.visual_g_pending = true;
-			}
-			return ControlFlow::Continue(());
-		}
-		KeyCode::Char('G') => state.move_cursor_file_end(),
-		_ => {}
 	}
-	state.visual_g_pending = false;
-	ControlFlow::Continue(())
 }

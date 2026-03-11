@@ -222,6 +222,39 @@ fn scroll_view_up_one_line_should_decrease_scroll_and_keep_cursor_visible() {
 }
 
 #[test]
+fn scroll_view_down_one_line_should_respect_cursor_scroll_threshold() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "1\n2\n3\n4\n5\n6");
+	state.update_active_tab_layout(80, 4);
+	state.cursor_scroll_threshold = 1;
+
+	state.scroll_view_down_one_line();
+
+	let active_window_id = state.active_window_id();
+	let window = state.windows.get(active_window_id).expect("window exists");
+	assert_eq!(window.scroll_y, 1);
+	assert_eq!(state.active_cursor().row, 3);
+}
+
+#[test]
+fn scroll_view_up_one_line_should_respect_cursor_scroll_threshold() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "1\n2\n3\n4\n5\n6");
+	state.update_active_tab_layout(80, 4);
+	state.cursor_scroll_threshold = 1;
+	let active_window_id = state.active_window_id();
+	let window = state.windows.get_mut(active_window_id).expect("window exists");
+	window.scroll_y = 2;
+	window.cursor = CursorState { row: 4, col: 1 };
+
+	state.scroll_view_up_one_line();
+
+	let window = state.windows.get(active_window_id).expect("window exists");
+	assert_eq!(window.scroll_y, 1);
+	assert_eq!(state.active_cursor().row, 4);
+}
+
+#[test]
 fn scroll_view_should_restore_preferred_col_when_row_changes_back() {
 	let mut state = test_state();
 	set_active_buffer_text(&mut state, "abcd\nx\nabcd");
@@ -249,30 +282,71 @@ fn scroll_view_should_restore_preferred_col_when_row_changes_back() {
 }
 
 #[test]
-fn scroll_view_down_half_page_should_scroll_by_half_window_height() {
+fn scroll_view_down_half_page_should_move_cursor_and_preserve_relative_screen_row() {
 	let mut state = test_state();
-	set_active_buffer_text(&mut state, "1\n2\n3\n4\n5\n6\n7\n8");
-	state.update_active_tab_layout(80, 4);
+	set_active_buffer_text(&mut state, &(1..=80).map(|n| n.to_string()).collect::<Vec<_>>().join("\n"));
+	state.update_active_tab_layout(80, 20);
+	let active_window_id = state.active_window_id();
+	let window = state.windows.get_mut(active_window_id).expect("window exists");
+	window.cursor = CursorState { row: 11, col: 1 };
+	window.scroll_y = 0;
 
 	state.scroll_view_down_half_page();
 
-	let active_window_id = state.active_window_id();
 	let window = state.windows.get(active_window_id).expect("window exists");
-	assert_eq!(window.scroll_y, 2);
+	assert_eq!(window.cursor.row, 21);
+	assert_eq!(window.scroll_y, 10);
 }
 
 #[test]
-fn scroll_view_up_half_page_should_restore_scroll_by_half_window_height() {
+fn scroll_view_up_half_page_should_move_cursor_and_preserve_relative_screen_row() {
 	let mut state = test_state();
-	set_active_buffer_text(&mut state, "1\n2\n3\n4\n5\n6\n7\n8");
-	state.update_active_tab_layout(80, 4);
+	set_active_buffer_text(&mut state, &(1..=80).map(|n| n.to_string()).collect::<Vec<_>>().join("\n"));
+	state.update_active_tab_layout(80, 20);
 	let active_window_id = state.active_window_id();
-	state.windows.get_mut(active_window_id).expect("window exists").scroll_y = 4;
+	let window = state.windows.get_mut(active_window_id).expect("window exists");
+	window.cursor = CursorState { row: 31, col: 1 };
+	window.scroll_y = 20;
 
 	state.scroll_view_up_half_page();
 
 	let window = state.windows.get(active_window_id).expect("window exists");
-	assert_eq!(window.scroll_y, 2);
+	assert_eq!(window.cursor.row, 21);
+	assert_eq!(window.scroll_y, 10);
+}
+
+#[test]
+fn scroll_view_down_half_page_at_bottom_should_clamp_cursor_to_last_line() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, &(1..=20).map(|n| n.to_string()).collect::<Vec<_>>().join("\n"));
+	state.update_active_tab_layout(80, 4);
+	let active_window_id = state.active_window_id();
+	let window = state.windows.get_mut(active_window_id).expect("window exists");
+	window.scroll_y = 16;
+	window.cursor = CursorState { row: 19, col: 1 };
+
+	state.scroll_view_down_half_page();
+
+	let window = state.windows.get(active_window_id).expect("window exists");
+	assert_eq!(window.scroll_y, 16);
+	assert_eq!(window.cursor.row, 20);
+}
+
+#[test]
+fn scroll_view_up_half_page_at_top_should_clamp_cursor_to_first_line() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, &(1..=20).map(|n| n.to_string()).collect::<Vec<_>>().join("\n"));
+	state.update_active_tab_layout(80, 4);
+	let active_window_id = state.active_window_id();
+	let window = state.windows.get_mut(active_window_id).expect("window exists");
+	window.scroll_y = 0;
+	window.cursor = CursorState { row: 2, col: 1 };
+
+	state.scroll_view_up_half_page();
+
+	let window = state.windows.get(active_window_id).expect("window exists");
+	assert_eq!(window.scroll_y, 0);
+	assert_eq!(window.cursor.row, 1);
 }
 
 #[test]

@@ -60,6 +60,15 @@ pub enum BuiltinCommand {
 	Reload,
 	ReloadForce,
 	OpenPickerYazi,
+	VisualExit,
+	VisualDelete,
+	VisualYank,
+	VisualPaste,
+	VisualChange,
+	VisualBlockInsertBefore,
+	VisualBlockInsertAfter,
+	VisualMoveLeft,
+	VisualMoveRight,
 }
 
 impl BuiltinCommand {
@@ -108,6 +117,34 @@ impl BuiltinCommand {
 			_ => None,
 		}
 	}
+
+	pub fn visual_mode_action(&self) -> Option<AppAction> {
+		match self {
+			Self::EnterVisualMode => Some(AppAction::Editor(EditorAction::EnterVisualMode)),
+			Self::EnterVisualLineMode => Some(AppAction::Editor(EditorAction::EnterVisualLineMode)),
+			Self::EnterVisualBlockMode => Some(AppAction::Editor(EditorAction::EnterVisualBlockMode)),
+			Self::MoveDown => Some(AppAction::Editor(EditorAction::MoveDown)),
+			Self::MoveUp => Some(AppAction::Editor(EditorAction::MoveUp)),
+			Self::MoveLineStart => Some(AppAction::Editor(EditorAction::MoveLineStart)),
+			Self::MoveLineEnd => Some(AppAction::Editor(EditorAction::MoveLineEnd)),
+			Self::MoveFileStart => Some(AppAction::Editor(EditorAction::MoveFileStart)),
+			Self::MoveFileEnd => Some(AppAction::Editor(EditorAction::MoveFileEnd)),
+			Self::ScrollViewDown => Some(AppAction::Editor(EditorAction::ScrollViewDown)),
+			Self::ScrollViewUp => Some(AppAction::Editor(EditorAction::ScrollViewUp)),
+			Self::ScrollViewHalfPageDown => Some(AppAction::Editor(EditorAction::ScrollViewHalfPageDown)),
+			Self::ScrollViewHalfPageUp => Some(AppAction::Editor(EditorAction::ScrollViewHalfPageUp)),
+			Self::VisualExit => Some(AppAction::Editor(EditorAction::ExitVisualMode)),
+			Self::VisualDelete => Some(AppAction::Editor(EditorAction::DeleteVisualSelectionToSlot)),
+			Self::VisualYank => Some(AppAction::Editor(EditorAction::YankVisualSelectionToSlot)),
+			Self::VisualPaste => Some(AppAction::Editor(EditorAction::ReplaceVisualSelectionWithSlot)),
+			Self::VisualChange => Some(AppAction::Editor(EditorAction::ChangeVisualSelectionToInsertMode)),
+			Self::VisualBlockInsertBefore => Some(AppAction::Editor(EditorAction::BeginVisualBlockInsertBefore)),
+			Self::VisualBlockInsertAfter => Some(AppAction::Editor(EditorAction::BeginVisualBlockInsertAfter)),
+			Self::VisualMoveLeft => Some(AppAction::Editor(EditorAction::MoveLeftInVisual)),
+			Self::VisualMoveRight => Some(AppAction::Editor(EditorAction::MoveRightInVisual)),
+			_ => None,
+		}
+	}
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,6 +189,12 @@ struct NormalKeyBinding {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct VisualKeyBinding {
+	keys:       Vec<NormalSequenceKey>,
+	command_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct CommandAlias {
 	name:       String,
 	command_id: String,
@@ -161,6 +204,7 @@ struct CommandAlias {
 pub struct CommandRegistry {
 	commands:        HashMap<String, CommandSpec>,
 	normal_bindings: Vec<NormalKeyBinding>,
+	visual_bindings: Vec<VisualKeyBinding>,
 	command_aliases: Vec<CommandAlias>,
 }
 
@@ -192,6 +236,25 @@ impl CommandRegistry {
 			};
 			self.normal_bindings.retain(|candidate| candidate.keys != keys);
 			self.normal_bindings.push(NormalKeyBinding { keys, command_id: resolved.spec.id.clone() });
+		}
+
+		if !config.visual.keymap.is_empty() {
+			self.visual_bindings.clear();
+		}
+		for binding in &config.visual.keymap {
+			let keys = match binding.on.parse_keys() {
+				Ok(keys) => keys,
+				Err(err) => {
+					errors.push(format!("invalid visual key binding '{}': {}", binding.on.display_for_error(), err));
+					continue;
+				}
+			};
+			let Some(resolved) = self.resolve_or_register_run_directive(binding.run.as_str()) else {
+				errors.push(format!("unknown run directive in visual keymap: {}", binding.run));
+				continue;
+			};
+			self.visual_bindings.retain(|candidate| candidate.keys != keys);
+			self.visual_bindings.push(VisualKeyBinding { keys, command_id: resolved.spec.id.clone() });
 		}
 
 		if !config.command.commands.is_empty() {
@@ -226,18 +289,11 @@ impl CommandRegistry {
 	}
 
 	pub fn resolve_normal_sequence(&self, keys: &[NormalSequenceKey]) -> BindingMatch<CommandTarget> {
-		let mut has_prefix = false;
-		for binding in &self.normal_bindings {
-			if binding.keys == keys
-				&& let Some(spec) = self.commands.get(binding.command_id.as_str())
-			{
-				return BindingMatch::Exact(spec.target.clone());
-			}
-			if binding.keys.starts_with(keys) {
-				has_prefix = true;
-			}
-		}
-		if has_prefix { BindingMatch::Pending } else { BindingMatch::NoMatch }
+		resolve_key_binding_set(&self.commands, &self.normal_bindings, keys)
+	}
+
+	pub fn resolve_visual_sequence(&self, keys: &[NormalSequenceKey]) -> BindingMatch<CommandTarget> {
+		resolve_key_binding_set(&self.commands, &self.visual_bindings, keys)
 	}
 
 	pub fn resolve_command_input(&self, input: &str) -> Option<ResolvedCommand> {
@@ -309,17 +365,8 @@ impl CommandRegistry {
 	}
 
 	pub fn export_config(&self) -> CommandConfigFile {
-		let mut normal = Vec::with_capacity(self.normal_bindings.len());
-		for binding in &self.normal_bindings {
-			let Some(spec) = self.commands.get(binding.command_id.as_str()) else {
-				continue;
-			};
-			normal.push(KeymapBindingConfig {
-				on:   KeyBindingOn::Single(render_normal_sequence(binding.keys.as_slice())),
-				run:  binding.command_id.clone(),
-				desc: Some(spec.description.clone()),
-			});
-		}
+		let normal = export_keymap_bindings(&self.commands, &self.normal_bindings);
+		let visual = export_keymap_bindings(&self.commands, &self.visual_bindings);
 
 		let mut command = Vec::with_capacity(self.command_aliases.len());
 		for alias in &self.command_aliases {
@@ -335,6 +382,7 @@ impl CommandRegistry {
 
 		CommandConfigFile {
 			normal:  CommandKeymapSection { keymap: normal },
+			visual:  CommandKeymapSection { keymap: visual },
 			command: CommandAliasSection { commands: command },
 		}
 	}
@@ -706,6 +754,69 @@ impl CommandRegistry {
 			CommandArgKind::None,
 			BuiltinCommand::OpenPickerYazi,
 		);
+		self.register_builtin(
+			"core.visual.exit",
+			"visual",
+			"Exit visual mode",
+			CommandArgKind::None,
+			BuiltinCommand::VisualExit,
+		);
+		self.register_builtin(
+			"core.visual.delete",
+			"visual",
+			"Delete visual selection",
+			CommandArgKind::None,
+			BuiltinCommand::VisualDelete,
+		);
+		self.register_builtin(
+			"core.visual.yank",
+			"visual",
+			"Yank visual selection",
+			CommandArgKind::None,
+			BuiltinCommand::VisualYank,
+		);
+		self.register_builtin(
+			"core.visual.paste",
+			"visual",
+			"Replace visual selection with slot",
+			CommandArgKind::None,
+			BuiltinCommand::VisualPaste,
+		);
+		self.register_builtin(
+			"core.visual.change",
+			"visual",
+			"Change visual selection",
+			CommandArgKind::None,
+			BuiltinCommand::VisualChange,
+		);
+		self.register_builtin(
+			"core.visual.block_insert_before",
+			"visual",
+			"Insert before visual block",
+			CommandArgKind::None,
+			BuiltinCommand::VisualBlockInsertBefore,
+		);
+		self.register_builtin(
+			"core.visual.block_insert_after",
+			"visual",
+			"Append after visual block",
+			CommandArgKind::None,
+			BuiltinCommand::VisualBlockInsertAfter,
+		);
+		self.register_builtin(
+			"core.visual.left",
+			"visual",
+			"Move left in visual mode",
+			CommandArgKind::None,
+			BuiltinCommand::VisualMoveLeft,
+		);
+		self.register_builtin(
+			"core.visual.right",
+			"visual",
+			"Move right in visual mode",
+			CommandArgKind::None,
+			BuiltinCommand::VisualMoveRight,
+		);
 
 		self.bind_default_normal("h", "core.cursor.left");
 		self.bind_default_normal("0", "core.cursor.line_start");
@@ -749,6 +860,29 @@ impl CommandRegistry {
 		self.bind_default_normal("<leader><Tab>]", "core.tab.next");
 		self.bind_default_normal("<leader>bd", "core.buffer.close");
 		self.bind_default_normal("<leader>bn", "core.buffer.new_empty");
+		self.bind_default_visual("<Esc>", "core.visual.exit");
+		self.bind_default_visual("v", "core.mode.visual");
+		self.bind_default_visual("V", "core.mode.visual_line");
+		self.bind_default_visual("<C-v>", "core.mode.visual_block");
+		self.bind_default_visual("c", "core.visual.change");
+		self.bind_default_visual("d", "core.visual.delete");
+		self.bind_default_visual("x", "core.visual.delete");
+		self.bind_default_visual("y", "core.visual.yank");
+		self.bind_default_visual("p", "core.visual.paste");
+		self.bind_default_visual("I", "core.visual.block_insert_before");
+		self.bind_default_visual("A", "core.visual.block_insert_after");
+		self.bind_default_visual("h", "core.visual.left");
+		self.bind_default_visual("j", "core.cursor.down");
+		self.bind_default_visual("k", "core.cursor.up");
+		self.bind_default_visual("l", "core.visual.right");
+		self.bind_default_visual("0", "core.cursor.line_start");
+		self.bind_default_visual("$", "core.cursor.line_end");
+		self.bind_default_visual("gg", "core.cursor.file_start");
+		self.bind_default_visual("G", "core.cursor.file_end");
+		self.bind_default_visual("<C-e>", "core.view.scroll_down");
+		self.bind_default_visual("<C-y>", "core.view.scroll_up");
+		self.bind_default_visual("<C-d>", "core.view.scroll_half_page_down");
+		self.bind_default_visual("<C-u>", "core.view.scroll_half_page_up");
 
 		self.bind_default_command("q", "core.quit");
 		self.bind_default_command("quit", "core.quit");
@@ -791,6 +925,11 @@ impl CommandRegistry {
 		self.normal_bindings.push(NormalKeyBinding { keys, command_id: command_id.to_string() });
 	}
 
+	fn bind_default_visual(&mut self, on: &str, command_id: &str) {
+		let keys = parse_normal_sequence(on).expect("default key binding should be valid");
+		self.visual_bindings.push(VisualKeyBinding { keys, command_id: command_id.to_string() });
+	}
+
 	fn bind_default_command(&mut self, name: &str, command_id: &str) {
 		self
 			.command_aliases
@@ -802,6 +941,8 @@ impl CommandRegistry {
 pub struct CommandConfigFile {
 	#[serde(default, alias = "mgr")]
 	pub normal:  CommandKeymapSection,
+	#[serde(default)]
+	pub visual:  CommandKeymapSection,
 	#[serde(default)]
 	pub command: CommandAliasSection,
 }
@@ -859,6 +1000,23 @@ pub struct CommandAliasConfig {
 	pub desc: Option<String>,
 }
 
+trait KeyBindingView {
+	fn keys(&self) -> &[NormalSequenceKey];
+	fn command_id(&self) -> &str;
+}
+
+impl KeyBindingView for NormalKeyBinding {
+	fn keys(&self) -> &[NormalSequenceKey] { self.keys.as_slice() }
+
+	fn command_id(&self) -> &str { self.command_id.as_str() }
+}
+
+impl KeyBindingView for VisualKeyBinding {
+	fn keys(&self) -> &[NormalSequenceKey] { self.keys.as_slice() }
+
+	fn command_id(&self) -> &str { self.command_id.as_str() }
+}
+
 #[derive(Debug, Clone)]
 pub struct PluginCommandRegistration {
 	pub id:          String,
@@ -866,6 +1024,49 @@ pub struct PluginCommandRegistration {
 	pub category:    String,
 	pub description: String,
 	pub arg_kind:    CommandArgKind,
+}
+
+fn resolve_key_binding_set<T>(
+	commands: &HashMap<String, CommandSpec>,
+	bindings: &[T],
+	keys: &[NormalSequenceKey],
+) -> BindingMatch<CommandTarget>
+where
+	T: KeyBindingView,
+{
+	let mut has_prefix = false;
+	for binding in bindings {
+		if binding.keys() == keys
+			&& let Some(spec) = commands.get(binding.command_id())
+		{
+			return BindingMatch::Exact(spec.target.clone());
+		}
+		if binding.keys().starts_with(keys) {
+			has_prefix = true;
+		}
+	}
+	if has_prefix { BindingMatch::Pending } else { BindingMatch::NoMatch }
+}
+
+fn export_keymap_bindings<T>(
+	commands: &HashMap<String, CommandSpec>,
+	bindings: &[T],
+) -> Vec<KeymapBindingConfig>
+where
+	T: KeyBindingView,
+{
+	let mut exported = Vec::with_capacity(bindings.len());
+	for binding in bindings {
+		let Some(spec) = commands.get(binding.command_id()) else {
+			continue;
+		};
+		exported.push(KeymapBindingConfig {
+			on:   KeyBindingOn::Single(render_normal_sequence(binding.keys())),
+			run:  binding.command_id().to_string(),
+			desc: Some(spec.description.clone()),
+		});
+	}
+	exported
 }
 
 fn parse_normal_sequence(input: &str) -> Result<Vec<NormalSequenceKey>, String> {
@@ -890,6 +1091,10 @@ fn parse_normal_sequence(input: &str) -> Result<Vec<NormalSequenceKey>, String> 
 			}
 			if lowered == "tab" {
 				result.push(NormalSequenceKey::Tab);
+				continue;
+			}
+			if lowered == "esc" {
+				result.push(NormalSequenceKey::Esc);
 				continue;
 			}
 			if let Some(rest) = lowered.strip_prefix("c-") {
@@ -931,6 +1136,7 @@ fn render_normal_sequence(keys: &[NormalSequenceKey]) -> String {
 		.map(|key| match key {
 			NormalSequenceKey::Leader => "<leader>".to_string(),
 			NormalSequenceKey::Tab => "<Tab>".to_string(),
+			NormalSequenceKey::Esc => "<Esc>".to_string(),
 			NormalSequenceKey::Char(ch) => ch.to_string(),
 			NormalSequenceKey::Ctrl(ch) => format!("<C-{}>", ch),
 		})

@@ -195,3 +195,70 @@ fn close_left_after_h_v_h_v_should_not_leave_left_gap() {
 	assert_eq!(min_x, 0);
 	assert_eq!(max_right, 100);
 }
+
+#[test]
+fn resize_round_trip_should_preserve_nested_split_layout() {
+	let mut state = test_state();
+	state.update_active_tab_layout(120, 30);
+	state.split_active_window(SplitAxis::Horizontal);
+	state.split_active_window(SplitAxis::Vertical);
+
+	let original = sorted_window_rects(&state);
+	assert_eq!(original, vec![(0, 0, 60, 30), (60, 0, 60, 15), (60, 15, 60, 15)]);
+
+	state.update_active_tab_layout(17, 7);
+	state.update_active_tab_layout(120, 30);
+
+	assert_eq!(sorted_window_rects(&state), original);
+}
+
+#[test]
+fn resize_should_keep_cursor_visible_at_window_edge_instead_of_recentering() {
+	let mut state = test_state();
+	let tall_text = (1..=100).map(|index| format!("line-{index}")).collect::<Vec<_>>().join("\n");
+	super::common::set_active_buffer_text(&mut state, tall_text.as_str());
+	state.update_active_tab_layout(80, 40);
+
+	let active_window_id = state.active_window_id();
+	let window = state.windows.get_mut(active_window_id).expect("window should exist");
+	window.cursor.row = 34;
+	window.cursor.col = 1;
+	window.scroll_y = 0;
+
+	state.update_active_tab_layout(80, 10);
+
+	let window = state.windows.get(active_window_id).expect("window should exist");
+	assert_eq!(window.cursor.row, 34);
+	assert_eq!(window.scroll_y, 24);
+}
+
+#[test]
+fn resize_taller_should_keep_cursor_bottom_anchored_when_it_was_on_bottom_edge() {
+	let mut state = test_state();
+	let tall_text = (1..=100).map(|index| format!("line-{index}")).collect::<Vec<_>>().join("\n");
+	super::common::set_active_buffer_text(&mut state, tall_text.as_str());
+	state.update_active_tab_layout(80, 10);
+
+	let active_window_id = state.active_window_id();
+	let window = state.windows.get_mut(active_window_id).expect("window should exist");
+	window.cursor.row = 73;
+	window.cursor.col = 1;
+	window.scroll_y = 63;
+
+	state.update_active_tab_layout(80, 20);
+
+	let window = state.windows.get(active_window_id).expect("window should exist");
+	assert_eq!(window.cursor.row, 73);
+	assert_eq!(window.scroll_y, 53);
+}
+
+fn sorted_window_rects(state: &crate::state::RimState) -> Vec<(u16, u16, u16, u16)> {
+	let mut rects = state
+		.active_tab_window_ids()
+		.iter()
+		.filter_map(|window_id| state.windows.get(*window_id))
+		.map(|window| (window.x, window.y, window.width, window.height))
+		.collect::<Vec<_>>();
+	rects.sort_unstable();
+	rects
+}

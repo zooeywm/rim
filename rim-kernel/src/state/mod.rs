@@ -73,6 +73,10 @@ pub struct WindowState {
 	pub y:         u16,
 	pub width:     u16,
 	pub height:    u16,
+	pub layout_x:  u32,
+	pub layout_y:  u32,
+	pub layout_w:  u32,
+	pub layout_h:  u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -162,6 +166,7 @@ pub enum SplitAxis {
 pub enum NormalSequenceKey {
 	Leader,
 	Tab,
+	Esc,
 	Char(char),
 	Ctrl(char),
 }
