@@ -52,6 +52,24 @@ fn vertical_move_should_restore_preferred_col_when_line_has_enough_width() {
 }
 
 #[test]
+fn vertical_move_should_preserve_display_column_with_tabs() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "ab\tX\nabcdefX");
+	state.move_cursor_right();
+	state.move_cursor_right();
+	state.move_cursor_right();
+	assert_eq!(state.active_cursor().col, 4);
+
+	state.move_cursor_down();
+	assert_eq!(state.active_cursor().row, 2);
+	assert_eq!(state.active_cursor().col, 7);
+
+	state.move_cursor_up();
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 4);
+}
+
+#[test]
 fn horizontal_move_should_reset_preferred_col_memory() {
 	let mut state = test_state();
 	set_active_buffer_text(&mut state, "abcd\nx\nabcd");
@@ -252,6 +270,51 @@ fn scroll_view_up_one_line_should_respect_cursor_scroll_threshold() {
 	let window = state.windows.get(active_window_id).expect("window exists");
 	assert_eq!(window.scroll_y, 1);
 	assert_eq!(state.active_cursor().row, 4);
+}
+
+#[test]
+fn word_wrap_move_down_near_bottom_should_advance_scroll() {
+	let mut state = test_state();
+	let content = (1..=300).map(|idx| format!("line {idx}")).collect::<Vec<_>>().join("\n");
+	set_active_buffer_text(&mut state, content.as_str());
+	state.update_active_tab_layout(80, 5);
+	state.toggle_word_wrap();
+	for _ in 0..267 {
+		state.move_cursor_down();
+	}
+	let active_window_id = state.active_window_id();
+	let before_scroll = state.windows.get(active_window_id).expect("window exists").scroll_y;
+	assert_eq!(state.active_cursor().row, 268);
+	state.move_cursor_down();
+	let after_scroll = state.windows.get(active_window_id).expect("window exists").scroll_y;
+	assert_eq!(state.active_cursor().row, 269);
+	assert!(
+		after_scroll > before_scroll,
+		"expected wrapped scroll to advance, before={before_scroll}, after={after_scroll}"
+	);
+}
+
+#[test]
+fn word_wrap_layout_reconcile_should_not_rollback_scroll_after_move_down() {
+	let mut state = test_state();
+	let content = (1..=300).map(|idx| format!("line {idx}")).collect::<Vec<_>>().join("\n");
+	set_active_buffer_text(&mut state, content.as_str());
+	state.update_active_tab_layout(80, 5);
+	state.toggle_word_wrap();
+	for _ in 0..268 {
+		state.move_cursor_down();
+	}
+	let active_window_id = state.active_window_id();
+	let scroll_after_move = state.windows.get(active_window_id).expect("window exists").scroll_y;
+	assert_eq!(state.active_cursor().row, 269);
+
+	state.update_active_tab_layout(80, 5);
+
+	let scroll_after_layout = state.windows.get(active_window_id).expect("window exists").scroll_y;
+	assert!(
+		scroll_after_layout >= scroll_after_move,
+		"wrapped scroll should not rollback after layout reconcile, move={scroll_after_move}, layout={scroll_after_layout}"
+	);
 }
 
 #[test]
@@ -837,15 +900,18 @@ fn undo_active_buffer_edit_should_restore_previous_text_and_cursor() {
 	state.move_cursor_right();
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	state.insert_char_at_cursor('x');
-	state.push_buffer_history_entry(buffer_id, BufferHistoryEntry {
-		edits:         vec![BufferEditSnapshot {
-			start_byte:    1,
-			deleted_text:  String::new(),
-			inserted_text: "x".to_string(),
-		}],
-		before_cursor: CursorState { row: 1, col: 2 },
-		after_cursor:  CursorState { row: 1, col: 3 },
-	});
+	state.push_buffer_history_entry(
+		buffer_id,
+		BufferHistoryEntry {
+			edits: vec![BufferEditSnapshot {
+				start_byte: 1,
+				deleted_text: String::new(),
+				inserted_text: "x".to_string(),
+			}],
+			before_cursor: CursorState { row: 1, col: 2 },
+			after_cursor: CursorState { row: 1, col: 3 },
+		},
+	);
 
 	state.undo_active_buffer_edit();
 
@@ -862,15 +928,18 @@ fn redo_active_buffer_edit_should_reapply_last_undone_change() {
 	state.move_cursor_right();
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	state.insert_char_at_cursor('x');
-	state.push_buffer_history_entry(buffer_id, BufferHistoryEntry {
-		edits:         vec![BufferEditSnapshot {
-			start_byte:    1,
-			deleted_text:  String::new(),
-			inserted_text: "x".to_string(),
-		}],
-		before_cursor: CursorState { row: 1, col: 2 },
-		after_cursor:  CursorState { row: 1, col: 3 },
-	});
+	state.push_buffer_history_entry(
+		buffer_id,
+		BufferHistoryEntry {
+			edits: vec![BufferEditSnapshot {
+				start_byte: 1,
+				deleted_text: String::new(),
+				inserted_text: "x".to_string(),
+			}],
+			before_cursor: CursorState { row: 1, col: 2 },
+			after_cursor: CursorState { row: 1, col: 3 },
+		},
+	);
 	state.undo_active_buffer_edit();
 
 	state.redo_active_buffer_edit();
