@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::{collections::{BTreeMap, HashMap, HashSet}, path::PathBuf};
 
 use frizbee::{Config as FrizbeeConfig, match_list_indices};
 use rim_command_macros::{BuiltinCommandGroup, BuiltinCommandRoot};
@@ -169,6 +169,8 @@ pub enum ViewCommand {
 	ScrollHalfPageDown,
 	/// Scroll up half page
 	ScrollHalfPageUp,
+	/// Toggle word wrap
+	ToggleWordWrap,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandGroup)]
@@ -191,6 +193,14 @@ pub enum CommandPaletteCommand {
 	Prev,
 	/// Select next command candidate
 	Next,
+	/// Select previous command candidate page
+	PageUp,
+	/// Select next command candidate page
+	PageDown,
+	/// Scroll command palette preview down
+	PreviewScrollDown,
+	/// Scroll command palette preview up
+	PreviewScrollUp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandGroup)]
@@ -199,6 +209,12 @@ pub enum PickerCommand {
 	Prev,
 	/// Select next picker item
 	Next,
+	/// Scroll picker preview down
+	PreviewScrollDown,
+	/// Scroll picker preview up
+	PreviewScrollUp,
+	/// Toggle picker preview word wrap
+	TogglePreviewWordWrap,
 	/// Confirm picker selection
 	Confirm,
 	/// Open the workspace file picker
@@ -593,6 +609,35 @@ pub struct CommandPaletteMatch {
 	pub command_id_match_indices:  Vec<usize>,
 	pub description_match_indices: Vec<usize>,
 	pub is_error:                  bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandPaletteFileMatch {
+	pub relative_path: String,
+	pub absolute_path: PathBuf,
+	pub match_indices: Vec<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandPaletteItem {
+	Command(CommandPaletteMatch),
+	File(CommandPaletteFileMatch),
+}
+
+impl CommandPaletteItem {
+	pub fn as_command(&self) -> Option<&CommandPaletteMatch> {
+		match self {
+			Self::Command(item) => Some(item),
+			Self::File(_) => None,
+		}
+	}
+
+	pub fn as_file(&self) -> Option<&CommandPaletteFileMatch> {
+		match self {
+			Self::Command(_) => None,
+			Self::File(item) => Some(item),
+		}
+	}
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1064,6 +1109,7 @@ impl CommandRegistry {
 		self.bind_default_normal("<C-y>", BuiltinCommand::View(ViewCommand::ScrollUp));
 		self.bind_default_normal("<C-d>", BuiltinCommand::View(ViewCommand::ScrollHalfPageDown));
 		self.bind_default_normal("<C-u>", BuiltinCommand::View(ViewCommand::ScrollHalfPageUp));
+		self.bind_default_normal("<leader>vw", BuiltinCommand::View(ViewCommand::ToggleWordWrap));
 		self.bind_default_normal("<C-r>", BuiltinCommand::Edit(EditCommand::Redo));
 		self.bind_default_normal("<F1>", BuiltinCommand::Help(HelpCommand::Keymap));
 		self.bind_default_normal("<leader>wv", BuiltinCommand::Window(WindowCommand::SplitVertical));
@@ -1136,6 +1182,26 @@ impl CommandRegistry {
 			"<C-n>",
 			BuiltinCommand::CommandPalette(CommandPaletteCommand::Next),
 		);
+		self.bind_default_overlay_command_palette(
+			"<C-u>",
+			BuiltinCommand::CommandPalette(CommandPaletteCommand::PageUp),
+		);
+		self.bind_default_overlay_command_palette(
+			"<C-d>",
+			BuiltinCommand::CommandPalette(CommandPaletteCommand::PageDown),
+		);
+		self.bind_default_overlay_command_palette(
+			"<C-e>",
+			BuiltinCommand::CommandPalette(CommandPaletteCommand::PreviewScrollDown),
+		);
+		self.bind_default_overlay_command_palette(
+			"<C-y>",
+			BuiltinCommand::CommandPalette(CommandPaletteCommand::PreviewScrollUp),
+		);
+		self.bind_default_overlay_command_palette(
+			"<C-w>",
+			BuiltinCommand::Picker(PickerCommand::TogglePreviewWordWrap),
+		);
 		self.bind_default_overlay_picker("<F1>", BuiltinCommand::Help(HelpCommand::Keymap));
 		self.bind_default_overlay_picker("<Esc>", BuiltinCommand::Overlay(OverlayCommand::Close));
 		self.bind_default_overlay_picker("<Enter>", BuiltinCommand::Picker(PickerCommand::Confirm));
@@ -1143,6 +1209,9 @@ impl CommandRegistry {
 		self.bind_default_overlay_picker("<Down>", BuiltinCommand::Picker(PickerCommand::Next));
 		self.bind_default_overlay_picker("<C-p>", BuiltinCommand::Picker(PickerCommand::Prev));
 		self.bind_default_overlay_picker("<C-n>", BuiltinCommand::Picker(PickerCommand::Next));
+		self.bind_default_overlay_picker("<C-e>", BuiltinCommand::Picker(PickerCommand::PreviewScrollDown));
+		self.bind_default_overlay_picker("<C-y>", BuiltinCommand::Picker(PickerCommand::PreviewScrollUp));
+		self.bind_default_overlay_picker("<C-w>", BuiltinCommand::Picker(PickerCommand::TogglePreviewWordWrap));
 		self.bind_default_command("q", BuiltinCommand::Command(CommandCommand::Quit));
 		self.bind_default_command("quit", BuiltinCommand::Command(CommandCommand::Quit));
 		self.bind_default_command("q!", BuiltinCommand::Command(CommandCommand::QuitForce));

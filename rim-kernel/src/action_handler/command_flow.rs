@@ -16,8 +16,18 @@ where P: StorageIo + FileWatcher + FilePicker {
 	if key.modifiers.contains(crate::action::KeyModifiers::CONTROL) {
 		return ControlFlow::Continue(());
 	}
-	if let KeyCode::Char(ch) = key.code {
-		state.push_command_char(ch);
+	match key.code {
+		KeyCode::Char(ch) => {
+			state.push_command_char(ch);
+			ensure_command_palette_workspace_files(ports, state);
+			enqueue_command_palette_preview(ports, state, true);
+		}
+		KeyCode::Tab => {
+			let _ = state.complete_command_palette_selection();
+			ensure_command_palette_workspace_files(ports, state);
+			enqueue_command_palette_preview(ports, state, true);
+		}
+		_ => {}
 	}
 	ControlFlow::Continue(())
 }
@@ -73,13 +83,24 @@ where
 
 fn execute_current_command_input<P>(ports: &P, state: &mut RimState) -> ControlFlow<()>
 where P: StorageIo + FileWatcher + FilePicker {
-	let command = state.command_line.trim().to_string();
+	let raw_command = state.command_line.clone();
+	let command = raw_command.trim().to_string();
 	if command.is_empty() {
 		state.exit_command_mode();
 		return ControlFlow::Continue(());
 	}
 	let argument = command.split_once(' ').map(|(_, tail)| tail.trim().to_string());
-	let resolved = state.command_registry.resolve_command_input(command.as_str()).or_else(|| {
+	let resolved = if let Some(path_item) = state.selected_command_palette_file_match()
+		&& let Some((command_name, _)) = raw_command.split_once(' ')
+		&& let Some(resolved_command) = state.command_registry.resolve_command_input(command_name)
+	{
+		state
+			.command_registry
+			.resolve_command_id_with_argument(&resolved_command.spec.id, Some(path_item.relative_path.clone()))
+	} else {
+		state.command_registry.resolve_command_input(command.as_str())
+	}
+	.or_else(|| {
 		state.selected_command_palette_match().and_then(|palette_item| {
 			state.command_registry.resolve_command_id_with_argument(&palette_item.command_id, argument)
 		})
@@ -222,14 +243,40 @@ where
 		BuiltinCommand::Command(CommandCommand::Submit) => execute_current_command_input(ports, state),
 		BuiltinCommand::Command(CommandCommand::Backspace) => {
 			state.pop_command_char();
+			ensure_command_palette_workspace_files(ports, state);
+			enqueue_command_palette_preview(ports, state, true);
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::CommandPalette(CommandPaletteCommand::PageUp) => {
+			let moved = state.page_command_palette_selection(-1);
+			enqueue_command_palette_preview(ports, state, moved);
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::CommandPalette(CommandPaletteCommand::PageDown) => {
+			let moved = state.page_command_palette_selection(1);
+			enqueue_command_palette_preview(ports, state, moved);
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::CommandPalette(CommandPaletteCommand::PreviewScrollDown) => {
+			let _ = state.scroll_command_palette_preview(1);
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::CommandPalette(CommandPaletteCommand::PreviewScrollUp) => {
+			let _ = state.scroll_command_palette_preview(-1);
 			ControlFlow::Continue(())
 		}
 		BuiltinCommand::CommandPalette(CommandPaletteCommand::Prev) => {
-			let _ = state.move_command_palette_selection(-1);
+			let moved = state.move_command_palette_selection(-1);
+			enqueue_command_palette_preview(ports, state, moved);
 			ControlFlow::Continue(())
 		}
 		BuiltinCommand::CommandPalette(CommandPaletteCommand::Next) => {
-			let _ = state.move_command_palette_selection(1);
+			let moved = state.move_command_palette_selection(1);
+			enqueue_command_palette_preview(ports, state, moved);
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::View(crate::command::ViewCommand::ToggleWordWrap) => {
+			state.toggle_word_wrap();
 			ControlFlow::Continue(())
 		}
 		BuiltinCommand::Picker(PickerCommand::Prev) => {
@@ -244,6 +291,18 @@ where
 				let moved = state.move_workspace_file_picker_selection(1);
 				enqueue_workspace_file_picker_preview(ports, state, moved);
 			}
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::Picker(PickerCommand::PreviewScrollDown) => {
+			let _ = state.scroll_workspace_file_picker_preview(1);
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::Picker(PickerCommand::PreviewScrollUp) => {
+			let _ = state.scroll_workspace_file_picker_preview(-1);
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::Picker(PickerCommand::TogglePreviewWordWrap) => {
+			state.toggle_picker_preview_word_wrap();
 			ControlFlow::Continue(())
 		}
 		BuiltinCommand::Picker(PickerCommand::Confirm) => {
@@ -302,12 +361,53 @@ where
 	}
 }
 
+fn ensure_command_palette_workspace_files<P>(ports: &P, state: &mut RimState)
+where P: StorageIo {
+	if !state.command_palette_needs_workspace_files() {
+		return;
+	}
+	state.begin_workspace_file_cache_loading();
+	if let Err(source) = ports.enqueue_list_workspace_files(state.workspace_root().to_path_buf()) {
+		let err = ActionHandlerError::Reload { source };
+		error!("workspace file list enqueue failed for command palette: {}", err);
+		state.fail_workspace_file_cache_loading();
+		state.status_bar.message = format!("workspace file list failed: {}", err);
+	}
+}
+
+fn enqueue_command_palette_preview<P>(ports: &P, state: &mut RimState, force: bool)
+where P: StorageIo {
+	if !force {
+		return;
+	}
+	let Some(path) = state.selected_command_palette_file_path().map(PathBuf::from) else {
+		return;
+	};
+	state.set_command_palette_preview_loading(path.as_path());
+	if let Err(source) = ports.enqueue_load_workspace_file_preview(path.clone()) {
+		let err = ActionHandlerError::Reload { source };
+		error!("command palette preview enqueue failed: path={} error={}", path.display(), err);
+		state.set_command_palette_preview(path.as_path(), format!("<preview error: {}>", err));
+	}
+}
+
 fn open_workspace_file_picker<P>(ports: &P, state: &mut RimState)
 where P: FilePicker + StorageIo + FileWatcher {
+	if state.has_workspace_file_cache() {
+		state.open_workspace_file_picker(state.workspace_file_cache_entries().to_vec());
+		enqueue_workspace_file_picker_preview(ports, state, true);
+		return;
+	}
+	if state.workspace_file_cache_is_loading() {
+		state.open_workspace_file_picker_loading();
+		return;
+	}
 	state.open_workspace_file_picker_loading();
+	state.begin_workspace_file_cache_loading();
 	if let Err(source) = ports.enqueue_list_workspace_files(state.workspace_root().to_path_buf()) {
 		let err = ActionHandlerError::Reload { source };
 		error!("workspace file picker enqueue failed: {}", err);
+		state.fail_workspace_file_cache_loading();
 		state.close_workspace_file_picker();
 		state.status_bar.message = format!("workspace file picker failed: {}", err);
 	}
@@ -323,7 +423,7 @@ where P: StorageIo {
 		return;
 	};
 	state.set_workspace_file_picker_preview_loading(path.as_path());
-	if let Err(source) = ports.enqueue_load_workspace_file_preview(path.clone(), 8 * 1024) {
+	if let Err(source) = ports.enqueue_load_workspace_file_preview(path.clone()) {
 		let err = ActionHandlerError::Reload { source };
 		error!("workspace preview enqueue failed: path={} error={}", path.display(), err);
 		state.set_workspace_file_picker_preview(path.as_path(), format!("<preview error: {}>", err));

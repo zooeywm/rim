@@ -299,14 +299,6 @@ where P: StorageIo + FileWatcher + FilePicker {
 		},
 		FileAction::WorkspaceFilesListed { workspace_root, result } => match result {
 			Ok(paths) => {
-				if !state.workspace_file_picker_open() {
-					return ControlFlow::Continue(());
-				}
-				if paths.is_empty() {
-					state.close_workspace_file_picker();
-					state.status_bar.message = "workspace file picker: no files found".to_string();
-					return ControlFlow::Continue(());
-				}
 				let entries = paths
 					.into_iter()
 					.filter_map(|path| {
@@ -317,10 +309,29 @@ where P: StorageIo + FileWatcher + FilePicker {
 						Some(crate::state::WorkspaceFileEntry { absolute_path: path, relative_path })
 					})
 					.collect::<Vec<_>>();
-				state.open_workspace_file_picker(entries);
+				state.set_workspace_file_cache(entries.clone());
+					if state.command_palette_showing_files()
+						&& let Some(path) = state.selected_command_palette_file_path().map(PathBuf::from)
+					{
+						state.set_command_palette_preview_loading(path.as_path());
+						if let Err(source) = ports.enqueue_load_workspace_file_preview(path.clone()) {
+							let err = ActionHandlerError::Reload { source };
+							error!("command palette preview enqueue failed: path={} error={}", path.display(), err);
+							state.set_command_palette_preview(path.as_path(), format!("<preview error: {}>", err));
+						}
+					}
+				if !state.workspace_file_picker_open() {
+					return ControlFlow::Continue(());
+				}
+				if entries.is_empty() {
+					state.close_workspace_file_picker();
+					state.status_bar.message = "workspace file picker: no files found".to_string();
+					return ControlFlow::Continue(());
+				}
+				state.replace_workspace_file_picker_entries(entries);
 				if let Some(path) = state.selected_workspace_file_picker_path().map(PathBuf::from) {
 					state.set_workspace_file_picker_preview_loading(path.as_path());
-					if let Err(source) = ports.enqueue_load_workspace_file_preview(path.clone(), 8 * 1024) {
+					if let Err(source) = ports.enqueue_load_workspace_file_preview(path.clone()) {
 						let err = ActionHandlerError::Reload { source };
 						error!("workspace preview enqueue failed: path={} error={}", path.display(), err);
 						state.set_workspace_file_picker_preview(path.as_path(), format!("<preview error: {}>", err));
@@ -329,17 +340,42 @@ where P: StorageIo + FileWatcher + FilePicker {
 			}
 			Err(err) => {
 				error!("workspace file picker list failed: {}", err);
+				state.fail_workspace_file_cache_loading();
 				state.close_workspace_file_picker();
 				state.status_bar.message = format!("workspace file picker failed: {}", err);
 			}
 		},
+		FileAction::WorkspaceFilesChanged { workspace_root } => {
+			if !state.has_workspace_file_cache()
+				&& !state.workspace_file_picker_open()
+				&& !state.command_palette().is_some_and(|palette| palette.showing_files)
+			{
+				return ControlFlow::Continue(());
+			}
+			state.begin_workspace_file_cache_loading();
+			if state.workspace_file_picker_open() {
+				state.open_workspace_file_picker_loading();
+			}
+			if let Err(source) = ports.enqueue_list_workspace_files(workspace_root) {
+				let err = ActionHandlerError::Reload { source };
+				error!("workspace file relist enqueue failed: {}", err);
+				state.fail_workspace_file_cache_loading();
+				if state.workspace_file_picker_open() {
+					state.close_workspace_file_picker();
+				}
+				state.status_bar.message = format!("workspace file relist failed: {}", err);
+			}
+		}
 		FileAction::WorkspaceFilePreviewLoaded { path, result } => match result {
 			Ok(preview) => {
-				state.set_workspace_file_picker_preview(path.as_path(), preview);
+				state.set_workspace_file_picker_preview(path.as_path(), preview.clone());
+				state.set_command_palette_preview(path.as_path(), preview);
 			}
 			Err(err) => {
 				error!("workspace preview load failed: path={} error={}", path.display(), err);
-				state.set_workspace_file_picker_preview(path.as_path(), format!("<preview error: {}>", err));
+				let error_message = format!("<preview error: {}>", err);
+				state.set_workspace_file_picker_preview(path.as_path(), error_message.clone());
+				state.set_command_palette_preview(path.as_path(), error_message);
 			}
 		},
 		FileAction::LoadCompleted { buffer_id, source, result } => match (source, result) {

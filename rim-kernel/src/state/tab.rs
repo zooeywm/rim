@@ -106,11 +106,10 @@ impl RimState {
 			rebuilt_tabs.insert(target_id, tab);
 		}
 
-		rebuilt_tabs.insert(new_id, TabState {
-			windows:       vec![window_id],
-			active_window: window_id,
-			buffer_order:  vec![buffer_id],
-		});
+		rebuilt_tabs.insert(
+			new_id,
+			TabState { windows: vec![window_id], active_window: window_id, buffer_order: vec![buffer_id] },
+		);
 		self.tabs = rebuilt_tabs;
 		new_id
 	}

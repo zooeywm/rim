@@ -1,4 +1,9 @@
-use std::{collections::{BTreeMap, HashMap, HashSet}, fmt, path::{Path, PathBuf}, time::{Duration, Instant}};
+use std::{
+	collections::{BTreeMap, HashMap, HashSet},
+	fmt,
+	path::{Path, PathBuf},
+	time::{Duration, Instant},
+};
 
 use frizbee::{Config as FrizbeeConfig, match_list_indices};
 use ropey::Rope;
@@ -6,7 +11,13 @@ use serde::{Deserialize, Serialize};
 use slotmap::{SlotMap, new_key_type};
 use tracing::error;
 
-use crate::command::{CommandConfigFile, CommandPaletteMatch, CommandRegistry, PluginCommandRegistration};
+use crate::{
+	command::{
+		CommandArgKind, CommandConfigFile, CommandPaletteFileMatch, CommandPaletteItem, CommandPaletteMatch,
+		CommandRegistry, PluginCommandRegistration,
+	},
+	preview::preview_max_scroll_with_mode,
+};
 
 mod buffer;
 mod edit;
@@ -23,91 +34,87 @@ pub struct TabId(pub u64);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BufferState {
-	pub name:                String,
-	pub path:                Option<PathBuf>,
-	pub text:                Rope,
+	pub name: String,
+	pub path: Option<PathBuf>,
+	pub text: Rope,
 	// This is the last clean snapshot loaded from or saved to disk.
-	pub clean_text:          Rope,
-	pub dirty:               bool,
+	pub clean_text: Rope,
+	pub dirty: bool,
 	pub externally_modified: bool,
-	pub undo_stack:          Vec<BufferHistoryEntry>,
-	pub redo_stack:          Vec<BufferHistoryEntry>,
+	pub undo_stack: Vec<BufferHistoryEntry>,
+	pub redo_stack: Vec<BufferHistoryEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BufferHistoryEntry {
-	pub edits:         Vec<BufferEditSnapshot>,
+	pub edits: Vec<BufferEditSnapshot>,
 	pub before_cursor: CursorState,
-	pub after_cursor:  CursorState,
+	pub after_cursor: CursorState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersistedBufferHistory {
 	pub current_text: String,
-	pub cursor:       CursorState,
-	pub undo_stack:   Vec<BufferHistoryEntry>,
-	pub redo_stack:   Vec<BufferHistoryEntry>,
+	pub cursor: CursorState,
+	pub undo_stack: Vec<BufferHistoryEntry>,
+	pub redo_stack: Vec<BufferHistoryEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BufferEditSnapshot {
-	pub start_byte:    usize,
-	pub deleted_text:  String,
+	pub start_byte: usize,
+	pub deleted_text: String,
 	pub inserted_text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RopeTextDiff {
-	pub start_char:    usize,
-	pub start_byte:    usize,
-	pub deleted_text:  String,
+	pub start_char: usize,
+	pub start_byte: usize,
+	pub deleted_text: String,
 	pub inserted_text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WindowState {
 	pub buffer_id: Option<BufferId>,
-	pub cursor:    CursorState,
-	pub scroll_x:  u16,
-	pub scroll_y:  u16,
-	pub x:         u16,
-	pub y:         u16,
-	pub width:     u16,
-	pub height:    u16,
-	pub layout_x:  u32,
-	pub layout_y:  u32,
-	pub layout_w:  u32,
-	pub layout_h:  u32,
+	pub cursor: CursorState,
+	pub scroll_x: u16,
+	pub scroll_y: u16,
+	pub x: u16,
+	pub y: u16,
+	pub width: u16,
+	pub height: u16,
+	pub layout_x: u32,
+	pub layout_y: u32,
+	pub layout_w: u32,
+	pub layout_h: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct WindowBufferViewState {
-	pub cursor:   CursorState,
+	pub cursor: CursorState,
 	pub scroll_x: u16,
 	pub scroll_y: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TabState {
-	pub windows:       Vec<WindowId>,
+	pub windows: Vec<WindowId>,
 	pub active_window: WindowId,
-	pub buffer_order:  Vec<BufferId>,
+	pub buffer_order: Vec<BufferId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusBarState {
-	pub mode:         StatusBarMode,
-	pub message:      String,
+	pub mode: StatusBarMode,
+	pub message: String,
 	pub key_sequence: String,
 }
 
 impl Default for StatusBarState {
 	fn default() -> Self {
-		Self {
-			mode:         StatusBarMode::Normal,
-			message:      "new file".to_string(),
-			key_sequence: String::new(),
-		}
+		Self { mode: StatusBarMode::Normal, message: "new file".to_string(), key_sequence: String::new() }
 	}
 }
 
@@ -144,7 +151,9 @@ pub struct CursorState {
 }
 
 impl Default for CursorState {
-	fn default() -> Self { Self { row: 1, col: 1 } }
+	fn default() -> Self {
+		Self { row: 1, col: 1 }
+	}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -199,19 +208,19 @@ pub enum FloatingWindowPlacement {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FloatingWindowLine {
-	pub key:       String,
-	pub summary:   String,
+	pub key: String,
+	pub summary: String,
 	pub is_prefix: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FloatingWindowState {
-	pub title:     String,
-	pub subtitle:  Option<String>,
-	pub footer:    Option<String>,
+	pub title: String,
+	pub subtitle: Option<String>,
+	pub footer: Option<String>,
 	pub placement: FloatingWindowPlacement,
-	pub lines:     Vec<FloatingWindowLine>,
-	pub scroll:    usize,
+	pub lines: Vec<FloatingWindowLine>,
+	pub scroll: usize,
 }
 
 impl FloatingWindowState {
@@ -226,7 +235,9 @@ impl FloatingWindowState {
 		outer_height.saturating_sub(border_rows + footer_rows).max(1)
 	}
 
-	pub fn max_scroll(&self) -> usize { self.lines.len().saturating_sub(self.visible_body_rows()) }
+	pub fn max_scroll(&self) -> usize {
+		self.lines.len().saturating_sub(self.visible_body_rows())
+	}
 
 	pub fn total_pages(&self) -> usize {
 		let body_rows = self.visible_body_rows().max(1);
@@ -242,9 +253,14 @@ impl FloatingWindowState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandPaletteState {
-	pub query:    String,
-	pub items:    Vec<CommandPaletteMatch>,
+	pub query: String,
+	pub items: Vec<CommandPaletteItem>,
 	pub selected: usize,
+	pub loading: bool,
+	pub showing_files: bool,
+	pub preview_title: String,
+	pub preview_lines: Vec<String>,
+	pub preview_scroll: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -262,23 +278,25 @@ pub struct WorkspaceFileMatch {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceFilePickerState {
-	pub query:         String,
-	pub entries:       Vec<WorkspaceFileEntry>,
-	pub items:         Vec<WorkspaceFileMatch>,
-	pub selected:      usize,
-	pub total_files:   usize,
+	pub query: String,
+	pub entries: Vec<WorkspaceFileEntry>,
+	pub items: Vec<WorkspaceFileMatch>,
+	pub selected: usize,
+	pub preferred: Option<(PathBuf, String)>,
+	pub total_files: usize,
 	pub total_matches: usize,
 	pub preview_title: String,
 	pub preview_lines: Vec<String>,
-	pub loading:       bool,
+	pub preview_scroll: usize,
+	pub loading: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyHintsOverlayState {
-	pub scope:    KeymapScope,
-	pub prefix:   Vec<NormalSequenceKey>,
+	pub scope: KeymapScope,
+	pub prefix: Vec<NormalSequenceKey>,
 	pub overview: bool,
-	pub window:   FloatingWindowState,
+	pub window: FloatingWindowState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -289,43 +307,43 @@ pub enum OverlayState {
 
 #[derive(Debug)]
 pub struct PendingInsertUndoGroup {
-	pub buffer_id:     BufferId,
+	pub buffer_id: BufferId,
 	pub before_cursor: CursorState,
-	pub edits:         Vec<BufferEditSnapshot>,
+	pub edits: Vec<BufferEditSnapshot>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PendingBlockInsert {
 	pub start_row: u16,
-	pub end_row:   u16,
-	pub base_col:  u16,
+	pub end_row: u16,
+	pub base_col: u16,
 }
 
 #[derive(Debug, Clone)]
 pub struct PendingSwapDecision {
-	pub buffer_id:      BufferId,
-	pub source_path:    PathBuf,
-	pub base_text:      String,
-	pub owner_pid:      u32,
+	pub buffer_id: BufferId,
+	pub source_path: PathBuf,
+	pub base_text: String,
+	pub owner_pid: u32,
 	pub owner_username: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceSessionSnapshot {
-	pub version:          u32,
-	pub buffers:          Vec<WorkspaceBufferSnapshot>,
-	pub buffer_order:     Vec<usize>,
-	pub tabs:             Vec<WorkspaceTabSnapshot>,
+	pub version: u32,
+	pub buffers: Vec<WorkspaceBufferSnapshot>,
+	pub buffer_order: Vec<usize>,
+	pub tabs: Vec<WorkspaceTabSnapshot>,
 	pub active_tab_index: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WorkspaceBufferSnapshot {
-	pub path:       Option<PathBuf>,
-	pub text:       String,
+	pub path: Option<PathBuf>,
+	pub text: String,
 	pub clean_text: String,
 	#[serde(default)]
-	pub history:    Option<WorkspaceBufferHistorySnapshot>,
+	pub history: Option<WorkspaceBufferHistorySnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -336,65 +354,109 @@ pub struct WorkspaceBufferHistorySnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceTabSnapshot {
-	pub windows:             Vec<WorkspaceWindowSnapshot>,
+	pub windows: Vec<WorkspaceWindowSnapshot>,
 	pub active_window_index: usize,
 	#[serde(default)]
-	pub buffer_order:        Vec<usize>,
+	pub buffer_order: Vec<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceWindowSnapshot {
 	pub buffer_index: Option<usize>,
-	pub x:            u16,
-	pub y:            u16,
-	pub width:        u16,
-	pub height:       u16,
-	pub views:        Vec<WorkspaceWindowBufferViewSnapshot>,
+	pub x: u16,
+	pub y: u16,
+	pub width: u16,
+	pub height: u16,
+	pub views: Vec<WorkspaceWindowBufferViewSnapshot>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceWindowBufferViewSnapshot {
 	pub buffer_index: usize,
-	pub cursor:       CursorState,
-	pub scroll_x:     u16,
-	pub scroll_y:     u16,
+	pub cursor: CursorState,
+	pub scroll_x: u16,
+	pub scroll_y: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkspaceFilePickerBodyLayout {
+	pub horizontal_split: bool,
+	pub list_width: u16,
+	pub divider_width: u16,
+	pub preview_width: u16,
+}
+
+pub fn compute_workspace_file_picker_body_layout(content_width: u16) -> WorkspaceFilePickerBodyLayout {
+	let picker_width = content_width.saturating_sub(4).clamp(56, 140).min(content_width);
+	let body_width = picker_width.saturating_sub(2);
+	if body_width >= 96 {
+		let divider_width = 1u16.min(body_width);
+		let remaining = body_width.saturating_sub(divider_width);
+		let mut list_width = ((u32::from(remaining) * 54) / 100) as u16;
+		let mut preview_width = remaining.saturating_sub(list_width);
+		if preview_width == 0 {
+			preview_width = 1;
+			list_width = remaining.saturating_sub(preview_width);
+		}
+		return WorkspaceFilePickerBodyLayout {
+			horizontal_split: true,
+			list_width,
+			divider_width,
+			preview_width,
+		};
+	}
+	WorkspaceFilePickerBodyLayout {
+		horizontal_split: false,
+		list_width: body_width,
+		divider_width: 0,
+		preview_width: body_width,
+	}
+}
+
+pub fn compute_command_palette_preview_width(content_width: u16) -> u16 {
+	let palette_width = content_width.saturating_sub(6).clamp(48, 104);
+	palette_width.saturating_sub(2)
 }
 
 #[derive(Debug)]
 pub struct RimState {
-	pub title:                        String,
-	pub workspace_root:               PathBuf,
-	pub active_tab:                   TabId,
-	pub leader_key:                   char,
-	pub mode:                         EditorMode,
-	pub visual_anchor:                Option<CursorState>,
-	pub command_line:                 String,
-	pub quit_after_save:              bool,
-	pub pending_save_path:            Option<(BufferId, PathBuf)>,
-	pub preferred_col:                Option<u16>,
-	pub line_slot:                    Option<String>,
-	pub line_slot_line_wise:          bool,
-	pub line_slot_block_wise:         bool,
-	pub cursor_scroll_threshold:      u16,
-	pub key_hints_width:              u16,
-	pub key_hints_max_height:         u16,
-	pub normal_sequence:              Vec<NormalSequenceKey>,
-	pub visual_g_pending:             bool,
-	pub pending_insert_group:         Option<PendingInsertUndoGroup>,
-	pub pending_block_insert:         Option<PendingBlockInsert>,
-	pub pending_swap_decision:        Option<PendingSwapDecision>,
-	pub in_flight_internal_saves:     HashSet<BufferId>,
+	pub title: String,
+	pub workspace_root: PathBuf,
+	pub active_tab: TabId,
+	pub leader_key: char,
+	pub mode: EditorMode,
+	pub visual_anchor: Option<CursorState>,
+	pub command_line: String,
+	pub quit_after_save: bool,
+	pub pending_save_path: Option<(BufferId, PathBuf)>,
+	pub preferred_col: Option<u16>,
+	pub line_slot: Option<String>,
+	pub line_slot_line_wise: bool,
+	pub line_slot_block_wise: bool,
+	pub cursor_scroll_threshold: u16,
+	pub key_hints_width: u16,
+	pub key_hints_max_height: u16,
+	pub word_wrap: bool,
+	pub picker_preview_word_wrap: bool,
+	pub normal_sequence: Vec<NormalSequenceKey>,
+	pub visual_g_pending: bool,
+	pub pending_insert_group: Option<PendingInsertUndoGroup>,
+	pub pending_block_insert: Option<PendingBlockInsert>,
+	pub pending_swap_decision: Option<PendingSwapDecision>,
+	pub in_flight_internal_saves: HashSet<BufferId>,
 	pub ignore_external_change_until: HashMap<BufferId, Instant>,
-	pub command_registry:             CommandRegistry,
-	pub overlay:                      Option<OverlayState>,
-	pub command_palette:              Option<CommandPaletteState>,
-	pub workspace_file_picker:        Option<WorkspaceFilePickerState>,
-	pub(crate) window_buffer_views:   HashMap<(WindowId, BufferId), WindowBufferViewState>,
-	pub buffers:                      SlotMap<BufferId, BufferState>,
-	pub buffer_order:                 Vec<BufferId>,
-	pub windows:                      SlotMap<WindowId, WindowState>,
-	pub tabs:                         BTreeMap<TabId, TabState>,
-	pub status_bar:                   StatusBarState,
+	pub command_registry: CommandRegistry,
+	pub overlay: Option<OverlayState>,
+	pub command_palette: Option<CommandPaletteState>,
+	pub workspace_file_picker: Option<WorkspaceFilePickerState>,
+	pub workspace_file_cache: Vec<WorkspaceFileEntry>,
+	pub workspace_file_cache_loading: bool,
+	pub(crate) window_buffer_views: HashMap<(WindowId, BufferId), WindowBufferViewState>,
+	pub buffers: SlotMap<BufferId, BufferState>,
+	pub buffer_order: Vec<BufferId>,
+	pub windows: SlotMap<WindowId, WindowState>,
+	pub tabs: BTreeMap<TabId, TabState>,
+	pub status_bar: StatusBarState,
 }
 
 impl RimState {
@@ -409,11 +471,10 @@ impl RimState {
 		let tab_id = TabId(1);
 		let window_id = windows.insert(WindowState::default());
 
-		tabs.insert(tab_id, TabState {
-			windows:       vec![window_id],
-			active_window: window_id,
-			buffer_order:  Vec::new(),
-		});
+		tabs.insert(
+			tab_id,
+			TabState { windows: vec![window_id], active_window: window_id, buffer_order: Vec::new() },
+		);
 
 		Self {
 			title: "Rim".to_string(),
@@ -432,6 +493,8 @@ impl RimState {
 			cursor_scroll_threshold: 0,
 			key_hints_width: 42,
 			key_hints_max_height: 36,
+			word_wrap: false,
+			picker_preview_word_wrap: true,
 			normal_sequence: Vec::new(),
 			visual_g_pending: false,
 			pending_insert_group: None,
@@ -443,6 +506,8 @@ impl RimState {
 			overlay: None,
 			command_palette: None,
 			workspace_file_picker: None,
+			workspace_file_cache: Vec::new(),
+			workspace_file_cache_loading: false,
 			window_buffer_views: HashMap::new(),
 			buffers,
 			buffer_order: Vec::new(),
@@ -460,29 +525,100 @@ impl RimState {
 		self.command_registry.register_plugin_command(registration)
 	}
 
-	pub fn command_palette(&self) -> Option<&CommandPaletteState> { self.command_palette.as_ref() }
+	pub fn command_palette(&self) -> Option<&CommandPaletteState> {
+		self.command_palette.as_ref()
+	}
 
 	pub fn workspace_file_picker(&self) -> Option<&WorkspaceFilePickerState> {
 		self.workspace_file_picker.as_ref()
 	}
 
-	pub fn workspace_root(&self) -> &Path { self.workspace_root.as_path() }
+	pub fn workspace_root(&self) -> &Path {
+		self.workspace_root.as_path()
+	}
 
-	pub fn set_workspace_root(&mut self, workspace_root: PathBuf) { self.workspace_root = workspace_root; }
+	pub fn set_workspace_root(&mut self, workspace_root: PathBuf) {
+		self.workspace_root = workspace_root;
+	}
 
 	pub fn refresh_command_palette(&mut self) {
 		if !self.is_command_mode() {
 			self.command_palette = None;
 			return;
 		}
-		let command_query = self.command_line.split_whitespace().next().unwrap_or_default();
-		let items = self.command_registry.command_palette_matches(command_query, 12);
-		let selected = self
+		let previous_palette_preview = self
 			.command_palette
 			.as_ref()
-			.map(|palette| palette.selected.min(items.len().saturating_sub(1)))
-			.unwrap_or_default();
-		self.command_palette = Some(CommandPaletteState { query: self.command_line.clone(), items, selected });
+			.map(|palette| (palette.preview_title.clone(), palette.preview_lines.clone(), palette.preview_scroll))
+			.unwrap_or_else(|| (String::new(), Vec::new(), 0));
+		let previous_selected_file = self
+			.command_palette
+			.as_ref()
+			.and_then(|palette| palette.items.get(palette.selected))
+			.and_then(CommandPaletteItem::as_file)
+			.map(|item| (item.absolute_path.clone(), item.relative_path.clone()));
+		let (items, loading, showing_files) = if let Some((_, file_query)) = self
+			.command_palette_path_argument_context()
+			.map(|(command, query)| (command.to_string(), query.to_string()))
+		{
+			if self.workspace_file_cache_loading {
+				(Vec::new(), true, true)
+			} else {
+				(self.command_palette_file_matches(file_query.as_str(), 512), false, true)
+			}
+		} else {
+			let command_query = self.command_line.split_whitespace().next().unwrap_or_default();
+			let items = self
+				.command_registry
+				.command_palette_matches(command_query, 512)
+				.into_iter()
+				.map(CommandPaletteItem::Command)
+				.collect();
+			(items, false, false)
+		};
+		let selected = if let Some((selected_path, selected_relative_path)) = previous_selected_file.as_ref() {
+			items
+				.iter()
+				.position(|item| {
+					item.as_file().is_some_and(|file| {
+						&file.absolute_path == selected_path || &file.relative_path == selected_relative_path
+					})
+				})
+				.unwrap_or_else(|| {
+					self
+						.command_palette
+						.as_ref()
+						.map(|palette| palette.selected.min(items.len().saturating_sub(1)))
+						.unwrap_or_default()
+				})
+		} else {
+			self
+				.command_palette
+				.as_ref()
+				.map(|palette| palette.selected.min(items.len().saturating_sub(1)))
+				.unwrap_or_default()
+		};
+		let selected_file_path =
+			items.get(selected).and_then(CommandPaletteItem::as_file).map(|file| file.absolute_path.as_path());
+		let (preview_title, preview_lines, preview_scroll) = if showing_files
+			&& selected_file_path
+				.zip(previous_selected_file.as_ref().map(|(path, _)| path.as_path()))
+				.is_some_and(|(selected_path, previous_path)| selected_path == previous_path)
+		{
+			previous_palette_preview
+		} else {
+			(String::new(), Vec::new(), 0)
+		};
+		self.command_palette = Some(CommandPaletteState {
+			query: self.command_line.clone(),
+			items,
+			selected,
+			loading,
+			showing_files,
+			preview_title,
+			preview_lines,
+			preview_scroll,
+		});
 	}
 
 	pub fn close_command_palette(&mut self) {
@@ -495,6 +631,40 @@ impl RimState {
 		}
 	}
 
+	pub fn has_workspace_file_cache(&self) -> bool {
+		!self.workspace_file_cache.is_empty()
+	}
+
+	pub fn workspace_file_cache_is_loading(&self) -> bool {
+		self.workspace_file_cache_loading
+	}
+
+	pub fn workspace_file_cache_entries(&self) -> &[WorkspaceFileEntry] {
+		self.workspace_file_cache.as_slice()
+	}
+
+	pub fn command_palette_needs_workspace_files(&self) -> bool {
+		self.command_palette_path_argument_context().is_some()
+			&& self.workspace_file_cache.is_empty()
+			&& !self.workspace_file_cache_loading
+	}
+
+	pub fn begin_workspace_file_cache_loading(&mut self) {
+		self.workspace_file_cache_loading = true;
+		self.refresh_command_palette();
+	}
+
+	pub fn set_workspace_file_cache(&mut self, entries: Vec<WorkspaceFileEntry>) {
+		self.workspace_file_cache = entries;
+		self.workspace_file_cache_loading = false;
+		self.refresh_command_palette();
+	}
+
+	pub fn fail_workspace_file_cache_loading(&mut self) {
+		self.workspace_file_cache_loading = false;
+		self.refresh_command_palette();
+	}
+
 	pub fn open_workspace_file_picker(&mut self, entries: Vec<WorkspaceFileEntry>) {
 		let total_files = entries.len();
 		self.close_key_hints();
@@ -504,10 +674,12 @@ impl RimState {
 			entries,
 			items: Vec::new(),
 			selected: 0,
+			preferred: None,
 			total_files,
 			total_matches: 0,
 			preview_title: String::new(),
 			preview_lines: Vec::new(),
+			preview_scroll: 0,
 			loading: false,
 		});
 		self.refresh_workspace_file_picker_matches();
@@ -516,16 +688,22 @@ impl RimState {
 	pub fn open_workspace_file_picker_loading(&mut self) {
 		self.close_key_hints();
 		self.close_command_palette();
+		if let Some(picker) = self.workspace_file_picker.as_mut() {
+			picker.loading = true;
+			return;
+		}
 		self.workspace_file_picker = Some(WorkspaceFilePickerState {
-			query:         String::new(),
-			entries:       Vec::new(),
-			items:         Vec::new(),
-			selected:      0,
-			total_files:   0,
+			query: String::new(),
+			entries: Vec::new(),
+			items: Vec::new(),
+			selected: 0,
+			preferred: None,
+			total_files: 0,
 			total_matches: 0,
 			preview_title: String::new(),
 			preview_lines: vec!["Loading workspace files...".to_string()],
-			loading:       true,
+			preview_scroll: 0,
+			loading: true,
 		});
 	}
 
@@ -539,7 +717,9 @@ impl RimState {
 		}
 	}
 
-	pub fn workspace_file_picker_open(&self) -> bool { self.workspace_file_picker.is_some() }
+	pub fn workspace_file_picker_open(&self) -> bool {
+		self.workspace_file_picker.is_some()
+	}
 
 	pub fn workspace_file_picker_loading(&self) -> bool {
 		self.workspace_file_picker.as_ref().is_some_and(|picker| picker.loading)
@@ -549,6 +729,9 @@ impl RimState {
 		let Some(picker) = self.workspace_file_picker.as_mut() else {
 			return;
 		};
+		let previous_selected_path = picker.preferred.clone().or_else(|| {
+			picker.items.get(picker.selected).map(|item| (item.absolute_path.clone(), item.relative_path.clone()))
+		});
 		let query = picker.query.trim();
 		picker.loading = false;
 		let mut matches = picker
@@ -556,19 +739,25 @@ impl RimState {
 			.iter()
 			.filter_map(|entry| {
 				if query.is_empty() {
-					return Some((0u16, WorkspaceFileMatch {
-						absolute_path: entry.absolute_path.clone(),
-						relative_path: entry.relative_path.clone(),
-						match_indices: Vec::new(),
-					}));
+					return Some((
+						0u16,
+						WorkspaceFileMatch {
+							absolute_path: entry.absolute_path.clone(),
+							relative_path: entry.relative_path.clone(),
+							match_indices: Vec::new(),
+						},
+					));
 				}
 				let (score, mut indices) = workspace_file_match(query, entry.relative_path.as_str())?;
 				indices.sort_unstable();
-				Some((score, WorkspaceFileMatch {
-					absolute_path: entry.absolute_path.clone(),
-					relative_path: entry.relative_path.clone(),
-					match_indices: indices,
-				}))
+				Some((
+					score,
+					WorkspaceFileMatch {
+						absolute_path: entry.absolute_path.clone(),
+						relative_path: entry.relative_path.clone(),
+						match_indices: indices,
+					},
+				))
 			})
 			.collect::<Vec<_>>();
 		matches.sort_by(|left, right| {
@@ -576,11 +765,38 @@ impl RimState {
 		});
 		picker.total_matches = matches.len();
 		picker.items = matches.into_iter().take(512).map(|(_, item)| item).collect();
-		picker.selected = picker.selected.min(picker.items.len().saturating_sub(1));
+		let restored_selected =
+			previous_selected_path.clone().and_then(|(selected_path, selected_relative_path)| {
+				picker.items.iter().position(|item| {
+					item.absolute_path == selected_path || item.relative_path == selected_relative_path
+				})
+			});
+		picker.selected =
+			restored_selected.unwrap_or_else(|| picker.selected.min(picker.items.len().saturating_sub(1)));
+		picker.preferred = if restored_selected.is_some() {
+			picker
+				.items
+				.get(picker.selected)
+				.map(|item| (item.absolute_path.clone(), item.relative_path.clone()))
+				.or(previous_selected_path)
+		} else {
+			previous_selected_path
+		};
 		if picker.items.is_empty() {
 			picker.preview_title.clear();
 			picker.preview_lines.clear();
+			picker.preview_scroll = 0;
 		}
+	}
+
+	pub fn replace_workspace_file_picker_entries(&mut self, entries: Vec<WorkspaceFileEntry>) {
+		let Some(picker) = self.workspace_file_picker.as_mut() else {
+			self.open_workspace_file_picker(entries);
+			return;
+		};
+		picker.entries = entries;
+		picker.total_files = picker.entries.len();
+		self.refresh_workspace_file_picker_matches();
 	}
 
 	pub fn move_workspace_file_picker_selection(&mut self, delta: isize) -> bool {
@@ -593,6 +809,11 @@ impl RimState {
 		let next = picker.selected.saturating_add_signed(delta).min(picker.items.len().saturating_sub(1));
 		let changed = next != picker.selected;
 		picker.selected = next;
+		picker.preferred =
+			picker.items.get(picker.selected).map(|item| (item.absolute_path.clone(), item.relative_path.clone()));
+		if changed {
+			picker.preview_scroll = 0;
+		}
 		changed
 	}
 
@@ -602,6 +823,8 @@ impl RimState {
 		};
 		picker.query.push(ch);
 		picker.selected = 0;
+		picker.preferred = None;
+		picker.preview_scroll = 0;
 		self.refresh_workspace_file_picker_matches();
 	}
 
@@ -611,6 +834,8 @@ impl RimState {
 		};
 		let _ = picker.query.pop();
 		picker.selected = 0;
+		picker.preferred = None;
+		picker.preview_scroll = 0;
 		self.refresh_workspace_file_picker_matches();
 	}
 
@@ -621,6 +846,9 @@ impl RimState {
 	}
 
 	pub fn set_workspace_file_picker_preview(&mut self, path: &Path, preview: String) {
+		let content_width = self.active_tab_content_size().0;
+		let preview_width = compute_workspace_file_picker_body_layout(content_width).preview_width as usize;
+		let word_wrap = self.picker_preview_word_wrap;
 		let Some(picker) = self.workspace_file_picker.as_mut() else {
 			return;
 		};
@@ -628,15 +856,20 @@ impl RimState {
 		if selected != Some(path) {
 			return;
 		}
+		let previous_scroll = picker.preview_scroll;
+		let next_preview_lines = if preview.is_empty() {
+			vec!["<empty>".to_string()]
+		} else {
+			preview.lines().map(ToString::to_string).collect::<Vec<_>>()
+		};
+		let next_max_scroll =
+			preview_max_scroll_with_mode(next_preview_lines.as_slice(), preview_width, word_wrap);
 		picker.preview_title = path
 			.file_name()
 			.map(|name| name.to_string_lossy().to_string())
 			.unwrap_or_else(|| path.display().to_string());
-		picker.preview_lines = if preview.is_empty() {
-			vec!["<empty>".to_string()]
-		} else {
-			preview.lines().map(ToString::to_string).collect()
-		};
+		picker.preview_lines = next_preview_lines;
+		picker.preview_scroll = previous_scroll.min(next_max_scroll);
 	}
 
 	pub fn set_workspace_file_picker_preview_loading(&mut self, path: &Path) {
@@ -651,7 +884,6 @@ impl RimState {
 			.file_name()
 			.map(|name| name.to_string_lossy().to_string())
 			.unwrap_or_else(|| path.display().to_string());
-		picker.preview_lines = vec!["Loading preview...".to_string()];
 	}
 
 	pub fn clear_workspace_file_picker_preview(&mut self) {
@@ -660,6 +892,21 @@ impl RimState {
 		};
 		picker.preview_title.clear();
 		picker.preview_lines.clear();
+		picker.preview_scroll = 0;
+	}
+
+	pub fn scroll_workspace_file_picker_preview(&mut self, delta: isize) -> bool {
+		let content_width = self.active_tab_content_size().0;
+		let preview_width = compute_workspace_file_picker_body_layout(content_width).preview_width as usize;
+		let word_wrap = self.picker_preview_word_wrap;
+		let Some(picker) = self.workspace_file_picker.as_mut() else {
+			return false;
+		};
+		let max_scroll = preview_max_scroll_with_mode(picker.preview_lines.as_slice(), preview_width, word_wrap);
+		let next = picker.preview_scroll.saturating_add_signed(delta).min(max_scroll);
+		let changed = next != picker.preview_scroll;
+		picker.preview_scroll = next;
+		changed
 	}
 
 	pub fn move_command_palette_selection(&mut self, delta: isize) -> bool {
@@ -675,9 +922,194 @@ impl RimState {
 		changed
 	}
 
+	pub fn scroll_command_palette_preview(&mut self, delta: isize) -> bool {
+		let content_width = self.active_tab_content_size().0;
+		let preview_width = compute_command_palette_preview_width(content_width) as usize;
+		let word_wrap = self.picker_preview_word_wrap;
+		let Some(palette) = self.command_palette.as_mut() else {
+			return false;
+		};
+		if !palette.showing_files {
+			return false;
+		}
+		let max_scroll = preview_max_scroll_with_mode(palette.preview_lines.as_slice(), preview_width, word_wrap);
+		let next = palette.preview_scroll.saturating_add_signed(delta).min(max_scroll);
+		let changed = next != palette.preview_scroll;
+		palette.preview_scroll = next;
+		changed
+	}
+
+	fn active_tab_content_size(&self) -> (u16, u16) {
+		let Some(tab) = self.tabs.get(&self.active_tab) else {
+			return (1, 1);
+		};
+		let max_right = tab
+			.windows
+			.iter()
+			.filter_map(|id| self.windows.get(*id))
+			.map(|window| window.x.saturating_add(window.width))
+			.max()
+			.unwrap_or(1)
+			.max(1);
+		let max_bottom = tab
+			.windows
+			.iter()
+			.filter_map(|id| self.windows.get(*id))
+			.map(|window| window.y.saturating_add(window.height))
+			.max()
+			.unwrap_or(1)
+			.max(1);
+		(max_right, max_bottom)
+	}
+
+	pub fn page_command_palette_selection(&mut self, direction: isize) -> bool {
+		let step = 10isize;
+		if direction.is_negative() {
+			self.move_command_palette_selection(-step)
+		} else {
+			self.move_command_palette_selection(step)
+		}
+	}
+
+	pub fn word_wrap_enabled(&self) -> bool {
+		self.word_wrap
+	}
+
+	pub fn toggle_word_wrap(&mut self) {
+		self.word_wrap = !self.word_wrap;
+		for window_id in self.active_tab_window_ids() {
+			if let Some(window) = self.windows.get_mut(window_id) {
+				window.scroll_x = 0;
+			}
+		}
+		self.align_active_window_scroll_to_cursor();
+		self.status_bar.message =
+			if self.word_wrap { "word wrap enabled".to_string() } else { "word wrap disabled".to_string() };
+	}
+
+	pub fn picker_preview_word_wrap_enabled(&self) -> bool {
+		self.picker_preview_word_wrap
+	}
+
+	pub fn toggle_picker_preview_word_wrap(&mut self) {
+		self.picker_preview_word_wrap = !self.picker_preview_word_wrap;
+		let content_width = self.active_tab_content_size().0;
+		let picker_preview_width =
+			compute_workspace_file_picker_body_layout(content_width).preview_width as usize;
+		let command_preview_width = compute_command_palette_preview_width(content_width) as usize;
+		if let Some(picker) = self.workspace_file_picker.as_mut() {
+			let max_scroll = preview_max_scroll_with_mode(
+				picker.preview_lines.as_slice(),
+				picker_preview_width,
+				self.picker_preview_word_wrap,
+			);
+			picker.preview_scroll = picker.preview_scroll.min(max_scroll);
+		}
+		if let Some(palette) = self.command_palette.as_mut()
+			&& palette.showing_files
+		{
+			let max_scroll = preview_max_scroll_with_mode(
+				palette.preview_lines.as_slice(),
+				command_preview_width,
+				self.picker_preview_word_wrap,
+			);
+			palette.preview_scroll = palette.preview_scroll.min(max_scroll);
+		}
+		self.status_bar.message = if self.picker_preview_word_wrap {
+			"picker preview wrap enabled".to_string()
+		} else {
+			"picker preview wrap disabled".to_string()
+		};
+	}
+
 	pub fn selected_command_palette_match(&self) -> Option<&CommandPaletteMatch> {
 		let palette = self.command_palette.as_ref()?;
-		palette.items.get(palette.selected)
+		palette.items.get(palette.selected)?.as_command()
+	}
+
+	pub fn selected_command_palette_file_match(&self) -> Option<&CommandPaletteFileMatch> {
+		let palette = self.command_palette.as_ref()?;
+		palette.items.get(palette.selected)?.as_file()
+	}
+
+	pub fn selected_command_palette_file_path(&self) -> Option<&Path> {
+		self.selected_command_palette_file_match().map(|item| item.absolute_path.as_path())
+	}
+
+	pub fn command_palette_showing_files(&self) -> bool {
+		self.command_palette.as_ref().is_some_and(|palette| palette.showing_files)
+	}
+
+	pub fn set_command_palette_preview(&mut self, path: &Path, preview: String) {
+		let content_width = self.active_tab_content_size().0;
+		let preview_width = compute_command_palette_preview_width(content_width) as usize;
+		let word_wrap = self.picker_preview_word_wrap;
+		let Some(palette) = self.command_palette.as_mut() else {
+			return;
+		};
+		if !palette.showing_files {
+			return;
+		}
+		let selected = palette.items.get(palette.selected).and_then(CommandPaletteItem::as_file);
+		if selected.map(|item| item.absolute_path.as_path()) != Some(path) {
+			return;
+		}
+		let previous_scroll = palette.preview_scroll;
+		let next_preview_lines = if preview.is_empty() {
+			vec!["<empty>".to_string()]
+		} else {
+			preview.lines().map(ToString::to_string).collect::<Vec<_>>()
+		};
+		let next_max_scroll =
+			preview_max_scroll_with_mode(next_preview_lines.as_slice(), preview_width, word_wrap);
+		palette.preview_title = path
+			.file_name()
+			.map(|name| name.to_string_lossy().to_string())
+			.unwrap_or_else(|| path.display().to_string());
+		palette.preview_lines = next_preview_lines;
+		palette.preview_scroll = previous_scroll.min(next_max_scroll);
+	}
+
+	pub fn set_command_palette_preview_loading(&mut self, path: &Path) {
+		let Some(palette) = self.command_palette.as_mut() else {
+			return;
+		};
+		if !palette.showing_files {
+			return;
+		}
+		let selected = palette.items.get(palette.selected).and_then(CommandPaletteItem::as_file);
+		if selected.map(|item| item.absolute_path.as_path()) != Some(path) {
+			return;
+		}
+		palette.preview_title = path
+			.file_name()
+			.map(|name| name.to_string_lossy().to_string())
+			.unwrap_or_else(|| path.display().to_string());
+	}
+
+	pub fn complete_command_palette_selection(&mut self) -> bool {
+		let Some(palette) = self.command_palette.as_ref() else {
+			return false;
+		};
+		let Some(item) = palette.items.get(palette.selected) else {
+			return false;
+		};
+		match item {
+			CommandPaletteItem::Command(item) => {
+				let completion = if item.name.is_empty() { item.command_id_label.clone() } else { item.name.clone() };
+				self.command_line = completion;
+				self.refresh_command_palette();
+				true
+			}
+			CommandPaletteItem::File(item) => {
+				let Some((command, _)) = self.command_line.split_once(' ') else {
+					return false;
+				};
+				self.command_line = format!("{} {}", command, item.relative_path);
+				self.refresh_command_palette();
+				true
+			}
+		}
 	}
 
 	pub fn active_keymap_scope(&self) -> KeymapScope {
@@ -712,17 +1144,29 @@ impl RimState {
 		}
 	}
 
-	pub fn key_hints_open(&self) -> bool { matches!(self.overlay, Some(OverlayState::KeyHints(_))) }
+	pub fn key_hints_open(&self) -> bool {
+		matches!(self.overlay, Some(OverlayState::KeyHints(_)))
+	}
 
-	pub fn open_key_hints_overview(&mut self) { self.open_key_hints(Vec::new(), true); }
+	pub fn open_key_hints_overview(&mut self) {
+		self.open_key_hints(Vec::new(), true);
+	}
 
-	pub fn scroll_key_hints_up(&mut self) -> bool { self.scroll_overlay_lines(-1) }
+	pub fn scroll_key_hints_up(&mut self) -> bool {
+		self.scroll_overlay_lines(-1)
+	}
 
-	pub fn scroll_key_hints_down(&mut self) -> bool { self.scroll_overlay_lines(1) }
+	pub fn scroll_key_hints_down(&mut self) -> bool {
+		self.scroll_overlay_lines(1)
+	}
 
-	pub fn scroll_key_hints_half_page_up(&mut self) -> bool { self.scroll_overlay_half_page(-1) }
+	pub fn scroll_key_hints_half_page_up(&mut self) -> bool {
+		self.scroll_overlay_half_page(-1)
+	}
 
-	pub fn scroll_key_hints_half_page_down(&mut self) -> bool { self.scroll_overlay_half_page(1) }
+	pub fn scroll_key_hints_half_page_down(&mut self) -> bool {
+		self.scroll_overlay_half_page(1)
+	}
 
 	pub fn refresh_key_hints_overlay_after_config_reload(&mut self) {
 		let Some(OverlayState::KeyHints(overlay)) = self.overlay.as_ref() else {
@@ -800,6 +1244,49 @@ impl RimState {
 			})
 			.collect::<Vec<_>>()
 			.join("")
+	}
+
+	fn command_palette_path_argument_context(&self) -> Option<(&str, &str)> {
+		let (command, tail) = self.command_line.split_once(' ')?;
+		let resolved = self.command_registry.resolve_command_input(command)?;
+		if resolved.spec.arg_kind != CommandArgKind::OptionalPath {
+			return None;
+		}
+		Some((command, tail.trim_start()))
+	}
+
+	fn command_palette_file_matches(&self, query: &str, limit: usize) -> Vec<CommandPaletteItem> {
+		let mut matches = self
+			.workspace_file_cache
+			.iter()
+			.filter_map(|entry| {
+				if query.is_empty() {
+					return Some((
+						0u16,
+						CommandPaletteFileMatch {
+							relative_path: entry.relative_path.clone(),
+							absolute_path: entry.absolute_path.clone(),
+							match_indices: Vec::new(),
+						},
+					));
+				}
+				let (score, mut indices) = workspace_file_match(query, entry.relative_path.as_str())?;
+				indices.sort_unstable();
+				Some((
+					score,
+					CommandPaletteFileMatch {
+						relative_path: entry.relative_path.clone(),
+						absolute_path: entry.absolute_path.clone(),
+						match_indices: indices,
+					},
+				))
+			})
+			.collect::<Vec<_>>();
+
+		matches.sort_by(|left, right| {
+			right.0.cmp(&left.0).then_with(|| left.1.relative_path.cmp(&right.1.relative_path))
+		});
+		matches.into_iter().take(limit).map(|(_, item)| CommandPaletteItem::File(item)).collect()
 	}
 
 	pub fn step_back_key_hint_prefix(&mut self) -> bool {
@@ -884,11 +1371,14 @@ impl RimState {
 		};
 		let previous_buffer_id = window_snapshot.buffer_id;
 		if persist_previous_cursor && let Some(previous_buffer_id) = window_snapshot.buffer_id {
-			self.window_buffer_views.insert((window_id, previous_buffer_id), WindowBufferViewState {
-				cursor:   window_snapshot.cursor,
-				scroll_x: window_snapshot.scroll_x,
-				scroll_y: window_snapshot.scroll_y,
-			});
+			self.window_buffer_views.insert(
+				(window_id, previous_buffer_id),
+				WindowBufferViewState {
+					cursor: window_snapshot.cursor,
+					scroll_x: window_snapshot.scroll_x,
+					scroll_y: window_snapshot.scroll_y,
+				},
+			);
 		}
 
 		let restored_view = self.window_buffer_views.get(&(window_id, buffer_id)).copied().unwrap_or_default();
@@ -903,11 +1393,14 @@ impl RimState {
 			window.scroll_x = restored_view.scroll_x;
 			window.scroll_y = restored_view.scroll_y;
 		}
-		self.window_buffer_views.insert((window_id, buffer_id), WindowBufferViewState {
-			cursor:   next_cursor,
-			scroll_x: restored_view.scroll_x,
-			scroll_y: restored_view.scroll_y,
-		});
+		self.window_buffer_views.insert(
+			(window_id, buffer_id),
+			WindowBufferViewState {
+				cursor: next_cursor,
+				scroll_x: restored_view.scroll_x,
+				scroll_y: restored_view.scroll_y,
+			},
+		);
 		if let Some(tab_id) = self.tab_id_for_window(window_id) {
 			self.register_buffer_in_tab_order(tab_id, buffer_id, previous_buffer_id);
 		}
@@ -920,11 +1413,10 @@ impl RimState {
 		let Some(buffer_id) = window.buffer_id else {
 			return;
 		};
-		self.window_buffer_views.insert((window_id, buffer_id), WindowBufferViewState {
-			cursor:   window.cursor,
-			scroll_x: window.scroll_x,
-			scroll_y: window.scroll_y,
-		});
+		self.window_buffer_views.insert(
+			(window_id, buffer_id),
+			WindowBufferViewState { cursor: window.cursor, scroll_x: window.scroll_x, scroll_y: window.scroll_y },
+		);
 	}
 
 	pub(crate) fn remove_window_view_bindings(&mut self, window_id: WindowId) {
@@ -933,7 +1425,9 @@ impl RimState {
 }
 
 impl Default for RimState {
-	fn default() -> Self { Self::new() }
+	fn default() -> Self {
+		Self::new()
+	}
 }
 
 fn buffer_name_from_path(path: &Path) -> Option<String> {
@@ -948,7 +1442,9 @@ pub(crate) fn rope_line_count(text: &Rope) -> usize {
 	if rope_ends_with_newline(text) { line_count.saturating_sub(1).max(1) } else { line_count.max(1) }
 }
 
-pub(crate) fn rope_is_empty(text: &Rope) -> bool { text.len_chars() == 0 }
+pub(crate) fn rope_is_empty(text: &Rope) -> bool {
+	text.len_chars() == 0
+}
 
 pub(crate) fn rope_line_without_newline(text: &Rope, row_index: usize) -> Option<String> {
 	if row_index >= rope_line_count(text) {
@@ -1042,9 +1538,9 @@ pub(crate) fn compute_rope_text_diff(before: &Rope, after: &Rope) -> Option<Rope
 	}
 
 	Some(RopeTextDiff {
-		start_char:    common_prefix_chars,
-		start_byte:    common_prefix_bytes,
-		deleted_text:  before.slice(common_prefix_chars..before_mid_end).to_string(),
+		start_char: common_prefix_chars,
+		start_byte: common_prefix_bytes,
+		deleted_text: before.slice(common_prefix_chars..before_mid_end).to_string(),
 		inserted_text: after.slice(common_prefix_chars..after_mid_end).to_string(),
 	})
 }

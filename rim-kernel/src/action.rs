@@ -177,6 +177,9 @@ pub enum FileAction {
 		workspace_root: PathBuf,
 		result:         anyhow::Result<Vec<PathBuf>>,
 	},
+	WorkspaceFilesChanged {
+		workspace_root: PathBuf,
+	},
 	WorkspaceFilePreviewLoaded {
 		path:   PathBuf,
 		result: anyhow::Result<String>,

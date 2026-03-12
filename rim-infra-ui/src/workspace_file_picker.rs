@@ -1,7 +1,10 @@
 use std::collections::HashSet;
 
 use ratatui::{buffer::Buffer, layout::{Constraint, Layout, Rect}, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap}};
-use rim_kernel::state::{RimState, WorkspaceFileMatch, WorkspaceFilePickerState};
+use rim_kernel::{
+	preview::preview_rows,
+	state::{RimState, WorkspaceFileMatch, WorkspaceFilePickerState, compute_workspace_file_picker_body_layout},
+};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub(super) struct WorkspaceFilePickerWidget {
@@ -9,23 +12,36 @@ pub(super) struct WorkspaceFilePickerWidget {
 	area:     Rect,
 	cursor_x: u16,
 	cursor_y: u16,
+	word_wrap: bool,
 }
 
 impl WorkspaceFilePickerWidget {
 	pub(super) fn from_state(state: &RimState, content_area: Rect) -> Option<Self> {
+		if content_area.width == 0 || content_area.height == 0 {
+			return None;
+		}
 		let picker = state.workspace_file_picker()?.clone();
-		let width = content_area.width.saturating_sub(4).clamp(56, 140);
-		let height = content_area.height.saturating_sub(1).max(14);
+		let width = content_area.width.saturating_sub(4).clamp(56, 140).min(content_area.width);
+		let height = content_area.height.saturating_sub(1).max(14).min(content_area.height);
 		let x = content_area.x.saturating_add(content_area.width.saturating_sub(width) / 2);
 		let y = content_area.y.saturating_add(content_area.height.saturating_sub(height) / 2);
 		let area = Rect { x, y, width, height };
 		let input_prefix = "> ";
 		let input_width = area.width.saturating_sub(6) as usize;
 		let query_line = tail_fit(input_prefix, picker.query.as_str(), input_width);
-		let cursor_x =
-			area.x.saturating_add(2).saturating_add(UnicodeWidthStr::width(query_line.as_str()) as u16);
-		let cursor_y = area.y.saturating_add(1);
-		Some(Self { picker, area, cursor_x, cursor_y })
+		let cursor_x = area
+			.x
+			.saturating_add(2)
+			.saturating_add(UnicodeWidthStr::width(query_line.as_str()) as u16)
+			.min(area.x.saturating_add(area.width.saturating_sub(1)));
+		let cursor_y = area.y.saturating_add(1).min(area.y.saturating_add(area.height.saturating_sub(1)));
+		Some(Self {
+			picker,
+			area,
+			cursor_x,
+			cursor_y,
+			word_wrap: state.picker_preview_word_wrap_enabled(),
+		})
 	}
 
 	pub(super) fn cursor_position(&self) -> (u16, u16) { (self.cursor_x, self.cursor_y) }
@@ -41,7 +57,7 @@ impl Widget for WorkspaceFilePickerWidget {
 
 		let [input_area, body_area] = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(inner);
 		render_query_row(&self.picker, input_area, buf);
-		render_body(&self.picker, body_area, buf);
+		render_body(&self.picker, body_area, buf, self.word_wrap);
 	}
 }
 
@@ -69,7 +85,7 @@ fn render_query_row(picker: &WorkspaceFilePickerState, area: Rect, buf: &mut Buf
 	}
 }
 
-fn render_body(picker: &WorkspaceFilePickerState, area: Rect, buf: &mut Buffer) {
+fn render_body(picker: &WorkspaceFilePickerState, area: Rect, buf: &mut Buffer, word_wrap: bool) {
 	if area.width == 0 || area.height == 0 {
 		return;
 	}
@@ -84,13 +100,29 @@ fn render_body(picker: &WorkspaceFilePickerState, area: Rect, buf: &mut Buffer) 
 		return;
 	}
 
-	if content_area.width >= 96 {
-		let [list_area, divider_area, preview_area] =
-			Layout::horizontal([Constraint::Percentage(54), Constraint::Length(1), Constraint::Min(1)])
-				.areas(content_area);
+	let layout = compute_workspace_file_picker_body_layout(content_area.width);
+	if layout.horizontal_split {
+		let list_area = Rect {
+			x:      content_area.x,
+			y:      content_area.y,
+			width:  layout.list_width,
+			height: content_area.height,
+		};
+		let divider_area = Rect {
+			x:      list_area.x.saturating_add(list_area.width),
+			y:      content_area.y,
+			width:  layout.divider_width,
+			height: content_area.height,
+		};
+		let preview_area = Rect {
+			x:      divider_area.x.saturating_add(divider_area.width),
+			y:      content_area.y,
+			width:  layout.preview_width,
+			height: content_area.height,
+		};
 		draw_vertical_separator(divider_area, buf);
 		render_result_list(picker, list_area, buf);
-		render_preview(picker, preview_area, buf);
+		render_preview(picker, preview_area, buf, word_wrap);
 		return;
 	}
 	let [list_area, divider_area, preview_area] =
@@ -98,7 +130,7 @@ fn render_body(picker: &WorkspaceFilePickerState, area: Rect, buf: &mut Buffer) 
 			.areas(content_area);
 	draw_horizontal_separator_between(divider_area, buf);
 	render_result_list(picker, list_area, buf);
-	render_preview(picker, preview_area, buf);
+	render_preview(picker, preview_area, buf, word_wrap);
 }
 
 fn render_result_list(picker: &WorkspaceFilePickerState, area: Rect, buf: &mut Buffer) {
@@ -125,19 +157,25 @@ fn render_result_list(picker: &WorkspaceFilePickerState, area: Rect, buf: &mut B
 	Paragraph::new(list_lines).render(area, buf);
 }
 
-fn render_preview(picker: &WorkspaceFilePickerState, area: Rect, buf: &mut Buffer) {
+fn render_preview(picker: &WorkspaceFilePickerState, area: Rect, buf: &mut Buffer, word_wrap: bool) {
 	let lines = if picker.preview_lines.is_empty() {
 		vec![Line::styled("Select a file to preview", Style::default().fg(Color::DarkGray))]
 	} else {
-		picker
-			.preview_lines
-			.iter()
-			.flat_map(|line| wrap_preview_line(line.as_str(), area.width as usize))
+		let wrapped = preview_rows(picker.preview_lines.as_slice(), area.width as usize, word_wrap);
+		let scroll = picker.preview_scroll.min(wrapped.len().saturating_sub(1));
+		wrapped
+			.into_iter()
+			.skip(scroll)
 			.take(area.height.max(1) as usize)
 			.map(|line| Line::styled(line, Style::default().fg(Color::Gray)))
 			.collect::<Vec<_>>()
 	};
-	Paragraph::new(lines).wrap(Wrap { trim: false }).render(area, buf);
+	let paragraph = if word_wrap {
+		Paragraph::new(lines).wrap(Wrap { trim: false })
+	} else {
+		Paragraph::new(lines)
+	};
+	paragraph.render(area, buf);
 }
 
 fn render_workspace_file_item(item: &WorkspaceFileMatch, selected: bool, width: usize) -> Line<'static> {
@@ -163,33 +201,6 @@ fn render_workspace_file_item(item: &WorkspaceFileMatch, selected: bool, width: 
 	}
 
 	Line::from(spans)
-}
-
-fn wrap_preview_line(line: &str, width: usize) -> Vec<String> {
-	if width == 0 {
-		return vec![String::new()];
-	}
-	let mut rows = Vec::new();
-	let mut current = String::new();
-	let mut current_width = 0usize;
-
-	for ch in line.chars() {
-		let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0).max(1);
-		if current_width > 0 && current_width.saturating_add(ch_width) > width {
-			rows.push(std::mem::take(&mut current));
-			current_width = 0;
-		}
-		current.push(ch);
-		current_width = current_width.saturating_add(ch_width);
-	}
-
-	if current.is_empty() {
-		rows.push(String::new());
-	} else {
-		rows.push(current);
-	}
-
-	rows
 }
 
 fn tail_fit(prefix: &str, query: &str, width: usize) -> String {
@@ -249,5 +260,31 @@ fn draw_vertical_separator(area: Rect, buf: &mut Buffer) {
 	}
 	for offset in 0..area.height {
 		buf[(area.x, area.y + offset)].set_symbol("│").set_fg(Color::Cyan);
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use std::path::PathBuf;
+
+	use ratatui::layout::Rect;
+	use rim_kernel::state::{RimState, WorkspaceFileEntry};
+
+	use super::WorkspaceFilePickerWidget;
+
+	#[test]
+	fn workspace_file_picker_widget_should_stay_within_content_area_on_tiny_layout() {
+		let mut state = RimState::new();
+		state.open_workspace_file_picker(vec![WorkspaceFileEntry {
+			absolute_path: PathBuf::from("/tmp/a.txt"),
+			relative_path: "a.txt".to_string(),
+		}]);
+		let content_area = Rect { x: 0, y: 0, width: 20, height: 4 };
+		let widget = WorkspaceFilePickerWidget::from_state(&state, content_area).expect("picker widget exists");
+		assert!(widget.area.width <= content_area.width);
+		assert!(widget.area.height <= content_area.height);
+		let (cursor_x, cursor_y) = widget.cursor_position();
+		assert!(cursor_x < content_area.width);
+		assert!(cursor_y < content_area.height);
 	}
 }

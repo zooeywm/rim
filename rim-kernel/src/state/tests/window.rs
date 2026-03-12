@@ -1,5 +1,5 @@
 use super::common::test_state;
-use crate::state::{FocusDirection, SplitAxis};
+use crate::state::{FocusDirection, SplitAxis, compute_workspace_file_picker_body_layout};
 
 #[test]
 fn horizontal_split_should_half_width_for_two_windows() {
@@ -250,6 +250,14 @@ fn resize_taller_should_keep_cursor_bottom_anchored_when_it_was_on_bottom_edge()
 	let window = state.windows.get(active_window_id).expect("window should exist");
 	assert_eq!(window.cursor.row, 73);
 	assert_eq!(window.scroll_y, 53);
+}
+
+#[test]
+fn workspace_file_picker_body_layout_should_not_exceed_tiny_content_width() {
+	let layout = compute_workspace_file_picker_body_layout(40);
+	assert_eq!(layout.list_width, 38);
+	assert_eq!(layout.preview_width, 38);
+	assert!(!layout.horizontal_split);
 }
 
 fn sorted_window_rects(state: &crate::state::RimState) -> Vec<(u16, u16, u16, u16)> {

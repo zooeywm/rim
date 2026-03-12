@@ -113,8 +113,7 @@ pub(super) enum StorageIoRequest {
 		workspace_root: PathBuf,
 	},
 	LoadWorkspaceFilePreview {
-		path:      PathBuf,
-		max_bytes: usize,
+		path: PathBuf,
 	},
 	SaveFile {
 		buffer_id: BufferId,
@@ -366,14 +365,13 @@ async fn list_workspace_files(workspace_root: PathBuf) -> Result<Vec<PathBuf>> {
 	Ok(paths)
 }
 
-async fn load_workspace_file_preview(path: PathBuf, max_bytes: usize) -> Result<String> {
+async fn load_workspace_file_preview(path: PathBuf) -> Result<String> {
 	let file_bytes =
 		compio::fs::read(&path).await.with_context(|| format!("read preview file failed: {}", path.display()))?;
-	let preview_bytes = file_bytes.into_iter().take(max_bytes).collect::<Vec<_>>();
-	if preview_bytes.contains(&0) {
+	if file_bytes.contains(&0) {
 		return Ok("<binary file>".to_string());
 	}
-	Ok(String::from_utf8_lossy(preview_bytes.as_slice()).into_owned())
+	Ok(String::from_utf8_lossy(file_bytes.as_slice()).into_owned())
 }
 
 async fn save_file(path: PathBuf, text: String) -> Result<()> {

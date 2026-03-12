@@ -76,11 +76,10 @@ where Deps: AsRef<StorageIoState>
 	fn enqueue_load_workspace_file_preview(
 		&self,
 		path: PathBuf,
-		max_bytes: usize,
 	) -> Result<(), StorageIoError> {
 		send_request(
 			&self.request_tx,
-			StorageIoRequest::LoadWorkspaceFilePreview { path, max_bytes },
+			StorageIoRequest::LoadWorkspaceFilePreview { path },
 			"enqueue_load_workspace_file_preview",
 			"load_workspace_file_preview",
 		)

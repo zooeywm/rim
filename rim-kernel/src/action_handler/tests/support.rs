@@ -23,7 +23,6 @@ impl StorageIo for TestPorts {
 	fn enqueue_load_workspace_file_preview(
 		&self,
 		_path: PathBuf,
-		_max_bytes: usize,
 	) -> Result<(), StorageIoError> {
 		Ok(())
 	}
@@ -152,7 +151,6 @@ impl StorageIo for RecordingPorts {
 	fn enqueue_load_workspace_file_preview(
 		&self,
 		_path: PathBuf,
-		_max_bytes: usize,
 	) -> Result<(), StorageIoError> {
 		Ok(())
 	}
@@ -299,7 +297,6 @@ impl StorageIo for FilePickerPorts {
 	fn enqueue_load_workspace_file_preview(
 		&self,
 		path: PathBuf,
-		_max_bytes: usize,
 	) -> Result<(), StorageIoError> {
 		self.preview_requests.borrow_mut().push(path);
 		Ok(())

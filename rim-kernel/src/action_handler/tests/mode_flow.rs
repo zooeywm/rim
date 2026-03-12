@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use super::{super::mode_flow::SequenceMatch, support::{FilePickerPorts, RecordingPorts, dispatch_test_action, map_normal_key, resolve_keys}};
-use crate::{action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction}, command::{CommandAliasConfig, CommandAliasSection, CommandConfigFile, CommandKeymapSection, KeyBindingOn, KeymapBindingConfig}, state::{FloatingWindowPlacement, NormalSequenceKey, RimState, WorkspaceFileEntry}};
+use crate::{action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction}, command::{BuiltinCommand, CommandAliasConfig, CommandAliasSection, CommandConfigFile, CommandKeymapSection, CommandTarget, KeyBindingOn, KeymapBindingConfig, ViewCommand}, state::{FloatingWindowPlacement, NormalSequenceKey, RimState, WorkspaceFileEntry}};
 
 #[test]
 fn to_normal_key_should_map_leader_char_to_leader_token() {
@@ -32,6 +32,16 @@ fn resolve_normal_sequence_should_map_leader_w_h_to_split_horizontal() {
 	let seq = vec![NormalSequenceKey::Leader, NormalSequenceKey::Char('w'), NormalSequenceKey::Char('h')];
 	let resolved = resolve_keys(&seq);
 	assert!(matches!(resolved, SequenceMatch::Action(AppAction::Layout(LayoutAction::SplitHorizontal))));
+}
+
+#[test]
+fn resolve_normal_sequence_should_map_leader_v_w_to_toggle_word_wrap() {
+	let seq = vec![NormalSequenceKey::Leader, NormalSequenceKey::Char('v'), NormalSequenceKey::Char('w')];
+	let resolved = resolve_keys(&seq);
+	assert!(matches!(
+		resolved,
+		SequenceMatch::Command(CommandTarget::Builtin(BuiltinCommand::View(ViewCommand::ToggleWordWrap)))
+	));
 }
 
 #[test]
@@ -717,10 +727,10 @@ fn open_command_palette_should_refresh_after_config_reload() {
 
 	state.enter_command_mode();
 	state.push_command_char('y');
-	assert_eq!(
-		state.command_palette().expect("command palette should open").items[0].description,
-		"Open the yazi picker"
-	);
+	let initial_item = state.command_palette().expect("command palette should open").items[0]
+		.as_command()
+		.expect("palette should show command items");
+	assert_eq!(initial_item.description, "Open the yazi picker");
 
 	let errors = state.apply_command_config(&CommandConfigFile {
 		command: CommandAliasSection {
@@ -737,8 +747,9 @@ fn open_command_palette_should_refresh_after_config_reload() {
 	state.refresh_command_palette();
 
 	let palette = state.command_palette().expect("command palette should still be open");
-	assert_eq!(palette.items[0].name, "y");
-	assert_eq!(palette.items[0].description, "Open custom picker");
+	let item = palette.items[0].as_command().expect("palette should show command items");
+	assert_eq!(item.name, "y");
+	assert_eq!(item.description, "Open custom picker");
 }
 
 #[test]
@@ -832,6 +843,215 @@ fn picker_key_hints_should_not_block_picker_input_and_should_close_with_picker()
 
 	state.close_workspace_file_picker();
 	assert!(!state.key_hints_open());
+}
+
+#[test]
+fn workspace_file_picker_preview_should_scroll_with_ctrl_e_and_ctrl_y() {
+	let mut state = RimState::new();
+	let path = PathBuf::from("/tmp/example.txt");
+	state.open_workspace_file_picker(vec![WorkspaceFileEntry {
+		absolute_path: path.clone(),
+		relative_path: "example.txt".to_string(),
+	}]);
+	state.set_workspace_file_picker_preview(path.as_path(), "1\n2\n3\n4".to_string());
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL))),
+	);
+	let picker = state.workspace_file_picker().expect("picker should stay open");
+	assert_eq!(picker.preview_scroll, 1);
+	assert_eq!(picker.selected, 0);
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL))),
+	);
+	let picker = state.workspace_file_picker().expect("picker should stay open");
+	assert_eq!(picker.preview_scroll, 0);
+	assert_eq!(picker.selected, 0);
+
+	for _ in 0..16 {
+		let _ = dispatch_test_action(
+			&mut state,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL))),
+		);
+	}
+	let capped_scroll = state.workspace_file_picker().expect("picker should stay open").preview_scroll;
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL))),
+	);
+	assert_eq!(
+		state.workspace_file_picker().expect("picker should stay open").preview_scroll,
+		capped_scroll
+	);
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL))),
+	);
+	assert_eq!(
+		state.workspace_file_picker().expect("picker should stay open").preview_scroll,
+		capped_scroll.saturating_sub(1)
+	);
+}
+
+#[test]
+fn workspace_file_picker_preview_scroll_should_not_accumulate_beyond_visible_end() {
+	let mut state = RimState::new();
+	let path = PathBuf::from("/tmp/example.txt");
+	state.open_workspace_file_picker(vec![WorkspaceFileEntry {
+		absolute_path: path.clone(),
+		relative_path: "example.txt".to_string(),
+	}]);
+	state.set_workspace_file_picker_preview(path.as_path(), "a".repeat(220));
+
+	for _ in 0..128 {
+		let _ = dispatch_test_action(
+			&mut state,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL))),
+		);
+	}
+	let capped_scroll = state.workspace_file_picker().expect("picker should stay open").preview_scroll;
+
+	for _ in 0..12 {
+		let _ = dispatch_test_action(
+			&mut state,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL))),
+		);
+	}
+	assert_eq!(
+		state.workspace_file_picker().expect("picker should stay open").preview_scroll,
+		capped_scroll
+	);
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL))),
+	);
+	assert_eq!(
+		state.workspace_file_picker().expect("picker should stay open").preview_scroll,
+		capped_scroll.saturating_sub(1)
+	);
+}
+
+#[test]
+fn workspace_file_picker_preview_reload_should_keep_scroll_and_stay_silent() {
+	let mut state = RimState::new();
+	state.update_active_tab_layout(100, 20);
+	let path = PathBuf::from("/tmp/example.txt");
+	state.open_workspace_file_picker(vec![WorkspaceFileEntry {
+		absolute_path: path.clone(),
+		relative_path: "example.txt".to_string(),
+	}]);
+	let initial = (1..=40).map(|index| format!("line-{index}")).collect::<Vec<_>>().join("\n");
+	state.set_workspace_file_picker_preview(path.as_path(), initial);
+	for _ in 0..6 {
+		let _ = dispatch_test_action(
+			&mut state,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL))),
+		);
+	}
+	let scroll_before_reload = state.workspace_file_picker().expect("picker should stay open").preview_scroll;
+	let text_before_reload =
+		state.workspace_file_picker().expect("picker should stay open").preview_lines.clone();
+
+	state.set_workspace_file_picker_preview_loading(path.as_path());
+	let picker = state.workspace_file_picker().expect("picker should stay open");
+	assert_eq!(picker.preview_scroll, scroll_before_reload);
+	assert_eq!(picker.preview_lines, text_before_reload);
+
+	let reloaded = (1..=60).map(|index| format!("line-{index}")).collect::<Vec<_>>().join("\n");
+	state.set_workspace_file_picker_preview(path.as_path(), reloaded);
+	assert_eq!(
+		state.workspace_file_picker().expect("picker should stay open").preview_scroll,
+		scroll_before_reload
+	);
+}
+
+#[test]
+fn workspace_file_picker_preview_reload_should_not_auto_follow_when_at_bottom() {
+	let mut state = RimState::new();
+	state.update_active_tab_layout(100, 20);
+	let path = PathBuf::from("/tmp/example.txt");
+	state.open_workspace_file_picker(vec![WorkspaceFileEntry {
+		absolute_path: path.clone(),
+		relative_path: "example.txt".to_string(),
+	}]);
+	let initial = (1..=30).map(|index| format!("line-{index}")).collect::<Vec<_>>().join("\n");
+	state.set_workspace_file_picker_preview(path.as_path(), initial);
+
+	while state.scroll_workspace_file_picker_preview(1) {}
+	let old_bottom = state.workspace_file_picker().expect("picker should stay open").preview_scroll;
+
+	let appended = (1..=50).map(|index| format!("line-{index}")).collect::<Vec<_>>().join("\n");
+	state.set_workspace_file_picker_preview(path.as_path(), appended);
+	let new_scroll = state.workspace_file_picker().expect("picker should stay open").preview_scroll;
+	assert_eq!(new_scroll, old_bottom);
+	assert!(state.scroll_workspace_file_picker_preview(1));
+}
+
+#[test]
+fn workspace_file_picker_should_toggle_preview_word_wrap_with_ctrl_w() {
+	let workspace_root = PathBuf::from("/workspace");
+	let mut state = RimState::new();
+	state.set_workspace_root(workspace_root.clone());
+	let ports = FilePickerPorts::default();
+	state.open_workspace_file_picker(vec![WorkspaceFileEntry {
+		absolute_path: workspace_root.join("README.md"),
+		relative_path: "README.md".to_string(),
+	}]);
+	assert!(state.picker_preview_word_wrap_enabled());
+
+	let _ = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL))),
+	);
+	assert!(!state.picker_preview_word_wrap_enabled());
+
+	let _ = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL))),
+	);
+	assert!(state.picker_preview_word_wrap_enabled());
+}
+
+#[test]
+fn command_palette_file_preview_should_toggle_wrap_with_ctrl_w() {
+	let workspace_root = PathBuf::from("/workspace");
+	let mut state = RimState::new();
+	state.set_workspace_root(workspace_root.clone());
+	let ports = FilePickerPorts::default();
+
+	state.enter_command_mode();
+	for ch in ['e', ' '] {
+		let _ = state.apply_action(
+			&ports,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))),
+		);
+	}
+	let _ = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::WorkspaceFilesListed {
+			workspace_root: workspace_root.clone(),
+			result:         Ok(vec![workspace_root.join("README.md")]),
+		}),
+	);
+	assert!(state.command_palette_showing_files());
+	assert!(state.picker_preview_word_wrap_enabled());
+
+	let _ = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL))),
+	);
+	assert!(!state.picker_preview_word_wrap_enabled());
+
+	let _ = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL))),
+	);
+	assert!(state.picker_preview_word_wrap_enabled());
 }
 
 #[test]
@@ -1006,13 +1226,174 @@ fn command_mode_should_show_palette_matches_for_command_ids() {
 
 	let palette = state.command_palette().expect("command palette should open in command mode");
 	assert!(!palette.items.is_empty());
-	assert_eq!(palette.items[0].name, "yazi");
+	let item = palette.items[0].as_command().expect("palette should show command items");
+	assert_eq!(item.name, "yazi");
 	assert_eq!(
-		palette.items[0].command_id,
+		item.command_id,
 		crate::command::CommandId::Builtin(crate::command::BuiltinCommand::Picker(
 			crate::command::PickerCommand::Yazi,
 		))
 	);
+}
+
+#[test]
+fn command_mode_should_switch_palette_to_workspace_files_for_optional_path_commands() {
+	let workspace_root = PathBuf::from("/workspace");
+	let mut state = RimState::new();
+	state.set_workspace_root(workspace_root.clone());
+	let ports = FilePickerPorts::default();
+
+	state.enter_command_mode();
+	let _ = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE))),
+	);
+	let _ = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE))),
+	);
+	let _ = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::WorkspaceFilesListed {
+			workspace_root: workspace_root.clone(),
+			result:         Ok(vec![workspace_root.join("README.md"), workspace_root.join("src/main.rs")]),
+		}),
+	);
+
+	let palette = state.command_palette().expect("command palette should stay open");
+	assert!(palette.showing_files);
+	assert!(!palette.loading);
+	let first = palette.items.first().expect("file match should be present");
+	let file = first.as_file().expect("palette should switch to file entries");
+	assert_eq!(file.relative_path, "README.md");
+	assert_eq!(ports.workspace_queries.borrow().as_slice(), &[workspace_root]);
+}
+
+#[test]
+fn command_mode_should_execute_selected_workspace_file_argument_on_enter() {
+	let workspace_root = PathBuf::from("/workspace");
+	let mut state = RimState::new();
+	state.set_workspace_root(workspace_root.clone());
+	let ports = FilePickerPorts::default();
+
+	state.enter_command_mode();
+	for ch in ['e', ' '] {
+		let _ = state.apply_action(
+			&ports,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))),
+		);
+	}
+	let _ = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::WorkspaceFilesListed {
+			workspace_root: workspace_root.clone(),
+			result:         Ok(vec![workspace_root.join("README.md"), workspace_root.join("src/main.rs")]),
+		}),
+	);
+	let _ = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))),
+	);
+	let _ = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
+	);
+
+	assert!(state.command_palette().is_none());
+	assert_eq!(ports.open_requests.borrow().len(), 1);
+	assert_eq!(ports.file_loads.borrow().len(), 1);
+	assert_eq!(ports.open_requests.borrow()[0].1, workspace_root.join("src/main.rs"));
+}
+
+#[test]
+fn command_mode_should_enqueue_and_update_file_preview_for_edit_candidates() {
+	let workspace_root = PathBuf::from("/workspace");
+	let mut state = RimState::new();
+	state.set_workspace_root(workspace_root.clone());
+	let ports = FilePickerPorts::default();
+
+	state.enter_command_mode();
+	for ch in ['e', ' '] {
+		let _ = state.apply_action(
+			&ports,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))),
+		);
+	}
+	let _ = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::WorkspaceFilesListed {
+			workspace_root: workspace_root.clone(),
+			result:         Ok(vec![workspace_root.join("README.md"), workspace_root.join("src/main.rs")]),
+		}),
+	);
+
+	assert_eq!(ports.preview_requests.borrow().as_slice(), &[workspace_root.join("README.md")]);
+	let palette = state.command_palette().expect("command palette should stay open");
+	assert!(palette.preview_lines.is_empty());
+
+	let _ = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::WorkspaceFilePreviewLoaded {
+			path:   workspace_root.join("README.md"),
+			result: Ok("# README".to_string()),
+		}),
+	);
+	let palette = state.command_palette().expect("command palette should stay open");
+	assert_eq!(palette.preview_title, "README.md");
+	assert_eq!(palette.preview_lines, vec!["# README".to_string()]);
+
+	let _ = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))),
+	);
+	assert_eq!(
+		ports.preview_requests.borrow().as_slice(),
+		&[workspace_root.join("README.md"), workspace_root.join("src/main.rs")]
+	);
+}
+
+#[test]
+fn command_mode_file_preview_should_scroll_with_ctrl_e_and_ctrl_y() {
+	let workspace_root = PathBuf::from("/workspace");
+	let mut state = RimState::new();
+	state.set_workspace_root(workspace_root.clone());
+	let ports = FilePickerPorts::default();
+
+	state.enter_command_mode();
+	for ch in ['e', ' '] {
+		let _ = state.apply_action(
+			&ports,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))),
+		);
+	}
+	let _ = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::WorkspaceFilesListed {
+			workspace_root: workspace_root.clone(),
+			result:         Ok(vec![workspace_root.join("README.md")]),
+		}),
+	);
+	let _ = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::WorkspaceFilePreviewLoaded {
+			path:   workspace_root.join("README.md"),
+			result: Ok("1\n2\n3".to_string()),
+		}),
+	);
+
+	let _ = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL))),
+	);
+	let palette = state.command_palette().expect("command palette should stay open");
+	assert_eq!(palette.preview_scroll, 1);
+
+	let _ = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL))),
+	);
+	let palette = state.command_palette().expect("command palette should stay open");
+	assert_eq!(palette.preview_scroll, 0);
 }
 
 #[test]
@@ -1144,4 +1525,129 @@ fn workspace_file_picker_should_open_selected_file_on_enter() {
 	assert_eq!(ports.file_loads.borrow().len(), 1);
 	assert_eq!(ports.open_requests.borrow()[0].1, workspace_root.join("src/main.rs"));
 	assert_eq!(ports.file_loads.borrow()[0].1, workspace_root.join("src/main.rs"));
+}
+
+#[test]
+fn workspace_file_picker_should_preserve_selected_file_after_refresh_if_it_still_exists() {
+	let workspace_root = PathBuf::from("/workspace");
+	let mut state = RimState::new();
+	state.set_workspace_root(workspace_root.clone());
+	let ports = FilePickerPorts::default();
+
+	state.enter_command_mode();
+	for ch in "files".chars() {
+		let _ = state.apply_action(
+			&ports,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))),
+		);
+	}
+	let _ = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
+	);
+	let _ = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::WorkspaceFilesListed {
+			workspace_root: workspace_root.clone(),
+			result:         Ok(vec![
+				workspace_root.join("README.md"),
+				workspace_root.join("src/main.rs"),
+				workspace_root.join("src/lib.rs"),
+			]),
+		}),
+	);
+	let _ = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))),
+	);
+	assert_eq!(
+		state.selected_workspace_file_picker_path().expect("selected file should exist"),
+		workspace_root.join("src/lib.rs").as_path()
+	);
+
+	let _ = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::WorkspaceFilesListed {
+			workspace_root,
+			result: Ok(vec![
+				PathBuf::from("/workspace/README.md"),
+				PathBuf::from("/workspace/docs/guide.md"),
+				PathBuf::from("/workspace/src/lib.rs"),
+				PathBuf::from("/workspace/src/main.rs"),
+			]),
+		}),
+	);
+
+	assert_eq!(
+		state.selected_workspace_file_picker_path().expect("selected file should still exist"),
+		PathBuf::from("/workspace/src/lib.rs").as_path()
+	);
+}
+
+#[test]
+fn workspace_file_picker_should_restore_selected_file_after_transient_removal() {
+	let workspace_root = PathBuf::from("/workspace");
+	let mut state = RimState::new();
+	state.set_workspace_root(workspace_root.clone());
+	let ports = FilePickerPorts::default();
+
+	state.enter_command_mode();
+	for ch in "files".chars() {
+		let _ = state.apply_action(
+			&ports,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))),
+		);
+	}
+	let _ = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
+	);
+	let _ = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::WorkspaceFilesListed {
+			workspace_root: workspace_root.clone(),
+			result:         Ok(vec![
+				workspace_root.join("README.md"),
+				workspace_root.join("src/lib.rs"),
+				workspace_root.join("src/main.rs"),
+			]),
+		}),
+	);
+	let _ = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))),
+	);
+	assert_eq!(
+		state.selected_workspace_file_picker_path().expect("selected file should exist"),
+		workspace_root.join("src/lib.rs").as_path()
+	);
+
+	// Simulate atomic-save style transient disappearance.
+	let _ = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::WorkspaceFilesListed {
+			workspace_root: workspace_root.clone(),
+			result:         Ok(vec![workspace_root.join("README.md"), workspace_root.join("src/main.rs")]),
+		}),
+	);
+	assert_eq!(
+		state.selected_workspace_file_picker_path().expect("fallback selection should exist"),
+		workspace_root.join("src/main.rs").as_path()
+	);
+
+	let _ = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::WorkspaceFilesListed {
+			workspace_root,
+			result: Ok(vec![
+				PathBuf::from("/workspace/README.md"),
+				PathBuf::from("/workspace/src/lib.rs"),
+				PathBuf::from("/workspace/src/main.rs"),
+			]),
+		}),
+	);
+	assert_eq!(
+		state.selected_workspace_file_picker_path().expect("selected file should be restored"),
+		PathBuf::from("/workspace/src/lib.rs").as_path()
+	);
 }

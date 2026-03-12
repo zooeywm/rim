@@ -26,9 +26,8 @@ impl StorageIo for AppPorts<'_> {
 	fn enqueue_load_workspace_file_preview(
 		&self,
 		path: PathBuf,
-		max_bytes: usize,
 	) -> Result<(), StorageIoError> {
-		StorageIoImpl::inj_ref(self.storage_io).enqueue_load_workspace_file_preview(path, max_bytes)
+		StorageIoImpl::inj_ref(self.storage_io).enqueue_load_workspace_file_preview(path)
 	}
 
 	fn enqueue_save(&self, buffer_id: BufferId, path: PathBuf, text: String) -> Result<(), StorageIoError> {
@@ -120,5 +119,9 @@ impl FileWatcher for AppPorts<'_> {
 
 	fn enqueue_unwatch(&self, buffer_id: BufferId) -> Result<(), FileWatcherError> {
 		FileWatcherImpl::inj_ref(self.file_watcher).enqueue_unwatch(buffer_id)
+	}
+
+	fn enqueue_watch_workspace_root(&self, path: PathBuf) -> Result<(), FileWatcherError> {
+		FileWatcherImpl::inj_ref(self.file_watcher).enqueue_watch_workspace_root(path)
 	}
 }

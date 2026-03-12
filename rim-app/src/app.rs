@@ -72,6 +72,15 @@ impl App {
 				tracing::error!("watch config failed: path={} error={}", config_path.display(), err);
 			}
 		}
+		if let Err(err) =
+			self.file_watcher.enqueue_watch_workspace_root(self.state.workspace_root().to_path_buf())
+		{
+			tracing::error!(
+				"watch workspace root failed: path={} error={}",
+				self.state.workspace_root().display(),
+				err
+			);
+		}
 	}
 
 	pub fn open_startup_files(&mut self, file_paths: Vec<PathBuf>) {

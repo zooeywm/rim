@@ -4,7 +4,10 @@ mod visual;
 
 use ropey::Rope;
 
-use super::{CursorState, PendingBlockInsert, RimState, rope_ends_with_newline, rope_line_count, rope_line_len_chars, rope_line_without_newline};
+use super::{
+	CursorState, PendingBlockInsert, RimState, rope_ends_with_newline, rope_line_count, rope_line_len_chars,
+	rope_line_without_newline,
+};
 
 impl RimState {
 	fn active_buffer_cursor_mut(&mut self) -> Option<&mut CursorState> {
@@ -29,7 +32,9 @@ fn split_lines_owned(text: &str) -> Vec<String> {
 	lines
 }
 
-fn rope_editable_line_count(text: &Rope) -> usize { text.len_lines().max(1) }
+fn rope_editable_line_count(text: &Rope) -> usize {
+	text.len_lines().max(1)
+}
 
 fn rope_editable_line_len_chars(text: &Rope, row_idx: usize) -> Option<usize> {
 	if row_idx >= rope_editable_line_count(text) {

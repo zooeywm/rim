@@ -21,11 +21,11 @@ pub(super) fn handle_file_transfer_request(
 				}
 			});
 		}
-		StorageIoRequest::LoadWorkspaceFilePreview { path, max_bytes } => {
+		StorageIoRequest::LoadWorkspaceFilePreview { path } => {
 			spawn_file_action(in_flight, event_tx, "WorkspaceFilePreviewLoaded", async move {
 				FileAction::WorkspaceFilePreviewLoaded {
 					path:   path.clone(),
-					result: load_workspace_file_preview(path, max_bytes).await,
+					result: load_workspace_file_preview(path).await,
 				}
 			});
 		}

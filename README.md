@@ -221,6 +221,7 @@ key_hints_max_height = 36
 keymap = [
   { on = "H", run = "core.buffer.next", desc = "Switch to next buffer" },
   { on = "<leader>wv", run = "core.window.split_vertical", desc = "Split vertically" },
+  { on = "<leader>vw", run = "core.view.toggle_word_wrap", desc = "Toggle word wrap" },
   { on = "<F1>", run = "core.help.keymap", desc = "Show current mode key hints" },
   { on = ["<leader>wh", "<leader>w-"], run = "core.window.split_horizontal", desc = "Split horizontally" },
 ]
@@ -265,6 +266,9 @@ keymap = [
   { on = "<Down>", run = "core.command_palette.next", desc = "Select next command candidate" },
   { on = "<C-p>", run = "core.command_palette.prev", desc = "Select previous command candidate" },
   { on = "<C-n>", run = "core.command_palette.next", desc = "Select next command candidate" },
+  { on = "<C-e>", run = "core.command_palette.preview_scroll_down", desc = "Scroll file preview down" },
+  { on = "<C-y>", run = "core.command_palette.preview_scroll_up", desc = "Scroll file preview up" },
+  { on = "<C-w>", run = "core.picker.toggle_preview_word_wrap", desc = "Toggle preview word wrap" },
 ]
 
 [overlay.picker]
@@ -275,6 +279,9 @@ keymap = [
   { on = "<Down>", run = "core.picker.next", desc = "Select next file" },
   { on = "<C-p>", run = "core.picker.prev", desc = "Select previous file" },
   { on = "<C-n>", run = "core.picker.next", desc = "Select next file" },
+  { on = "<C-e>", run = "core.picker.preview_scroll_down", desc = "Scroll preview down" },
+  { on = "<C-y>", run = "core.picker.preview_scroll_up", desc = "Scroll preview up" },
+  { on = "<C-w>", run = "core.picker.toggle_preview_word_wrap", desc = "Toggle preview word wrap" },
 ]
 
 [command]

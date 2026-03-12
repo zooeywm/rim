@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use super::common::set_active_buffer_text;
-use crate::state::{BufferEditSnapshot, BufferHistoryEntry, BufferSwitchDirection, CursorState, RimState, SplitAxis};
+use crate::state::{
+	BufferEditSnapshot, BufferHistoryEntry, BufferSwitchDirection, CursorState, RimState, SplitAxis,
+};
 
 #[test]
 fn workspace_session_snapshot_should_roundtrip_tabs_windows_and_views() {
@@ -42,15 +44,18 @@ fn workspace_session_snapshot_should_roundtrip_tabs_windows_and_views() {
 		let window = state.windows.get_mut(active_window_id).expect("active window should exist");
 		window.cursor = CursorState { row: 2, col: 2 };
 	}
-	state.push_buffer_history_entry(scratch, BufferHistoryEntry {
-		edits:         vec![BufferEditSnapshot {
-			start_byte:    0,
-			deleted_text:  String::new(),
-			inserted_text: "scratch".to_string(),
-		}],
-		before_cursor: CursorState { row: 1, col: 1 },
-		after_cursor:  CursorState { row: 1, col: 8 },
-	});
+	state.push_buffer_history_entry(
+		scratch,
+		BufferHistoryEntry {
+			edits: vec![BufferEditSnapshot {
+				start_byte: 0,
+				deleted_text: String::new(),
+				inserted_text: "scratch".to_string(),
+			}],
+			before_cursor: CursorState { row: 1, col: 1 },
+			after_cursor: CursorState { row: 1, col: 8 },
+		},
+	);
 
 	let snapshot = state.workspace_session_snapshot();
 	assert!(snapshot.buffers.iter().any(|buffer| buffer.path.is_none() && buffer.history.is_some()));

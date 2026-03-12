@@ -31,6 +31,7 @@ pub enum FilePickerError {
 pub trait FileWatcher {
 	fn enqueue_watch(&self, buffer_id: BufferId, path: PathBuf) -> Result<(), FileWatcherError>;
 	fn enqueue_unwatch(&self, buffer_id: BufferId) -> Result<(), FileWatcherError>;
+	fn enqueue_watch_workspace_root(&self, _path: PathBuf) -> Result<(), FileWatcherError> { Ok(()) }
 }
 
 /// Host capability for showing a native file picker and returning one selected
@@ -60,7 +61,6 @@ pub trait StorageIo {
 	fn enqueue_load_workspace_file_preview(
 		&self,
 		_path: PathBuf,
-		_max_bytes: usize,
 	) -> Result<(), StorageIoError> {
 		Ok(())
 	}
