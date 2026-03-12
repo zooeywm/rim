@@ -188,6 +188,7 @@ Workspace session rules:
 `rim` now treats both built-in actions and future plugin actions as commands.
 
 - Built-in commands are registered under stable command IDs such as `core.quit`, `core.save`, and `core.picker.yazi`
+- Built-in command metadata is generated from grouped enums; command IDs, categories, argument kinds, and descriptions are no longer maintained as duplicated string tables
 - Future plugins can register additional command IDs under their own namespace
 - Mode key bindings, overlay key bindings, and command-line aliases are all resolved through the same command registry
 
@@ -293,6 +294,7 @@ Rules:
 - A single string means one complete shortcut sequence such as `"<leader>wv"`
 - A string array means multiple complete shortcuts bound to the same command
 - `run` can be a command invocation such as `quit` or `quit!`, or a command ID such as `core.quit_all`
+- `run` stays serialized as a string in TOML, but is deserialized into a typed runtime directive before keymap and alias resolution
 - `desc` is part of the runtime model and hot-reloads together with `run`
 - `command.commands` defines command-line aliases entered after `:`
 - `mode.*.keymap` and `overlay.*.keymap` are command-oriented overrides: configured commands replace their built-in bindings inside that scope, while untouched commands keep built-in defaults

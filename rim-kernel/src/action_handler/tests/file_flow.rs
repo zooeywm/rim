@@ -285,7 +285,7 @@ fn configured_command_alias_should_execute_registered_command() {
 		command: CommandAliasSection {
 			commands: vec![CommandAliasConfig {
 				name: "qq".to_string(),
-				run:  "core.quit_all".to_string(),
+				run:  "core.quit_all".into(),
 				desc: Some("custom".to_string()),
 			}],
 		},

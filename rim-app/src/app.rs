@@ -279,7 +279,7 @@ impl FilePicker for AppPorts<'_> {
 
 #[cfg(test)]
 mod tests {
-	use rim_kernel::{command::{BindingMatch, BuiltinCommand, CommandConfigFile, CommandKeymapSection, CommandTarget, KeyBindingOn, KeymapBindingConfig, ModeKeymapSections}, state::{KeymapScope, NormalSequenceKey, RimState}};
+	use rim_kernel::{command::{BindingMatch, BuiltinCommand, CommandConfigFile, CommandKeymapSection, CommandTarget, CursorCommand, KeyBindingOn, KeymapBindingConfig, ModeKeymapSections}, state::{KeymapScope, NormalSequenceKey, RimState}};
 
 	use super::App;
 
@@ -291,7 +291,7 @@ mod tests {
 				normal: CommandKeymapSection {
 					keymap: vec![KeymapBindingConfig {
 						on:   KeyBindingOn::single("go"),
-						run:  "core.cursor.file_start".to_string(),
+						run:  "core.cursor.file_start".into(),
 						desc: Some("custom".to_string()),
 					}],
 				},
@@ -315,7 +315,7 @@ mod tests {
 				NormalSequenceKey::Char('g'),
 				NormalSequenceKey::Char('g')
 			]),
-			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::MoveFileStart))
+			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::Cursor(CursorCommand::FileStart)))
 		);
 		assert_eq!(
 			state.command_registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[
@@ -334,7 +334,7 @@ mod tests {
 				normal: CommandKeymapSection {
 					keymap: vec![KeymapBindingConfig {
 						on:   KeyBindingOn::single("gg"),
-						run:  "core.cursor.file_start".to_string(),
+						run:  "core.cursor.file_start".into(),
 						desc: Some("Jump to beginning".to_string()),
 					}],
 				},

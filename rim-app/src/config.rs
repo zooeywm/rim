@@ -225,10 +225,10 @@ fn render_keymap_binding(binding: &KeymapBindingConfig) -> String {
 		Some(desc) => format!(
 			"{{ on = {}, run = {}, desc = {} }}",
 			on,
-			toml_string_literal(binding.run.as_str()),
+			toml_string_literal(binding.run.render().as_str()),
 			toml_string_literal(desc.as_str())
 		),
-		None => format!("{{ on = {}, run = {} }}", on, toml_string_literal(binding.run.as_str())),
+		None => format!("{{ on = {}, run = {} }}", on, toml_string_literal(binding.run.render().as_str())),
 	}
 }
 
@@ -237,13 +237,13 @@ fn render_command_alias(command: &CommandAliasConfig) -> String {
 		Some(desc) => format!(
 			"{{ name = {}, run = {}, desc = {} }}",
 			toml_string_literal(command.name.as_str()),
-			toml_string_literal(command.run.as_str()),
+			toml_string_literal(command.run.render().as_str()),
 			toml_string_literal(desc.as_str())
 		),
 		None => format!(
 			"{{ name = {}, run = {} }}",
 			toml_string_literal(command.name.as_str()),
-			toml_string_literal(command.run.as_str())
+			toml_string_literal(command.run.render().as_str())
 		),
 	}
 }

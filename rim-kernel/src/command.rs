@@ -1,181 +1,527 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use frizbee::{Config as FrizbeeConfig, match_list_indices};
+use rim_command_macros::{BuiltinCommandGroup, BuiltinCommandRoot};
 use serde::{Deserialize, Serialize};
 
 use crate::{action::{AppAction, BufferAction, EditorAction, LayoutAction, TabAction, WindowAction}, state::{FloatingWindowLine, KeymapScope, NormalSequenceKey}};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum BuiltinCommand {
+pub trait BuiltinCommandGroupMeta: Copy {
+	fn command_segment(self) -> &'static str;
+	fn description(self) -> &'static str;
+	fn arg_kind(self) -> CommandArgKind;
+	fn all_commands() -> &'static [Self];
+}
+
+pub trait BuiltinCommandRootMeta: Copy {
+	fn id(self) -> String;
+	fn category(self) -> BuiltinCommandCategory;
+	fn description(self) -> &'static str;
+	fn arg_kind(self) -> CommandArgKind;
+	fn all_commands() -> Vec<Self>;
+	fn from_id(id: &str) -> Option<Self>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BuiltinCommandCategory {
+	Window,
+	Tab,
+	Buffer,
+	Mode,
+	Edit,
+	Cursor,
+	View,
+	Help,
+	Command,
+	CommandPalette,
+	Picker,
+	Overlay,
+	Insert,
+	Visual,
+}
+
+impl BuiltinCommandCategory {
+	pub fn label(self) -> &'static str {
+		match self {
+			Self::Window => "window",
+			Self::Tab => "tab",
+			Self::Buffer => "buffer",
+			Self::Mode => "mode",
+			Self::Edit => "edit",
+			Self::Cursor => "cursor",
+			Self::View => "view",
+			Self::Help => "help",
+			Self::Command => "command",
+			Self::CommandPalette => "command_palette",
+			Self::Picker => "picker",
+			Self::Overlay => "overlay",
+			Self::Insert => "insert",
+			Self::Visual => "visual",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandGroup)]
+pub enum WindowCommand {
+	/// Split vertically
 	SplitVertical,
+	/// Split horizontally
 	SplitHorizontal,
-	TabNew,
-	TabCloseCurrent,
-	TabSwitchPrev,
-	TabSwitchNext,
-	BufferCloseActive,
-	BufferNewEmpty,
-	DeleteCurrentLineToSlot,
-	EnterInsert,
-	AppendInsert,
-	OpenLineBelowInsert,
-	OpenLineAboveInsert,
-	EnterCommandMode,
-	EnterVisualMode,
-	EnterVisualLineMode,
-	EnterVisualBlockMode,
+	/// Focus left window
+	FocusLeft,
+	/// Focus down window
+	FocusDown,
+	/// Focus up window
+	FocusUp,
+	/// Focus right window
+	FocusRight,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandGroup)]
+pub enum TabCommand {
+	/// Open a new tab
+	New,
+	/// Close current tab
+	CloseCurrent,
+	/// Previous tab
+	Prev,
+	/// Next tab
+	Next,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandGroup)]
+pub enum BufferCommand {
+	/// Close active buffer
+	Close,
+	/// Create an empty buffer
+	NewEmpty,
+	/// Delete current line
+	DeleteLine,
+	/// Previous buffer
+	Prev,
+	/// Next buffer
+	Next,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandGroup)]
+pub enum ModeCommand {
+	/// Enter insert mode
+	Insert,
+	/// Append and enter insert mode
+	Append,
+	/// Open line below and enter insert mode
+	OpenBelow,
+	/// Open line above and enter insert mode
+	OpenAbove,
+	/// Enter command mode
+	Command,
+	/// Enter visual mode
+	Visual,
+	/// Enter visual line mode
+	VisualLine,
+	/// Enter visual block mode
+	VisualBlock,
+	/// Return to normal mode
+	Normal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandGroup)]
+pub enum EditCommand {
+	/// Undo
 	Undo,
+	/// Redo
 	Redo,
-	MoveLeft,
-	MoveLineStart,
-	MoveLineEnd,
-	MoveDown,
-	MoveUp,
-	MoveRight,
-	MoveFileStart,
-	MoveFileEnd,
+	/// Join line below
 	JoinLineBelow,
-	CutCharToSlot,
-	PasteSlotAfterCursor,
-	BufferSwitchPrev,
-	BufferSwitchNext,
-	WindowFocusLeft,
-	WindowFocusDown,
-	WindowFocusUp,
-	WindowFocusRight,
-	ScrollViewDown,
-	ScrollViewUp,
-	ScrollViewHalfPageDown,
-	ScrollViewHalfPageUp,
-	ShowKeyHints,
-	KeyHintScrollUp,
-	KeyHintScrollDown,
-	KeyHintHalfPageUp,
-	KeyHintHalfPageDown,
-	EnterNormalMode,
-	CommandSubmit,
-	CommandBackspace,
-	CommandPaletteSelectPrev,
-	CommandPaletteSelectNext,
-	PickerSelectPrev,
-	PickerSelectNext,
-	PickerConfirm,
-	OverlayClose,
-	OverlayBack,
-	InsertNewline,
-	InsertBackspace,
-	InsertMoveLeft,
-	InsertMoveDown,
-	InsertMoveUp,
-	InsertMoveRight,
-	InsertTab,
+	/// Cut current char
+	CutChar,
+	/// Paste slot after cursor
+	Paste,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandGroup)]
+pub enum CursorCommand {
+	/// Move left
+	Left,
+	/// Move to line start
+	LineStart,
+	/// Move to line end
+	LineEnd,
+	/// Move down
+	Down,
+	/// Move up
+	Up,
+	/// Move right
+	Right,
+	/// Move to file start
+	FileStart,
+	/// Move to file end
+	FileEnd,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandGroup)]
+pub enum ViewCommand {
+	/// Scroll down
+	ScrollDown,
+	/// Scroll up
+	ScrollUp,
+	/// Scroll down half page
+	ScrollHalfPageDown,
+	/// Scroll up half page
+	ScrollHalfPageUp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandGroup)]
+pub enum HelpCommand {
+	/// Show current mode key hints
+	Keymap,
+	/// Scroll key hint window up
+	KeymapScrollUp,
+	/// Scroll key hint window down
+	KeymapScrollDown,
+	/// Scroll key hint window up half page
+	KeymapHalfPageUp,
+	/// Scroll key hint window down half page
+	KeymapHalfPageDown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandGroup)]
+pub enum CommandPaletteCommand {
+	/// Select previous command candidate
+	Prev,
+	/// Select next command candidate
+	Next,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandGroup)]
+pub enum PickerCommand {
+	/// Select previous picker item
+	Prev,
+	/// Select next picker item
+	Next,
+	/// Confirm picker selection
+	Confirm,
+	/// Open the workspace file picker
+	Files,
+	/// Open the yazi picker
+	Yazi,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandGroup)]
+pub enum OverlayCommand {
+	/// Close active overlay
+	Close,
+	/// Go back inside active overlay
+	Back,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandGroup)]
+pub enum InsertCommand {
+	/// Insert newline
+	Newline,
+	/// Delete previous character in insert mode
+	Backspace,
+	/// Move left in insert mode
+	Left,
+	/// Move down in insert mode
+	Down,
+	/// Move up in insert mode
+	Up,
+	/// Move right in insert mode
+	Right,
+	/// Insert tab
+	Tab,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandGroup)]
+pub enum VisualCommand {
+	/// Exit visual mode
+	Exit,
+	/// Delete visual selection
+	Delete,
+	/// Yank visual selection
+	Yank,
+	/// Replace visual selection with slot
+	Paste,
+	/// Change visual selection
+	Change,
+	/// Insert before visual block
+	BlockInsertBefore,
+	/// Append after visual block
+	BlockInsertAfter,
+	/// Move left in visual mode
+	Left,
+	/// Move right in visual mode
+	Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandGroup)]
+pub enum CommandCommand {
+	/// Quit current scope
 	Quit,
+	/// Force quit current scope
 	QuitForce,
+	/// Quit application
 	QuitAll,
+	/// Force quit application
 	QuitAllForce,
+	/// Save current buffer
+	#[command(arg = OptionalPath)]
 	Save,
+	/// Force save current buffer
+	#[command(arg = OptionalPath)]
 	SaveForce,
+	/// Save all file-backed buffers
 	SaveAll,
+	/// Save current buffer and quit
+	#[command(arg = OptionalPath)]
 	SaveAndQuit,
+	/// Force save current buffer and quit
+	#[command(arg = OptionalPath)]
 	SaveAndQuitForce,
+	/// Save all file-backed buffers and quit
 	SaveAllAndQuit,
+	/// Force save all file-backed buffers and quit
 	SaveAllAndQuitForce,
+	/// Reload current buffer
+	#[command(arg = OptionalPath)]
 	Reload,
+	/// Force reload current buffer
+	#[command(arg = OptionalPath)]
 	ReloadForce,
-	OpenWorkspaceFilePicker,
-	OpenPickerYazi,
-	VisualExit,
-	VisualDelete,
-	VisualYank,
-	VisualPaste,
-	VisualChange,
-	VisualBlockInsertBefore,
-	VisualBlockInsertAfter,
-	VisualMoveLeft,
-	VisualMoveRight,
+	/// Execute current command input
+	Submit,
+	/// Delete previous command character
+	Backspace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandRoot)]
+pub enum BuiltinCommand {
+	Window(WindowCommand),
+	Tab(TabCommand),
+	Buffer(BufferCommand),
+	Mode(ModeCommand),
+	Edit(EditCommand),
+	Cursor(CursorCommand),
+	View(ViewCommand),
+	Help(HelpCommand),
+	#[command(namespace = "")]
+	Command(CommandCommand),
+	CommandPalette(CommandPaletteCommand),
+	Picker(PickerCommand),
+	Overlay(OverlayCommand),
+	Insert(InsertCommand),
+	Visual(VisualCommand),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CommandId {
+	Builtin(BuiltinCommand),
+	Plugin(String),
+}
+
+impl CommandId {
+	pub fn display_text(&self) -> String {
+		match self {
+			Self::Builtin(command) => command.id(),
+			Self::Plugin(id) => id.clone(),
+		}
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CommandCategory {
+	Builtin(BuiltinCommandCategory),
+	Plugin,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CommandCategoryInfo {
+	pub kind:  CommandCategory,
+	pub label: String,
+}
+
+impl CommandCategoryInfo {
+	pub fn builtin(category: BuiltinCommandCategory) -> Self {
+		Self { kind: CommandCategory::Builtin(category), label: category.label().to_string() }
+	}
+
+	pub fn plugin(label: impl Into<String>) -> Self {
+		Self { kind: CommandCategory::Plugin, label: label.into() }
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunDirective {
+	Builtin(BuiltinCommand),
+	PluginInvocation { plugin_name: String, argument: Option<String> },
+	Unresolved(String),
+}
+
+impl RunDirective {
+	pub fn parse(text: &str) -> Self {
+		let trimmed = text.trim();
+		if let Some(command) = BuiltinCommand::from_id(trimmed) {
+			return Self::Builtin(command);
+		}
+		if let Some(payload) = trimmed.strip_prefix("plugin ") {
+			let payload = payload.trim();
+			if payload.is_empty() {
+				return Self::Unresolved(trimmed.to_string());
+			}
+			let mut segments = payload.split_whitespace();
+			let plugin_name = segments.next().expect("plugin command is non-empty").to_string();
+			let tail = segments.collect::<Vec<_>>().join(" ");
+			let argument = if tail.is_empty() { None } else { Some(tail) };
+			return Self::PluginInvocation { plugin_name, argument };
+		}
+		Self::Unresolved(trimmed.to_string())
+	}
+
+	pub fn render(&self) -> String {
+		match self {
+			Self::Builtin(command) => command.id(),
+			Self::PluginInvocation { plugin_name, argument } => match argument {
+				Some(argument) => format!("plugin {} {}", plugin_name, argument),
+				None => format!("plugin {}", plugin_name),
+			},
+			Self::Unresolved(raw) => raw.clone(),
+		}
+	}
+}
+
+impl From<&str> for RunDirective {
+	fn from(value: &str) -> Self { Self::parse(value) }
+}
+
+impl From<String> for RunDirective {
+	fn from(value: String) -> Self { Self::parse(value.as_str()) }
+}
+
+impl Serialize for RunDirective {
+	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+	where S: serde::Serializer {
+		serializer.serialize_str(self.render().as_str())
+	}
+}
+
+impl<'de> Deserialize<'de> for RunDirective {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where D: serde::Deserializer<'de> {
+		let raw = String::deserialize(deserializer)?;
+		Ok(Self::parse(raw.as_str()))
+	}
 }
 
 impl BuiltinCommand {
 	pub fn normal_mode_action(&self) -> Option<AppAction> {
 		match self {
-			Self::SplitVertical => Some(AppAction::Layout(LayoutAction::SplitVertical)),
-			Self::SplitHorizontal => Some(AppAction::Layout(LayoutAction::SplitHorizontal)),
-			Self::TabNew => Some(AppAction::Tab(TabAction::New)),
-			Self::TabCloseCurrent => Some(AppAction::Tab(TabAction::CloseCurrent)),
-			Self::TabSwitchPrev => Some(AppAction::Tab(TabAction::SwitchPrev)),
-			Self::TabSwitchNext => Some(AppAction::Tab(TabAction::SwitchNext)),
-			Self::BufferCloseActive => Some(AppAction::Editor(EditorAction::CloseActiveBuffer)),
-			Self::BufferNewEmpty => Some(AppAction::Editor(EditorAction::NewEmptyBuffer)),
-			Self::DeleteCurrentLineToSlot => Some(AppAction::Editor(EditorAction::DeleteCurrentLineToSlot)),
-			Self::EnterInsert => Some(AppAction::Editor(EditorAction::EnterInsert)),
-			Self::AppendInsert => Some(AppAction::Editor(EditorAction::AppendInsert)),
-			Self::OpenLineBelowInsert => Some(AppAction::Editor(EditorAction::OpenLineBelowInsert)),
-			Self::OpenLineAboveInsert => Some(AppAction::Editor(EditorAction::OpenLineAboveInsert)),
-			Self::EnterCommandMode => Some(AppAction::Editor(EditorAction::EnterCommandMode)),
-			Self::EnterVisualMode => Some(AppAction::Editor(EditorAction::EnterVisualMode)),
-			Self::EnterVisualLineMode => Some(AppAction::Editor(EditorAction::EnterVisualLineMode)),
-			Self::EnterVisualBlockMode => Some(AppAction::Editor(EditorAction::EnterVisualBlockMode)),
-			Self::Undo => Some(AppAction::Editor(EditorAction::Undo)),
-			Self::Redo => Some(AppAction::Editor(EditorAction::Redo)),
-			Self::MoveLeft => Some(AppAction::Editor(EditorAction::MoveLeft)),
-			Self::MoveLineStart => Some(AppAction::Editor(EditorAction::MoveLineStart)),
-			Self::MoveLineEnd => Some(AppAction::Editor(EditorAction::MoveLineEnd)),
-			Self::MoveDown => Some(AppAction::Editor(EditorAction::MoveDown)),
-			Self::MoveUp => Some(AppAction::Editor(EditorAction::MoveUp)),
-			Self::MoveRight => Some(AppAction::Editor(EditorAction::MoveRight)),
-			Self::MoveFileStart => Some(AppAction::Editor(EditorAction::MoveFileStart)),
-			Self::MoveFileEnd => Some(AppAction::Editor(EditorAction::MoveFileEnd)),
-			Self::JoinLineBelow => Some(AppAction::Editor(EditorAction::JoinLineBelow)),
-			Self::CutCharToSlot => Some(AppAction::Editor(EditorAction::CutCharToSlot)),
-			Self::PasteSlotAfterCursor => Some(AppAction::Editor(EditorAction::PasteSlotAfterCursor)),
-			Self::BufferSwitchPrev => Some(AppAction::Buffer(BufferAction::SwitchPrev)),
-			Self::BufferSwitchNext => Some(AppAction::Buffer(BufferAction::SwitchNext)),
-			Self::WindowFocusLeft => Some(AppAction::Window(WindowAction::FocusLeft)),
-			Self::WindowFocusDown => Some(AppAction::Window(WindowAction::FocusDown)),
-			Self::WindowFocusUp => Some(AppAction::Window(WindowAction::FocusUp)),
-			Self::WindowFocusRight => Some(AppAction::Window(WindowAction::FocusRight)),
-			Self::ScrollViewDown => Some(AppAction::Editor(EditorAction::ScrollViewDown)),
-			Self::ScrollViewUp => Some(AppAction::Editor(EditorAction::ScrollViewUp)),
-			Self::ScrollViewHalfPageDown => Some(AppAction::Editor(EditorAction::ScrollViewHalfPageDown)),
-			Self::ScrollViewHalfPageUp => Some(AppAction::Editor(EditorAction::ScrollViewHalfPageUp)),
-			Self::ShowKeyHints => Some(AppAction::Editor(EditorAction::ShowKeyHints)),
-			Self::KeyHintScrollUp => Some(AppAction::Editor(EditorAction::ScrollKeyHintsUp)),
-			Self::KeyHintScrollDown => Some(AppAction::Editor(EditorAction::ScrollKeyHintsDown)),
-			Self::KeyHintHalfPageUp => Some(AppAction::Editor(EditorAction::ScrollKeyHintsHalfPageUp)),
-			Self::KeyHintHalfPageDown => Some(AppAction::Editor(EditorAction::ScrollKeyHintsHalfPageDown)),
+			Self::Window(WindowCommand::SplitVertical) => Some(AppAction::Layout(LayoutAction::SplitVertical)),
+			Self::Window(WindowCommand::SplitHorizontal) => Some(AppAction::Layout(LayoutAction::SplitHorizontal)),
+			Self::Tab(TabCommand::New) => Some(AppAction::Tab(TabAction::New)),
+			Self::Tab(TabCommand::CloseCurrent) => Some(AppAction::Tab(TabAction::CloseCurrent)),
+			Self::Tab(TabCommand::Prev) => Some(AppAction::Tab(TabAction::SwitchPrev)),
+			Self::Tab(TabCommand::Next) => Some(AppAction::Tab(TabAction::SwitchNext)),
+			Self::Buffer(BufferCommand::Close) => Some(AppAction::Editor(EditorAction::CloseActiveBuffer)),
+			Self::Buffer(BufferCommand::NewEmpty) => Some(AppAction::Editor(EditorAction::NewEmptyBuffer)),
+			Self::Buffer(BufferCommand::DeleteLine) => {
+				Some(AppAction::Editor(EditorAction::DeleteCurrentLineToSlot))
+			}
+			Self::Mode(ModeCommand::Insert) => Some(AppAction::Editor(EditorAction::EnterInsert)),
+			Self::Mode(ModeCommand::Append) => Some(AppAction::Editor(EditorAction::AppendInsert)),
+			Self::Mode(ModeCommand::OpenBelow) => Some(AppAction::Editor(EditorAction::OpenLineBelowInsert)),
+			Self::Mode(ModeCommand::OpenAbove) => Some(AppAction::Editor(EditorAction::OpenLineAboveInsert)),
+			Self::Mode(ModeCommand::Command) => Some(AppAction::Editor(EditorAction::EnterCommandMode)),
+			Self::Mode(ModeCommand::Visual) => Some(AppAction::Editor(EditorAction::EnterVisualMode)),
+			Self::Mode(ModeCommand::VisualLine) => Some(AppAction::Editor(EditorAction::EnterVisualLineMode)),
+			Self::Mode(ModeCommand::VisualBlock) => Some(AppAction::Editor(EditorAction::EnterVisualBlockMode)),
+			Self::Edit(EditCommand::Undo) => Some(AppAction::Editor(EditorAction::Undo)),
+			Self::Edit(EditCommand::Redo) => Some(AppAction::Editor(EditorAction::Redo)),
+			Self::Cursor(CursorCommand::Left) => Some(AppAction::Editor(EditorAction::MoveLeft)),
+			Self::Cursor(CursorCommand::LineStart) => Some(AppAction::Editor(EditorAction::MoveLineStart)),
+			Self::Cursor(CursorCommand::LineEnd) => Some(AppAction::Editor(EditorAction::MoveLineEnd)),
+			Self::Cursor(CursorCommand::Down) => Some(AppAction::Editor(EditorAction::MoveDown)),
+			Self::Cursor(CursorCommand::Up) => Some(AppAction::Editor(EditorAction::MoveUp)),
+			Self::Cursor(CursorCommand::Right) => Some(AppAction::Editor(EditorAction::MoveRight)),
+			Self::Cursor(CursorCommand::FileStart) => Some(AppAction::Editor(EditorAction::MoveFileStart)),
+			Self::Cursor(CursorCommand::FileEnd) => Some(AppAction::Editor(EditorAction::MoveFileEnd)),
+			Self::Edit(EditCommand::JoinLineBelow) => Some(AppAction::Editor(EditorAction::JoinLineBelow)),
+			Self::Edit(EditCommand::CutChar) => Some(AppAction::Editor(EditorAction::CutCharToSlot)),
+			Self::Edit(EditCommand::Paste) => Some(AppAction::Editor(EditorAction::PasteSlotAfterCursor)),
+			Self::Buffer(BufferCommand::Prev) => Some(AppAction::Buffer(BufferAction::SwitchPrev)),
+			Self::Buffer(BufferCommand::Next) => Some(AppAction::Buffer(BufferAction::SwitchNext)),
+			Self::Window(WindowCommand::FocusLeft) => Some(AppAction::Window(WindowAction::FocusLeft)),
+			Self::Window(WindowCommand::FocusDown) => Some(AppAction::Window(WindowAction::FocusDown)),
+			Self::Window(WindowCommand::FocusUp) => Some(AppAction::Window(WindowAction::FocusUp)),
+			Self::Window(WindowCommand::FocusRight) => Some(AppAction::Window(WindowAction::FocusRight)),
+			Self::View(ViewCommand::ScrollDown) => Some(AppAction::Editor(EditorAction::ScrollViewDown)),
+			Self::View(ViewCommand::ScrollUp) => Some(AppAction::Editor(EditorAction::ScrollViewUp)),
+			Self::View(ViewCommand::ScrollHalfPageDown) => {
+				Some(AppAction::Editor(EditorAction::ScrollViewHalfPageDown))
+			}
+			Self::View(ViewCommand::ScrollHalfPageUp) => {
+				Some(AppAction::Editor(EditorAction::ScrollViewHalfPageUp))
+			}
+			Self::Help(HelpCommand::Keymap) => Some(AppAction::Editor(EditorAction::ShowKeyHints)),
+			Self::Help(HelpCommand::KeymapScrollUp) => Some(AppAction::Editor(EditorAction::ScrollKeyHintsUp)),
+			Self::Help(HelpCommand::KeymapScrollDown) => Some(AppAction::Editor(EditorAction::ScrollKeyHintsDown)),
+			Self::Help(HelpCommand::KeymapHalfPageUp) => {
+				Some(AppAction::Editor(EditorAction::ScrollKeyHintsHalfPageUp))
+			}
+			Self::Help(HelpCommand::KeymapHalfPageDown) => {
+				Some(AppAction::Editor(EditorAction::ScrollKeyHintsHalfPageDown))
+			}
 			_ => None,
 		}
 	}
 
 	pub fn visual_mode_action(&self) -> Option<AppAction> {
 		match self {
-			Self::EnterVisualMode => Some(AppAction::Editor(EditorAction::EnterVisualMode)),
-			Self::EnterVisualLineMode => Some(AppAction::Editor(EditorAction::EnterVisualLineMode)),
-			Self::EnterVisualBlockMode => Some(AppAction::Editor(EditorAction::EnterVisualBlockMode)),
-			Self::MoveDown => Some(AppAction::Editor(EditorAction::MoveDown)),
-			Self::MoveUp => Some(AppAction::Editor(EditorAction::MoveUp)),
-			Self::MoveLineStart => Some(AppAction::Editor(EditorAction::MoveLineStart)),
-			Self::MoveLineEnd => Some(AppAction::Editor(EditorAction::MoveLineEnd)),
-			Self::MoveFileStart => Some(AppAction::Editor(EditorAction::MoveFileStart)),
-			Self::MoveFileEnd => Some(AppAction::Editor(EditorAction::MoveFileEnd)),
-			Self::ScrollViewDown => Some(AppAction::Editor(EditorAction::ScrollViewDown)),
-			Self::ScrollViewUp => Some(AppAction::Editor(EditorAction::ScrollViewUp)),
-			Self::ScrollViewHalfPageDown => Some(AppAction::Editor(EditorAction::ScrollViewHalfPageDown)),
-			Self::ScrollViewHalfPageUp => Some(AppAction::Editor(EditorAction::ScrollViewHalfPageUp)),
-			Self::ShowKeyHints => Some(AppAction::Editor(EditorAction::ShowKeyHints)),
-			Self::KeyHintScrollUp => Some(AppAction::Editor(EditorAction::ScrollKeyHintsUp)),
-			Self::KeyHintScrollDown => Some(AppAction::Editor(EditorAction::ScrollKeyHintsDown)),
-			Self::KeyHintHalfPageUp => Some(AppAction::Editor(EditorAction::ScrollKeyHintsHalfPageUp)),
-			Self::KeyHintHalfPageDown => Some(AppAction::Editor(EditorAction::ScrollKeyHintsHalfPageDown)),
-			Self::VisualExit => Some(AppAction::Editor(EditorAction::ExitVisualMode)),
-			Self::VisualDelete => Some(AppAction::Editor(EditorAction::DeleteVisualSelectionToSlot)),
-			Self::VisualYank => Some(AppAction::Editor(EditorAction::YankVisualSelectionToSlot)),
-			Self::VisualPaste => Some(AppAction::Editor(EditorAction::ReplaceVisualSelectionWithSlot)),
-			Self::VisualChange => Some(AppAction::Editor(EditorAction::ChangeVisualSelectionToInsertMode)),
-			Self::VisualBlockInsertBefore => Some(AppAction::Editor(EditorAction::BeginVisualBlockInsertBefore)),
-			Self::VisualBlockInsertAfter => Some(AppAction::Editor(EditorAction::BeginVisualBlockInsertAfter)),
-			Self::VisualMoveLeft => Some(AppAction::Editor(EditorAction::MoveLeftInVisual)),
-			Self::VisualMoveRight => Some(AppAction::Editor(EditorAction::MoveRightInVisual)),
+			Self::Mode(ModeCommand::Visual) => Some(AppAction::Editor(EditorAction::EnterVisualMode)),
+			Self::Mode(ModeCommand::VisualLine) => Some(AppAction::Editor(EditorAction::EnterVisualLineMode)),
+			Self::Mode(ModeCommand::VisualBlock) => Some(AppAction::Editor(EditorAction::EnterVisualBlockMode)),
+			Self::Cursor(CursorCommand::Down) => Some(AppAction::Editor(EditorAction::MoveDown)),
+			Self::Cursor(CursorCommand::Up) => Some(AppAction::Editor(EditorAction::MoveUp)),
+			Self::Cursor(CursorCommand::LineStart) => Some(AppAction::Editor(EditorAction::MoveLineStart)),
+			Self::Cursor(CursorCommand::LineEnd) => Some(AppAction::Editor(EditorAction::MoveLineEnd)),
+			Self::Cursor(CursorCommand::FileStart) => Some(AppAction::Editor(EditorAction::MoveFileStart)),
+			Self::Cursor(CursorCommand::FileEnd) => Some(AppAction::Editor(EditorAction::MoveFileEnd)),
+			Self::View(ViewCommand::ScrollDown) => Some(AppAction::Editor(EditorAction::ScrollViewDown)),
+			Self::View(ViewCommand::ScrollUp) => Some(AppAction::Editor(EditorAction::ScrollViewUp)),
+			Self::View(ViewCommand::ScrollHalfPageDown) => {
+				Some(AppAction::Editor(EditorAction::ScrollViewHalfPageDown))
+			}
+			Self::View(ViewCommand::ScrollHalfPageUp) => {
+				Some(AppAction::Editor(EditorAction::ScrollViewHalfPageUp))
+			}
+			Self::Help(HelpCommand::Keymap) => Some(AppAction::Editor(EditorAction::ShowKeyHints)),
+			Self::Help(HelpCommand::KeymapScrollUp) => Some(AppAction::Editor(EditorAction::ScrollKeyHintsUp)),
+			Self::Help(HelpCommand::KeymapScrollDown) => Some(AppAction::Editor(EditorAction::ScrollKeyHintsDown)),
+			Self::Help(HelpCommand::KeymapHalfPageUp) => {
+				Some(AppAction::Editor(EditorAction::ScrollKeyHintsHalfPageUp))
+			}
+			Self::Help(HelpCommand::KeymapHalfPageDown) => {
+				Some(AppAction::Editor(EditorAction::ScrollKeyHintsHalfPageDown))
+			}
+			Self::Visual(VisualCommand::Exit) => Some(AppAction::Editor(EditorAction::ExitVisualMode)),
+			Self::Visual(VisualCommand::Delete) => {
+				Some(AppAction::Editor(EditorAction::DeleteVisualSelectionToSlot))
+			}
+			Self::Visual(VisualCommand::Yank) => Some(AppAction::Editor(EditorAction::YankVisualSelectionToSlot)),
+			Self::Visual(VisualCommand::Paste) => {
+				Some(AppAction::Editor(EditorAction::ReplaceVisualSelectionWithSlot))
+			}
+			Self::Visual(VisualCommand::Change) => {
+				Some(AppAction::Editor(EditorAction::ChangeVisualSelectionToInsertMode))
+			}
+			Self::Visual(VisualCommand::BlockInsertBefore) => {
+				Some(AppAction::Editor(EditorAction::BeginVisualBlockInsertBefore))
+			}
+			Self::Visual(VisualCommand::BlockInsertAfter) => {
+				Some(AppAction::Editor(EditorAction::BeginVisualBlockInsertAfter))
+			}
+			Self::Visual(VisualCommand::Left) => Some(AppAction::Editor(EditorAction::MoveLeftInVisual)),
+			Self::Visual(VisualCommand::Right) => Some(AppAction::Editor(EditorAction::MoveRightInVisual)),
 			_ => None,
 		}
 	}
@@ -196,11 +542,12 @@ pub enum CommandArgKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandSpec {
-	pub id:          String,
-	pub category:    String,
-	pub description: String,
-	pub arg_kind:    CommandArgKind,
-	pub target:      CommandTarget,
+	pub id:           CommandId,
+	pub category:     CommandCategoryInfo,
+	pub description:  String,
+	pub arg_kind:     CommandArgKind,
+	pub target:       CommandTarget,
+	pub display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,10 +556,38 @@ pub struct ResolvedCommand {
 	pub argument: Option<String>,
 }
 
+impl CommandSpec {
+	fn builtin(command: BuiltinCommand) -> Self {
+		Self {
+			id:           CommandId::Builtin(command),
+			category:     CommandCategoryInfo::builtin(command.category()),
+			description:  command.description().to_string(),
+			arg_kind:     command.arg_kind(),
+			target:       CommandTarget::Builtin(command),
+			display_name: None,
+		}
+	}
+
+	fn plugin(registration: PluginCommandRegistration) -> Self {
+		Self {
+			id:           CommandId::Plugin(registration.id.clone()),
+			category:     CommandCategoryInfo::plugin(registration.category),
+			description:  registration.description,
+			arg_kind:     registration.arg_kind,
+			target:       CommandTarget::Plugin {
+				plugin_id:  registration.plugin_id,
+				command_id: registration.command_id,
+			},
+			display_name: None,
+		}
+	}
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandPaletteMatch {
 	pub name:                      String,
-	pub command_id:                String,
+	pub command_id:                CommandId,
+	pub command_id_label:          String,
 	pub description:               String,
 	pub name_match_indices:        Vec<usize>,
 	pub command_id_match_indices:  Vec<usize>,
@@ -222,10 +597,11 @@ pub struct CommandPaletteMatch {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CommandPaletteCandidate {
-	name:        String,
-	command_id:  String,
-	description: String,
-	is_error:    bool,
+	name:             String,
+	command_id:       CommandId,
+	command_id_label: String,
+	description:      String,
+	is_error:         bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -238,22 +614,22 @@ pub enum BindingMatch<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ScopedKeyBinding {
 	keys:       Vec<NormalSequenceKey>,
-	command_id: String,
+	command_id: CommandId,
 	desc:       Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CommandAlias {
 	name:                String,
-	resolved_command_id: Option<String>,
-	run:                 String,
+	resolved_command_id: Option<CommandId>,
+	run:                 RunDirective,
 	desc:                Option<String>,
 	error:               Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct CommandRegistry {
-	commands:                         HashMap<String, CommandSpec>,
+	commands:                         HashMap<CommandId, CommandSpec>,
 	normal_bindings:                  Vec<ScopedKeyBinding>,
 	visual_bindings:                  Vec<ScopedKeyBinding>,
 	command_mode_bindings:            Vec<ScopedKeyBinding>,
@@ -267,7 +643,8 @@ pub struct CommandRegistry {
 impl CommandRegistry {
 	pub fn with_defaults() -> Self {
 		let mut registry = Self::default();
-		registry.register_default_builtins();
+		registry.register_builtin_specs();
+		registry.bind_default_builtins();
 		registry
 	}
 
@@ -302,13 +679,13 @@ impl CommandRegistry {
 		);
 
 		if !config.command.commands.is_empty() {
-			// Treat configured command aliases as an authoritative replacement set.
 			self.command_aliases.clear();
 		}
 		for alias in &config.command.commands {
-			let Some(resolved) = self.resolve_or_register_run_directive(alias.run.as_str()) else {
-				let error = format!("invalid run directive: {}", alias.run);
-				errors.push(format!("unknown run directive in command alias: {}", alias.run));
+			let Some(resolved) = self.resolve_or_register_run_directive(&alias.run) else {
+				let raw_run = alias.run.render();
+				let error = format!("invalid run directive: {}", raw_run);
+				errors.push(format!("unknown run directive in command alias: {}", raw_run));
 				self.command_aliases.push(CommandAlias {
 					name:                alias.name.clone(),
 					resolved_command_id: None,
@@ -351,8 +728,8 @@ impl CommandRegistry {
 					continue;
 				}
 			};
-			let Some(resolved) = self.resolve_or_register_run_directive(binding.run.as_str()) else {
-				errors.push(format!("unknown run directive in {}: {}", scope_label, binding.run));
+			let Some(resolved) = self.resolve_or_register_run_directive(&binding.run) else {
+				errors.push(format!("unknown run directive in {}: {}", scope_label, binding.run.render()));
 				continue;
 			};
 			let bindings = self.bindings_mut(scope);
@@ -372,16 +749,14 @@ impl CommandRegistry {
 	}
 
 	pub fn register_plugin_command(&mut self, registration: PluginCommandRegistration) -> Result<(), String> {
-		if self.commands.contains_key(registration.id.as_str()) {
+		if BuiltinCommand::from_id(registration.id.as_str()).is_some() {
 			return Err(format!("duplicate command id: {}", registration.id));
 		}
-		self.commands.insert(registration.id.clone(), CommandSpec {
-			id:          registration.id.clone(),
-			category:    registration.category,
-			description: registration.description,
-			arg_kind:    registration.arg_kind,
-			target:      CommandTarget::Plugin { plugin_id: registration.plugin_id, command_id: registration.id },
-		});
+		let command_id = CommandId::Plugin(registration.id.clone());
+		if self.commands.contains_key(&command_id) {
+			return Err(format!("duplicate command id: {}", registration.id));
+		}
+		self.commands.insert(command_id, CommandSpec::plugin(registration));
 		Ok(())
 	}
 
@@ -403,25 +778,20 @@ impl CommandRegistry {
 			Some((name, argument)) => (name, Some(argument.trim().to_string())),
 			None => (trimmed, None),
 		};
-		let spec = if let Some(spec) = self.commands.get(name).cloned() {
-			spec
+		let command_id = if let Some(command) = BuiltinCommand::from_id(name) {
+			CommandId::Builtin(command)
+		} else if self.commands.contains_key(&CommandId::Plugin(name.to_string())) {
+			CommandId::Plugin(name.to_string())
 		} else {
 			let alias = self.command_aliases.iter().find(|alias| alias.name == name)?;
-			self.commands.get(alias.resolved_command_id.as_deref()?)?.clone()
+			alias.resolved_command_id.clone()?
 		};
-
-		match spec.arg_kind {
-			CommandArgKind::None if argument.as_deref().is_some_and(|arg| !arg.is_empty()) => None,
-			CommandArgKind::None => Some(ResolvedCommand { spec, argument: None }),
-			CommandArgKind::OptionalPath | CommandArgKind::RawTail => {
-				Some(ResolvedCommand { spec, argument: argument.filter(|arg| !arg.is_empty()) })
-			}
-		}
+		self.resolve_command_id_with_argument(&command_id, argument)
 	}
 
 	pub fn resolve_command_id_with_argument(
 		&self,
-		command_id: &str,
+		command_id: &CommandId,
 		argument: Option<String>,
 	) -> Option<ResolvedCommand> {
 		let spec = self.commands.get(command_id)?.clone();
@@ -444,6 +814,7 @@ impl CommandRegistry {
 					return Some((0u16, CommandPaletteMatch {
 						name:                      candidate.name,
 						command_id:                candidate.command_id,
+						command_id_label:          candidate.command_id_label,
 						description:               candidate.description,
 						name_match_indices:        Vec::new(),
 						command_id_match_indices:  Vec::new(),
@@ -453,7 +824,7 @@ impl CommandRegistry {
 				}
 
 				let name_match = frizbee_match(query, candidate.name.as_str());
-				let command_match = frizbee_match(query, candidate.command_id.as_str());
+				let command_match = frizbee_match(query, candidate.command_id_label.as_str());
 				let description_match = frizbee_match(query, candidate.description.as_str());
 				let score = [name_match.as_ref(), command_match.as_ref(), description_match.as_ref()]
 					.into_iter()
@@ -467,6 +838,7 @@ impl CommandRegistry {
 				Some((score, CommandPaletteMatch {
 					name: candidate.name,
 					command_id: candidate.command_id,
+					command_id_label: candidate.command_id_label,
 					description: candidate.description,
 					name_match_indices,
 					command_id_match_indices,
@@ -484,7 +856,7 @@ impl CommandRegistry {
 				.cmp(&right.1.name.is_empty())
 				.then_with(|| right.0.cmp(&left.0))
 				.then_with(|| left.1.name.cmp(&right.1.name))
-				.then_with(|| left.1.command_id.cmp(&right.1.command_id))
+				.then_with(|| left.1.command_id_label.cmp(&right.1.command_id_label))
 		});
 
 		matches.into_iter().take(limit).map(|(_, item)| item).collect()
@@ -495,16 +867,24 @@ impl CommandRegistry {
 		let mut aliased_command_ids = HashSet::new();
 
 		for alias in &self.command_aliases {
-			if let Some(command_id) = alias.resolved_command_id.as_deref() {
-				aliased_command_ids.insert(command_id.to_string());
+			if let Some(command_id) = alias.resolved_command_id.as_ref() {
+				aliased_command_ids.insert(command_id.clone());
 			}
 			candidates.push(CommandPaletteCandidate {
-				name:        alias.name.clone(),
-				command_id:  alias.resolved_command_id.clone().unwrap_or_else(|| alias.run.clone()),
-				description: match (
+				name:             alias.name.clone(),
+				command_id:       alias
+					.resolved_command_id
+					.clone()
+					.unwrap_or_else(|| CommandId::Plugin(alias.run.render())),
+				command_id_label: alias
+					.resolved_command_id
+					.as_ref()
+					.map(CommandId::display_text)
+					.unwrap_or_else(|| alias.run.render()),
+				description:      match (
 					alias.error.as_deref(),
 					alias.desc.as_deref(),
-					alias.resolved_command_id.as_deref(),
+					alias.resolved_command_id.as_ref(),
 				) {
 					(Some(error), Some(desc), _) => format!("Error: {} ({})", desc, error),
 					(Some(error), None, _) => format!("Error: {}. Check commands.toml", error),
@@ -514,77 +894,68 @@ impl CommandRegistry {
 					}
 					(None, None, None) => "Error: invalid command alias. Check commands.toml".to_string(),
 				},
-				is_error:    alias.error.is_some(),
+				is_error:         alias.error.is_some(),
 			});
 		}
 
 		let mut unaliased_specs = self
 			.commands
 			.values()
-			.filter(|spec| !aliased_command_ids.contains(spec.id.as_str()))
+			.filter(|spec| !aliased_command_ids.contains(&spec.id))
 			.cloned()
 			.collect::<Vec<_>>();
-		unaliased_specs.sort_by(|left, right| left.id.cmp(&right.id));
+		unaliased_specs.sort_by(|left, right| left.id.display_text().cmp(&right.id.display_text()));
 		for spec in unaliased_specs {
 			candidates.push(CommandPaletteCandidate {
-				name:        String::new(),
-				command_id:  spec.id,
-				description: spec.description,
-				is_error:    false,
+				name:             String::new(),
+				command_id_label: spec.id.display_text(),
+				command_id:       spec.id,
+				description:      spec.description,
+				is_error:         false,
 			});
 		}
 
 		candidates
 	}
 
-	fn resolve_run_directive(&self, run: &str) -> Option<ResolvedCommand> {
-		let trimmed = run.trim();
-		if trimmed.is_empty() {
-			return None;
+	fn resolve_run_directive(&self, run: &RunDirective) -> Option<ResolvedCommand> {
+		match run {
+			RunDirective::Builtin(command) => {
+				let spec = self.commands.get(&CommandId::Builtin(*command))?.clone();
+				Some(ResolvedCommand { spec, argument: None })
+			}
+			RunDirective::PluginInvocation { .. } | RunDirective::Unresolved(_) => None,
 		}
-		if let Some(spec) = self.commands.get(trimmed).cloned() {
-			return Some(ResolvedCommand { spec, argument: None });
-		}
-		self.resolve_command_input(trimmed)
 	}
 
-	fn resolve_or_register_run_directive(&mut self, run: &str) -> Option<ResolvedCommand> {
+	fn resolve_or_register_run_directive(&mut self, run: &RunDirective) -> Option<ResolvedCommand> {
 		if let Some(resolved) = self.resolve_run_directive(run) {
 			return Some(resolved);
 		}
 		self.resolve_plugin_run_directive(run)
 	}
 
-	fn resolve_plugin_run_directive(&mut self, run: &str) -> Option<ResolvedCommand> {
-		let trimmed = run.trim();
-		let payload = trimmed.strip_prefix("plugin ")?;
-		let payload = payload.trim();
-		if payload.is_empty() {
+	fn resolve_plugin_run_directive(&mut self, run: &RunDirective) -> Option<ResolvedCommand> {
+		let RunDirective::PluginInvocation { plugin_name, argument } = run else {
 			return None;
-		}
-
-		let mut segments = payload.split_whitespace();
-		let command_name = segments.next()?;
-		let argument = {
-			let remaining = segments.collect::<Vec<_>>().join(" ");
-			if remaining.is_empty() { None } else { Some(remaining) }
 		};
-		let spec_id = format!("plugin.{}", command_name);
-		if !self.commands.contains_key(spec_id.as_str()) {
-			self.commands.insert(spec_id.clone(), CommandSpec {
-				id:          spec_id.clone(),
-				category:    "plugin".to_string(),
-				description: format!("Plugin command '{}'", command_name),
-				arg_kind:    CommandArgKind::RawTail,
-				target:      CommandTarget::Plugin {
-					plugin_id:  command_name.to_string(),
-					command_id: command_name.to_string(),
+		let command_id = CommandId::Plugin(format!("plugin.{}", plugin_name));
+		if !self.commands.contains_key(&command_id) {
+			self.commands.insert(command_id.clone(), CommandSpec {
+				id:           command_id.clone(),
+				category:     CommandCategoryInfo::plugin("plugin"),
+				description:  format!("Plugin command '{}'", plugin_name),
+				arg_kind:     CommandArgKind::RawTail,
+				target:       CommandTarget::Plugin {
+					plugin_id:  plugin_name.clone(),
+					command_id: plugin_name.clone(),
 				},
+				display_name: None,
 			});
 		}
 
-		let spec = self.commands.get(spec_id.as_str())?.clone();
-		Some(ResolvedCommand { spec, argument })
+		let spec = self.commands.get(&command_id)?.clone();
+		Some(ResolvedCommand { spec, argument: argument.clone() })
 	}
 
 	fn bindings(&self, scope: KeymapScope) -> &[ScopedKeyBinding] {
@@ -624,7 +995,7 @@ impl CommandRegistry {
 
 		let mut command = Vec::with_capacity(self.command_aliases.len());
 		for alias in &self.command_aliases {
-			let Some(command_id) = alias.resolved_command_id.as_deref() else {
+			let Some(command_id) = alias.resolved_command_id.as_ref() else {
 				continue;
 			};
 			let Some(spec) = self.commands.get(command_id) else {
@@ -653,771 +1024,184 @@ impl CommandRegistry {
 		}
 	}
 
-	fn register_default_builtins(&mut self) {
-		self.register_builtin(
-			"core.window.split_vertical",
-			"window",
-			"Split vertically",
-			CommandArgKind::None,
-			BuiltinCommand::SplitVertical,
-		);
-		self.register_builtin(
-			"core.window.split_horizontal",
-			"window",
-			"Split horizontally",
-			CommandArgKind::None,
-			BuiltinCommand::SplitHorizontal,
-		);
-		self.register_builtin(
-			"core.tab.new",
-			"tab",
-			"Open a new tab",
-			CommandArgKind::None,
-			BuiltinCommand::TabNew,
-		);
-		self.register_builtin(
-			"core.tab.close_current",
-			"tab",
-			"Close current tab",
-			CommandArgKind::None,
-			BuiltinCommand::TabCloseCurrent,
-		);
-		self.register_builtin(
-			"core.tab.prev",
-			"tab",
-			"Previous tab",
-			CommandArgKind::None,
-			BuiltinCommand::TabSwitchPrev,
-		);
-		self.register_builtin(
-			"core.tab.next",
-			"tab",
-			"Next tab",
-			CommandArgKind::None,
-			BuiltinCommand::TabSwitchNext,
-		);
-		self.register_builtin(
-			"core.buffer.close",
-			"buffer",
-			"Close active buffer",
-			CommandArgKind::None,
-			BuiltinCommand::BufferCloseActive,
-		);
-		self.register_builtin(
-			"core.buffer.new_empty",
-			"buffer",
-			"Create an empty buffer",
-			CommandArgKind::None,
-			BuiltinCommand::BufferNewEmpty,
-		);
-		self.register_builtin(
-			"core.buffer.delete_line",
-			"buffer",
-			"Delete current line",
-			CommandArgKind::None,
-			BuiltinCommand::DeleteCurrentLineToSlot,
-		);
-		self.register_builtin(
-			"core.mode.insert",
-			"mode",
-			"Enter insert mode",
-			CommandArgKind::None,
-			BuiltinCommand::EnterInsert,
-		);
-		self.register_builtin(
-			"core.mode.append",
-			"mode",
-			"Append and enter insert mode",
-			CommandArgKind::None,
-			BuiltinCommand::AppendInsert,
-		);
-		self.register_builtin(
-			"core.mode.open_below",
-			"mode",
-			"Open line below and enter insert mode",
-			CommandArgKind::None,
-			BuiltinCommand::OpenLineBelowInsert,
-		);
-		self.register_builtin(
-			"core.mode.open_above",
-			"mode",
-			"Open line above and enter insert mode",
-			CommandArgKind::None,
-			BuiltinCommand::OpenLineAboveInsert,
-		);
-		self.register_builtin(
-			"core.mode.command",
-			"mode",
-			"Enter command mode",
-			CommandArgKind::None,
-			BuiltinCommand::EnterCommandMode,
-		);
-		self.register_builtin(
-			"core.mode.visual",
-			"mode",
-			"Enter visual mode",
-			CommandArgKind::None,
-			BuiltinCommand::EnterVisualMode,
-		);
-		self.register_builtin(
-			"core.mode.visual_line",
-			"mode",
-			"Enter visual line mode",
-			CommandArgKind::None,
-			BuiltinCommand::EnterVisualLineMode,
-		);
-		self.register_builtin(
-			"core.mode.visual_block",
-			"mode",
-			"Enter visual block mode",
-			CommandArgKind::None,
-			BuiltinCommand::EnterVisualBlockMode,
-		);
-		self.register_builtin("core.edit.undo", "edit", "Undo", CommandArgKind::None, BuiltinCommand::Undo);
-		self.register_builtin("core.edit.redo", "edit", "Redo", CommandArgKind::None, BuiltinCommand::Redo);
-		self.register_builtin(
-			"core.cursor.left",
-			"cursor",
-			"Move left",
-			CommandArgKind::None,
-			BuiltinCommand::MoveLeft,
-		);
-		self.register_builtin(
-			"core.cursor.line_start",
-			"cursor",
-			"Move to line start",
-			CommandArgKind::None,
-			BuiltinCommand::MoveLineStart,
-		);
-		self.register_builtin(
-			"core.cursor.line_end",
-			"cursor",
-			"Move to line end",
-			CommandArgKind::None,
-			BuiltinCommand::MoveLineEnd,
-		);
-		self.register_builtin(
-			"core.cursor.down",
-			"cursor",
-			"Move down",
-			CommandArgKind::None,
-			BuiltinCommand::MoveDown,
-		);
-		self.register_builtin(
-			"core.cursor.up",
-			"cursor",
-			"Move up",
-			CommandArgKind::None,
-			BuiltinCommand::MoveUp,
-		);
-		self.register_builtin(
-			"core.cursor.right",
-			"cursor",
-			"Move right",
-			CommandArgKind::None,
-			BuiltinCommand::MoveRight,
-		);
-		self.register_builtin(
-			"core.cursor.file_start",
-			"cursor",
-			"Move to file start",
-			CommandArgKind::None,
-			BuiltinCommand::MoveFileStart,
-		);
-		self.register_builtin(
-			"core.cursor.file_end",
-			"cursor",
-			"Move to file end",
-			CommandArgKind::None,
-			BuiltinCommand::MoveFileEnd,
-		);
-		self.register_builtin(
-			"core.edit.join_line_below",
-			"edit",
-			"Join line below",
-			CommandArgKind::None,
-			BuiltinCommand::JoinLineBelow,
-		);
-		self.register_builtin(
-			"core.edit.cut_char",
-			"edit",
-			"Cut current char",
-			CommandArgKind::None,
-			BuiltinCommand::CutCharToSlot,
-		);
-		self.register_builtin(
-			"core.edit.paste",
-			"edit",
-			"Paste slot after cursor",
-			CommandArgKind::None,
-			BuiltinCommand::PasteSlotAfterCursor,
-		);
-		self.register_builtin(
-			"core.buffer.prev",
-			"buffer",
-			"Previous buffer",
-			CommandArgKind::None,
-			BuiltinCommand::BufferSwitchPrev,
-		);
-		self.register_builtin(
-			"core.buffer.next",
-			"buffer",
-			"Next buffer",
-			CommandArgKind::None,
-			BuiltinCommand::BufferSwitchNext,
-		);
-		self.register_builtin(
-			"core.window.focus_left",
-			"window",
-			"Focus left window",
-			CommandArgKind::None,
-			BuiltinCommand::WindowFocusLeft,
-		);
-		self.register_builtin(
-			"core.window.focus_down",
-			"window",
-			"Focus down window",
-			CommandArgKind::None,
-			BuiltinCommand::WindowFocusDown,
-		);
-		self.register_builtin(
-			"core.window.focus_up",
-			"window",
-			"Focus up window",
-			CommandArgKind::None,
-			BuiltinCommand::WindowFocusUp,
-		);
-		self.register_builtin(
-			"core.window.focus_right",
-			"window",
-			"Focus right window",
-			CommandArgKind::None,
-			BuiltinCommand::WindowFocusRight,
-		);
-		self.register_builtin(
-			"core.view.scroll_down",
-			"view",
-			"Scroll down",
-			CommandArgKind::None,
-			BuiltinCommand::ScrollViewDown,
-		);
-		self.register_builtin(
-			"core.view.scroll_up",
-			"view",
-			"Scroll up",
-			CommandArgKind::None,
-			BuiltinCommand::ScrollViewUp,
-		);
-		self.register_builtin(
-			"core.view.scroll_half_page_down",
-			"view",
-			"Scroll down half page",
-			CommandArgKind::None,
-			BuiltinCommand::ScrollViewHalfPageDown,
-		);
-		self.register_builtin(
-			"core.view.scroll_half_page_up",
-			"view",
-			"Scroll up half page",
-			CommandArgKind::None,
-			BuiltinCommand::ScrollViewHalfPageUp,
-		);
-		self.register_builtin(
-			"core.help.keymap",
-			"help",
-			"Show current mode key hints",
-			CommandArgKind::None,
-			BuiltinCommand::ShowKeyHints,
-		);
-		self.register_builtin(
-			"core.help.keymap_scroll_up",
-			"help",
-			"Scroll key hint window up",
-			CommandArgKind::None,
-			BuiltinCommand::KeyHintScrollUp,
-		);
-		self.register_builtin(
-			"core.help.keymap_scroll_down",
-			"help",
-			"Scroll key hint window down",
-			CommandArgKind::None,
-			BuiltinCommand::KeyHintScrollDown,
-		);
-		self.register_builtin(
-			"core.help.keymap_half_page_up",
-			"help",
-			"Scroll key hint window up half page",
-			CommandArgKind::None,
-			BuiltinCommand::KeyHintHalfPageUp,
-		);
-		self.register_builtin(
-			"core.help.keymap_half_page_down",
-			"help",
-			"Scroll key hint window down half page",
-			CommandArgKind::None,
-			BuiltinCommand::KeyHintHalfPageDown,
-		);
-		self.register_builtin(
-			"core.mode.normal",
-			"mode",
-			"Return to normal mode",
-			CommandArgKind::None,
-			BuiltinCommand::EnterNormalMode,
-		);
-		self.register_builtin(
-			"core.command.submit",
-			"command",
-			"Execute current command input",
-			CommandArgKind::None,
-			BuiltinCommand::CommandSubmit,
-		);
-		self.register_builtin(
-			"core.command.backspace",
-			"command",
-			"Delete previous command character",
-			CommandArgKind::None,
-			BuiltinCommand::CommandBackspace,
-		);
-		self.register_builtin(
-			"core.command_palette.prev",
-			"overlay",
-			"Select previous command candidate",
-			CommandArgKind::None,
-			BuiltinCommand::CommandPaletteSelectPrev,
-		);
-		self.register_builtin(
-			"core.command_palette.next",
-			"overlay",
-			"Select next command candidate",
-			CommandArgKind::None,
-			BuiltinCommand::CommandPaletteSelectNext,
-		);
-		self.register_builtin(
-			"core.picker.prev",
-			"overlay",
-			"Select previous picker item",
-			CommandArgKind::None,
-			BuiltinCommand::PickerSelectPrev,
-		);
-		self.register_builtin(
-			"core.picker.next",
-			"overlay",
-			"Select next picker item",
-			CommandArgKind::None,
-			BuiltinCommand::PickerSelectNext,
-		);
-		self.register_builtin(
-			"core.picker.confirm",
-			"overlay",
-			"Confirm picker selection",
-			CommandArgKind::None,
-			BuiltinCommand::PickerConfirm,
-		);
-		self.register_builtin(
-			"core.overlay.close",
-			"overlay",
-			"Close active overlay",
-			CommandArgKind::None,
-			BuiltinCommand::OverlayClose,
-		);
-		self.register_builtin(
-			"core.overlay.back",
-			"overlay",
-			"Go back inside active overlay",
-			CommandArgKind::None,
-			BuiltinCommand::OverlayBack,
-		);
-		self.register_builtin(
-			"core.insert.newline",
-			"insert",
-			"Insert newline",
-			CommandArgKind::None,
-			BuiltinCommand::InsertNewline,
-		);
-		self.register_builtin(
-			"core.insert.backspace",
-			"insert",
-			"Delete previous character in insert mode",
-			CommandArgKind::None,
-			BuiltinCommand::InsertBackspace,
-		);
-		self.register_builtin(
-			"core.insert.left",
-			"insert",
-			"Move left in insert mode",
-			CommandArgKind::None,
-			BuiltinCommand::InsertMoveLeft,
-		);
-		self.register_builtin(
-			"core.insert.down",
-			"insert",
-			"Move down in insert mode",
-			CommandArgKind::None,
-			BuiltinCommand::InsertMoveDown,
-		);
-		self.register_builtin(
-			"core.insert.up",
-			"insert",
-			"Move up in insert mode",
-			CommandArgKind::None,
-			BuiltinCommand::InsertMoveUp,
-		);
-		self.register_builtin(
-			"core.insert.right",
-			"insert",
-			"Move right in insert mode",
-			CommandArgKind::None,
-			BuiltinCommand::InsertMoveRight,
-		);
-		self.register_builtin(
-			"core.insert.tab",
-			"insert",
-			"Insert tab",
-			CommandArgKind::None,
-			BuiltinCommand::InsertTab,
-		);
-		self.register_builtin(
-			"core.quit",
-			"command",
-			"Quit current scope",
-			CommandArgKind::None,
-			BuiltinCommand::Quit,
-		);
-		self.register_builtin(
-			"core.quit_force",
-			"command",
-			"Force quit current scope",
-			CommandArgKind::None,
-			BuiltinCommand::QuitForce,
-		);
-		self.register_builtin(
-			"core.quit_all",
-			"command",
-			"Quit application",
-			CommandArgKind::None,
-			BuiltinCommand::QuitAll,
-		);
-		self.register_builtin(
-			"core.quit_all_force",
-			"command",
-			"Force quit application",
-			CommandArgKind::None,
-			BuiltinCommand::QuitAllForce,
-		);
-		self.register_builtin(
-			"core.save",
-			"command",
-			"Save current buffer",
-			CommandArgKind::OptionalPath,
-			BuiltinCommand::Save,
-		);
-		self.register_builtin(
-			"core.save_force",
-			"command",
-			"Force save current buffer",
-			CommandArgKind::OptionalPath,
-			BuiltinCommand::SaveForce,
-		);
-		self.register_builtin(
-			"core.save_all",
-			"command",
-			"Save all file-backed buffers",
-			CommandArgKind::None,
-			BuiltinCommand::SaveAll,
-		);
-		self.register_builtin(
-			"core.save_and_quit",
-			"command",
-			"Save current buffer and quit",
-			CommandArgKind::OptionalPath,
-			BuiltinCommand::SaveAndQuit,
-		);
-		self.register_builtin(
-			"core.save_and_quit_force",
-			"command",
-			"Force save current buffer and quit",
-			CommandArgKind::OptionalPath,
-			BuiltinCommand::SaveAndQuitForce,
-		);
-		self.register_builtin(
-			"core.save_all_and_quit",
-			"command",
-			"Save all file-backed buffers and quit",
-			CommandArgKind::None,
-			BuiltinCommand::SaveAllAndQuit,
-		);
-		self.register_builtin(
-			"core.save_all_and_quit_force",
-			"command",
-			"Force save all file-backed buffers and quit",
-			CommandArgKind::None,
-			BuiltinCommand::SaveAllAndQuitForce,
-		);
-		self.register_builtin(
-			"core.reload",
-			"command",
-			"Reload current buffer",
-			CommandArgKind::OptionalPath,
-			BuiltinCommand::Reload,
-		);
-		self.register_builtin(
-			"core.reload_force",
-			"command",
-			"Force reload current buffer",
-			CommandArgKind::OptionalPath,
-			BuiltinCommand::ReloadForce,
-		);
-		self.register_builtin(
-			"core.picker.files",
-			"command",
-			"Open the workspace file picker",
-			CommandArgKind::None,
-			BuiltinCommand::OpenWorkspaceFilePicker,
-		);
-		self.register_builtin(
-			"core.picker.yazi",
-			"command",
-			"Open the yazi picker",
-			CommandArgKind::None,
-			BuiltinCommand::OpenPickerYazi,
-		);
-		self.register_builtin(
-			"core.visual.exit",
-			"visual",
-			"Exit visual mode",
-			CommandArgKind::None,
-			BuiltinCommand::VisualExit,
-		);
-		self.register_builtin(
-			"core.visual.delete",
-			"visual",
-			"Delete visual selection",
-			CommandArgKind::None,
-			BuiltinCommand::VisualDelete,
-		);
-		self.register_builtin(
-			"core.visual.yank",
-			"visual",
-			"Yank visual selection",
-			CommandArgKind::None,
-			BuiltinCommand::VisualYank,
-		);
-		self.register_builtin(
-			"core.visual.paste",
-			"visual",
-			"Replace visual selection with slot",
-			CommandArgKind::None,
-			BuiltinCommand::VisualPaste,
-		);
-		self.register_builtin(
-			"core.visual.change",
-			"visual",
-			"Change visual selection",
-			CommandArgKind::None,
-			BuiltinCommand::VisualChange,
-		);
-		self.register_builtin(
-			"core.visual.block_insert_before",
-			"visual",
-			"Insert before visual block",
-			CommandArgKind::None,
-			BuiltinCommand::VisualBlockInsertBefore,
-		);
-		self.register_builtin(
-			"core.visual.block_insert_after",
-			"visual",
-			"Append after visual block",
-			CommandArgKind::None,
-			BuiltinCommand::VisualBlockInsertAfter,
-		);
-		self.register_builtin(
-			"core.visual.left",
-			"visual",
-			"Move left in visual mode",
-			CommandArgKind::None,
-			BuiltinCommand::VisualMoveLeft,
-		);
-		self.register_builtin(
-			"core.visual.right",
-			"visual",
-			"Move right in visual mode",
-			CommandArgKind::None,
-			BuiltinCommand::VisualMoveRight,
-		);
-
-		self.bind_default_normal("h", "core.cursor.left");
-		self.bind_default_normal("0", "core.cursor.line_start");
-		self.bind_default_normal("$", "core.cursor.line_end");
-		self.bind_default_normal("j", "core.cursor.down");
-		self.bind_default_normal("k", "core.cursor.up");
-		self.bind_default_normal("l", "core.cursor.right");
-		self.bind_default_normal("gg", "core.cursor.file_start");
-		self.bind_default_normal("G", "core.cursor.file_end");
-		self.bind_default_normal("J", "core.edit.join_line_below");
-		self.bind_default_normal("x", "core.edit.cut_char");
-		self.bind_default_normal("p", "core.edit.paste");
-		self.bind_default_normal("i", "core.mode.insert");
-		self.bind_default_normal("a", "core.mode.append");
-		self.bind_default_normal("o", "core.mode.open_below");
-		self.bind_default_normal("O", "core.mode.open_above");
-		self.bind_default_normal(":", "core.mode.command");
-		self.bind_default_normal("v", "core.mode.visual");
-		self.bind_default_normal("V", "core.mode.visual_line");
-		self.bind_default_normal("<C-v>", "core.mode.visual_block");
-		self.bind_default_normal("u", "core.edit.undo");
-		self.bind_default_normal("dd", "core.buffer.delete_line");
-		self.bind_default_normal("H", "core.buffer.prev");
-		self.bind_default_normal("L", "core.buffer.next");
-		self.bind_default_normal("{", "core.buffer.prev");
-		self.bind_default_normal("}", "core.buffer.next");
-		self.bind_default_normal("<C-h>", "core.window.focus_left");
-		self.bind_default_normal("<C-j>", "core.window.focus_down");
-		self.bind_default_normal("<C-k>", "core.window.focus_up");
-		self.bind_default_normal("<C-l>", "core.window.focus_right");
-		self.bind_default_normal("<C-e>", "core.view.scroll_down");
-		self.bind_default_normal("<C-y>", "core.view.scroll_up");
-		self.bind_default_normal("<C-d>", "core.view.scroll_half_page_down");
-		self.bind_default_normal("<C-u>", "core.view.scroll_half_page_up");
-		self.bind_default_normal("<C-r>", "core.edit.redo");
-		self.bind_default_normal("<F1>", "core.help.keymap");
-		self.bind_default_normal("<leader>wv", "core.window.split_vertical");
-		self.bind_default_normal("<leader>wh", "core.window.split_horizontal");
-		self.bind_default_normal("<leader><Tab>n", "core.tab.new");
-		self.bind_default_normal("<leader><Tab>d", "core.tab.close_current");
-		self.bind_default_normal("<leader><Tab>[", "core.tab.prev");
-		self.bind_default_normal("<leader><Tab>]", "core.tab.next");
-		self.bind_default_normal("<leader>bd", "core.buffer.close");
-		self.bind_default_normal("<leader>bn", "core.buffer.new_empty");
-		self.bind_default_visual("<Esc>", "core.visual.exit");
-		self.bind_default_visual("v", "core.mode.visual");
-		self.bind_default_visual("V", "core.mode.visual_line");
-		self.bind_default_visual("<C-v>", "core.mode.visual_block");
-		self.bind_default_visual("c", "core.visual.change");
-		self.bind_default_visual("d", "core.visual.delete");
-		self.bind_default_visual("x", "core.visual.delete");
-		self.bind_default_visual("y", "core.visual.yank");
-		self.bind_default_visual("p", "core.visual.paste");
-		self.bind_default_visual("I", "core.visual.block_insert_before");
-		self.bind_default_visual("A", "core.visual.block_insert_after");
-		self.bind_default_visual("h", "core.visual.left");
-		self.bind_default_visual("j", "core.cursor.down");
-		self.bind_default_visual("k", "core.cursor.up");
-		self.bind_default_visual("l", "core.visual.right");
-		self.bind_default_visual("0", "core.cursor.line_start");
-		self.bind_default_visual("$", "core.cursor.line_end");
-		self.bind_default_visual("gg", "core.cursor.file_start");
-		self.bind_default_visual("G", "core.cursor.file_end");
-		self.bind_default_visual("<C-e>", "core.view.scroll_down");
-		self.bind_default_visual("<C-y>", "core.view.scroll_up");
-		self.bind_default_visual("<C-d>", "core.view.scroll_half_page_down");
-		self.bind_default_visual("<C-u>", "core.view.scroll_half_page_up");
-		self.bind_default_visual("<F1>", "core.help.keymap");
-		self.bind_default_command_mode("<Esc>", "core.mode.normal");
-		self.bind_default_command_mode("<Enter>", "core.command.submit");
-		self.bind_default_command_mode("<Backspace>", "core.command.backspace");
-		self.bind_default_insert_mode("<Esc>", "core.mode.normal");
-		self.bind_default_insert_mode("<Enter>", "core.insert.newline");
-		self.bind_default_insert_mode("<Backspace>", "core.insert.backspace");
-		self.bind_default_insert_mode("<Left>", "core.insert.left");
-		self.bind_default_insert_mode("<Down>", "core.insert.down");
-		self.bind_default_insert_mode("<Up>", "core.insert.up");
-		self.bind_default_insert_mode("<Right>", "core.insert.right");
-		self.bind_default_insert_mode("<Tab>", "core.insert.tab");
-		self.bind_default_insert_mode("<F1>", "core.help.keymap");
-		self.bind_default_overlay_whichkey("<Esc>", "core.overlay.close");
-		self.bind_default_overlay_whichkey("<Backspace>", "core.overlay.back");
-		self.bind_default_overlay_whichkey("<Up>", "core.help.keymap_scroll_up");
-		self.bind_default_overlay_whichkey("<Down>", "core.help.keymap_scroll_down");
-		self.bind_default_overlay_whichkey("<C-p>", "core.help.keymap_scroll_up");
-		self.bind_default_overlay_whichkey("<C-n>", "core.help.keymap_scroll_down");
-		self.bind_default_overlay_whichkey("<C-u>", "core.help.keymap_half_page_up");
-		self.bind_default_overlay_whichkey("<C-d>", "core.help.keymap_half_page_down");
-		self.bind_default_overlay_command_palette("<Up>", "core.command_palette.prev");
-		self.bind_default_overlay_command_palette("<Down>", "core.command_palette.next");
-		self.bind_default_overlay_command_palette("<C-p>", "core.command_palette.prev");
-		self.bind_default_overlay_command_palette("<C-n>", "core.command_palette.next");
-		self.bind_default_overlay_picker("<Esc>", "core.overlay.close");
-		self.bind_default_overlay_picker("<Enter>", "core.picker.confirm");
-		self.bind_default_overlay_picker("<Up>", "core.picker.prev");
-		self.bind_default_overlay_picker("<Down>", "core.picker.next");
-		self.bind_default_overlay_picker("<C-p>", "core.picker.prev");
-		self.bind_default_overlay_picker("<C-n>", "core.picker.next");
-
-		self.bind_default_command("q", "core.quit");
-		self.bind_default_command("quit", "core.quit");
-		self.bind_default_command("q!", "core.quit_force");
-		self.bind_default_command("quit!", "core.quit_force");
-		self.bind_default_command("qa", "core.quit_all");
-		self.bind_default_command("qa!", "core.quit_all_force");
-		self.bind_default_command("w", "core.save");
-		self.bind_default_command("w!", "core.save_force");
-		self.bind_default_command("wa", "core.save_all");
-		self.bind_default_command("wq", "core.save_and_quit");
-		self.bind_default_command("wq!", "core.save_and_quit_force");
-		self.bind_default_command("wqa", "core.save_all_and_quit");
-		self.bind_default_command("wqa!", "core.save_all_and_quit_force");
-		self.bind_default_command("e", "core.reload");
-		self.bind_default_command("e!", "core.reload_force");
-		self.bind_default_command("files", "core.picker.files");
-		self.bind_default_command("find", "core.picker.files");
-		self.bind_default_command("yazi", "core.picker.yazi");
+	fn register_builtin_specs(&mut self) {
+		for command in BuiltinCommand::all_commands() {
+			self.commands.insert(CommandId::Builtin(command), CommandSpec::builtin(command));
+		}
 	}
 
-	fn register_builtin(
-		&mut self,
-		id: &str,
-		category: &str,
-		description: &str,
-		arg_kind: CommandArgKind,
-		builtin: BuiltinCommand,
-	) {
-		self.commands.insert(id.to_string(), CommandSpec {
-			id: id.to_string(),
-			category: category.to_string(),
-			description: description.to_string(),
-			arg_kind,
-			target: CommandTarget::Builtin(builtin),
+	fn bind_default_builtins(&mut self) {
+		self.bind_default_normal("h", BuiltinCommand::Cursor(CursorCommand::Left));
+		self.bind_default_normal("0", BuiltinCommand::Cursor(CursorCommand::LineStart));
+		self.bind_default_normal("$", BuiltinCommand::Cursor(CursorCommand::LineEnd));
+		self.bind_default_normal("j", BuiltinCommand::Cursor(CursorCommand::Down));
+		self.bind_default_normal("k", BuiltinCommand::Cursor(CursorCommand::Up));
+		self.bind_default_normal("l", BuiltinCommand::Cursor(CursorCommand::Right));
+		self.bind_default_normal("gg", BuiltinCommand::Cursor(CursorCommand::FileStart));
+		self.bind_default_normal("G", BuiltinCommand::Cursor(CursorCommand::FileEnd));
+		self.bind_default_normal("J", BuiltinCommand::Edit(EditCommand::JoinLineBelow));
+		self.bind_default_normal("x", BuiltinCommand::Edit(EditCommand::CutChar));
+		self.bind_default_normal("p", BuiltinCommand::Edit(EditCommand::Paste));
+		self.bind_default_normal("i", BuiltinCommand::Mode(ModeCommand::Insert));
+		self.bind_default_normal("a", BuiltinCommand::Mode(ModeCommand::Append));
+		self.bind_default_normal("o", BuiltinCommand::Mode(ModeCommand::OpenBelow));
+		self.bind_default_normal("O", BuiltinCommand::Mode(ModeCommand::OpenAbove));
+		self.bind_default_normal(":", BuiltinCommand::Mode(ModeCommand::Command));
+		self.bind_default_normal("v", BuiltinCommand::Mode(ModeCommand::Visual));
+		self.bind_default_normal("V", BuiltinCommand::Mode(ModeCommand::VisualLine));
+		self.bind_default_normal("<C-v>", BuiltinCommand::Mode(ModeCommand::VisualBlock));
+		self.bind_default_normal("u", BuiltinCommand::Edit(EditCommand::Undo));
+		self.bind_default_normal("dd", BuiltinCommand::Buffer(BufferCommand::DeleteLine));
+		self.bind_default_normal("H", BuiltinCommand::Buffer(BufferCommand::Prev));
+		self.bind_default_normal("L", BuiltinCommand::Buffer(BufferCommand::Next));
+		self.bind_default_normal("{", BuiltinCommand::Buffer(BufferCommand::Prev));
+		self.bind_default_normal("}", BuiltinCommand::Buffer(BufferCommand::Next));
+		self.bind_default_normal("<C-h>", BuiltinCommand::Window(WindowCommand::FocusLeft));
+		self.bind_default_normal("<C-j>", BuiltinCommand::Window(WindowCommand::FocusDown));
+		self.bind_default_normal("<C-k>", BuiltinCommand::Window(WindowCommand::FocusUp));
+		self.bind_default_normal("<C-l>", BuiltinCommand::Window(WindowCommand::FocusRight));
+		self.bind_default_normal("<C-e>", BuiltinCommand::View(ViewCommand::ScrollDown));
+		self.bind_default_normal("<C-y>", BuiltinCommand::View(ViewCommand::ScrollUp));
+		self.bind_default_normal("<C-d>", BuiltinCommand::View(ViewCommand::ScrollHalfPageDown));
+		self.bind_default_normal("<C-u>", BuiltinCommand::View(ViewCommand::ScrollHalfPageUp));
+		self.bind_default_normal("<C-r>", BuiltinCommand::Edit(EditCommand::Redo));
+		self.bind_default_normal("<F1>", BuiltinCommand::Help(HelpCommand::Keymap));
+		self.bind_default_normal("<leader>wv", BuiltinCommand::Window(WindowCommand::SplitVertical));
+		self.bind_default_normal("<leader>wh", BuiltinCommand::Window(WindowCommand::SplitHorizontal));
+		self.bind_default_normal("<leader><Tab>n", BuiltinCommand::Tab(TabCommand::New));
+		self.bind_default_normal("<leader><Tab>d", BuiltinCommand::Tab(TabCommand::CloseCurrent));
+		self.bind_default_normal("<leader><Tab>[", BuiltinCommand::Tab(TabCommand::Prev));
+		self.bind_default_normal("<leader><Tab>]", BuiltinCommand::Tab(TabCommand::Next));
+		self.bind_default_normal("<leader>bd", BuiltinCommand::Buffer(BufferCommand::Close));
+		self.bind_default_normal("<leader>bn", BuiltinCommand::Buffer(BufferCommand::NewEmpty));
+		self.bind_default_visual("<Esc>", BuiltinCommand::Visual(VisualCommand::Exit));
+		self.bind_default_visual("v", BuiltinCommand::Mode(ModeCommand::Visual));
+		self.bind_default_visual("V", BuiltinCommand::Mode(ModeCommand::VisualLine));
+		self.bind_default_visual("<C-v>", BuiltinCommand::Mode(ModeCommand::VisualBlock));
+		self.bind_default_visual("c", BuiltinCommand::Visual(VisualCommand::Change));
+		self.bind_default_visual("d", BuiltinCommand::Visual(VisualCommand::Delete));
+		self.bind_default_visual("x", BuiltinCommand::Visual(VisualCommand::Delete));
+		self.bind_default_visual("y", BuiltinCommand::Visual(VisualCommand::Yank));
+		self.bind_default_visual("p", BuiltinCommand::Visual(VisualCommand::Paste));
+		self.bind_default_visual("I", BuiltinCommand::Visual(VisualCommand::BlockInsertBefore));
+		self.bind_default_visual("A", BuiltinCommand::Visual(VisualCommand::BlockInsertAfter));
+		self.bind_default_visual("h", BuiltinCommand::Visual(VisualCommand::Left));
+		self.bind_default_visual("j", BuiltinCommand::Cursor(CursorCommand::Down));
+		self.bind_default_visual("k", BuiltinCommand::Cursor(CursorCommand::Up));
+		self.bind_default_visual("l", BuiltinCommand::Visual(VisualCommand::Right));
+		self.bind_default_visual("0", BuiltinCommand::Cursor(CursorCommand::LineStart));
+		self.bind_default_visual("$", BuiltinCommand::Cursor(CursorCommand::LineEnd));
+		self.bind_default_visual("gg", BuiltinCommand::Cursor(CursorCommand::FileStart));
+		self.bind_default_visual("G", BuiltinCommand::Cursor(CursorCommand::FileEnd));
+		self.bind_default_visual("<C-e>", BuiltinCommand::View(ViewCommand::ScrollDown));
+		self.bind_default_visual("<C-y>", BuiltinCommand::View(ViewCommand::ScrollUp));
+		self.bind_default_visual("<C-d>", BuiltinCommand::View(ViewCommand::ScrollHalfPageDown));
+		self.bind_default_visual("<C-u>", BuiltinCommand::View(ViewCommand::ScrollHalfPageUp));
+		self.bind_default_visual("<F1>", BuiltinCommand::Help(HelpCommand::Keymap));
+		self.bind_default_command_mode("<Esc>", BuiltinCommand::Mode(ModeCommand::Normal));
+		self.bind_default_command_mode("<Enter>", BuiltinCommand::Command(CommandCommand::Submit));
+		self.bind_default_command_mode("<Backspace>", BuiltinCommand::Command(CommandCommand::Backspace));
+		self.bind_default_insert_mode("<Esc>", BuiltinCommand::Mode(ModeCommand::Normal));
+		self.bind_default_insert_mode("<Enter>", BuiltinCommand::Insert(InsertCommand::Newline));
+		self.bind_default_insert_mode("<Backspace>", BuiltinCommand::Insert(InsertCommand::Backspace));
+		self.bind_default_insert_mode("<Left>", BuiltinCommand::Insert(InsertCommand::Left));
+		self.bind_default_insert_mode("<Down>", BuiltinCommand::Insert(InsertCommand::Down));
+		self.bind_default_insert_mode("<Up>", BuiltinCommand::Insert(InsertCommand::Up));
+		self.bind_default_insert_mode("<Right>", BuiltinCommand::Insert(InsertCommand::Right));
+		self.bind_default_insert_mode("<Tab>", BuiltinCommand::Insert(InsertCommand::Tab));
+		self.bind_default_insert_mode("<F1>", BuiltinCommand::Help(HelpCommand::Keymap));
+		self.bind_default_overlay_whichkey("<Esc>", BuiltinCommand::Overlay(OverlayCommand::Close));
+		self.bind_default_overlay_whichkey("<Backspace>", BuiltinCommand::Overlay(OverlayCommand::Back));
+		self.bind_default_overlay_whichkey("<Up>", BuiltinCommand::Help(HelpCommand::KeymapScrollUp));
+		self.bind_default_overlay_whichkey("<Down>", BuiltinCommand::Help(HelpCommand::KeymapScrollDown));
+		self.bind_default_overlay_whichkey("<C-p>", BuiltinCommand::Help(HelpCommand::KeymapScrollUp));
+		self.bind_default_overlay_whichkey("<C-n>", BuiltinCommand::Help(HelpCommand::KeymapScrollDown));
+		self.bind_default_overlay_whichkey("<C-u>", BuiltinCommand::Help(HelpCommand::KeymapHalfPageUp));
+		self.bind_default_overlay_whichkey("<C-d>", BuiltinCommand::Help(HelpCommand::KeymapHalfPageDown));
+		self.bind_default_overlay_command_palette(
+			"<Up>",
+			BuiltinCommand::CommandPalette(CommandPaletteCommand::Prev),
+		);
+		self.bind_default_overlay_command_palette(
+			"<Down>",
+			BuiltinCommand::CommandPalette(CommandPaletteCommand::Next),
+		);
+		self.bind_default_overlay_command_palette(
+			"<C-p>",
+			BuiltinCommand::CommandPalette(CommandPaletteCommand::Prev),
+		);
+		self.bind_default_overlay_command_palette(
+			"<C-n>",
+			BuiltinCommand::CommandPalette(CommandPaletteCommand::Next),
+		);
+		self.bind_default_overlay_picker("<Esc>", BuiltinCommand::Overlay(OverlayCommand::Close));
+		self.bind_default_overlay_picker("<Enter>", BuiltinCommand::Picker(PickerCommand::Confirm));
+		self.bind_default_overlay_picker("<Up>", BuiltinCommand::Picker(PickerCommand::Prev));
+		self.bind_default_overlay_picker("<Down>", BuiltinCommand::Picker(PickerCommand::Next));
+		self.bind_default_overlay_picker("<C-p>", BuiltinCommand::Picker(PickerCommand::Prev));
+		self.bind_default_overlay_picker("<C-n>", BuiltinCommand::Picker(PickerCommand::Next));
+		self.bind_default_command("q", BuiltinCommand::Command(CommandCommand::Quit));
+		self.bind_default_command("quit", BuiltinCommand::Command(CommandCommand::Quit));
+		self.bind_default_command("q!", BuiltinCommand::Command(CommandCommand::QuitForce));
+		self.bind_default_command("quit!", BuiltinCommand::Command(CommandCommand::QuitForce));
+		self.bind_default_command("qa", BuiltinCommand::Command(CommandCommand::QuitAll));
+		self.bind_default_command("qa!", BuiltinCommand::Command(CommandCommand::QuitAllForce));
+		self.bind_default_command("w", BuiltinCommand::Command(CommandCommand::Save));
+		self.bind_default_command("w!", BuiltinCommand::Command(CommandCommand::SaveForce));
+		self.bind_default_command("wa", BuiltinCommand::Command(CommandCommand::SaveAll));
+		self.bind_default_command("wq", BuiltinCommand::Command(CommandCommand::SaveAndQuit));
+		self.bind_default_command("wq!", BuiltinCommand::Command(CommandCommand::SaveAndQuitForce));
+		self.bind_default_command("wqa", BuiltinCommand::Command(CommandCommand::SaveAllAndQuit));
+		self.bind_default_command("wqa!", BuiltinCommand::Command(CommandCommand::SaveAllAndQuitForce));
+		self.bind_default_command("e", BuiltinCommand::Command(CommandCommand::Reload));
+		self.bind_default_command("e!", BuiltinCommand::Command(CommandCommand::ReloadForce));
+		self.bind_default_command("files", BuiltinCommand::Picker(PickerCommand::Files));
+		self.bind_default_command("find", BuiltinCommand::Picker(PickerCommand::Files));
+		self.bind_default_command("yazi", BuiltinCommand::Picker(PickerCommand::Yazi));
+	}
+
+	fn bind_default_normal(&mut self, on: &str, command: BuiltinCommand) {
+		self.bind_default(KeymapScope::ModeNormal, on, command);
+	}
+
+	fn bind_default_visual(&mut self, on: &str, command: BuiltinCommand) {
+		self.bind_default(KeymapScope::ModeVisual, on, command);
+	}
+
+	fn bind_default_command_mode(&mut self, on: &str, command: BuiltinCommand) {
+		self.bind_default(KeymapScope::ModeCommand, on, command);
+	}
+
+	fn bind_default_insert_mode(&mut self, on: &str, command: BuiltinCommand) {
+		self.bind_default(KeymapScope::ModeInsert, on, command);
+	}
+
+	fn bind_default_overlay_whichkey(&mut self, on: &str, command: BuiltinCommand) {
+		self.bind_default(KeymapScope::OverlayWhichKey, on, command);
+	}
+
+	fn bind_default_overlay_command_palette(&mut self, on: &str, command: BuiltinCommand) {
+		self.bind_default(KeymapScope::OverlayCommandPalette, on, command);
+	}
+
+	fn bind_default_overlay_picker(&mut self, on: &str, command: BuiltinCommand) {
+		self.bind_default(KeymapScope::OverlayPicker, on, command);
+	}
+
+	fn bind_default(&mut self, scope: KeymapScope, on: &str, command: BuiltinCommand) {
+		let keys = parse_normal_sequence(on).expect("default key binding should be valid");
+		self.bindings_mut(scope).push(ScopedKeyBinding {
+			keys,
+			command_id: CommandId::Builtin(command),
+			desc: None,
 		});
 	}
 
-	fn bind_default_normal(&mut self, on: &str, command_id: &str) {
-		self.bind_default(KeymapScope::ModeNormal, on, command_id);
-	}
-
-	fn bind_default_visual(&mut self, on: &str, command_id: &str) {
-		self.bind_default(KeymapScope::ModeVisual, on, command_id);
-	}
-
-	fn bind_default_command_mode(&mut self, on: &str, command_id: &str) {
-		self.bind_default(KeymapScope::ModeCommand, on, command_id);
-	}
-
-	fn bind_default_insert_mode(&mut self, on: &str, command_id: &str) {
-		self.bind_default(KeymapScope::ModeInsert, on, command_id);
-	}
-
-	fn bind_default_overlay_whichkey(&mut self, on: &str, command_id: &str) {
-		self.bind_default(KeymapScope::OverlayWhichKey, on, command_id);
-	}
-
-	fn bind_default_overlay_command_palette(&mut self, on: &str, command_id: &str) {
-		self.bind_default(KeymapScope::OverlayCommandPalette, on, command_id);
-	}
-
-	fn bind_default_overlay_picker(&mut self, on: &str, command_id: &str) {
-		self.bind_default(KeymapScope::OverlayPicker, on, command_id);
-	}
-
-	fn bind_default(&mut self, scope: KeymapScope, on: &str, command_id: &str) {
-		let keys = parse_normal_sequence(on).expect("default key binding should be valid");
-		self.bindings_mut(scope).push(ScopedKeyBinding { keys, command_id: command_id.to_string(), desc: None });
-	}
-
-	fn bind_default_command(&mut self, name: &str, command_id: &str) {
+	fn bind_default_command(&mut self, name: &str, command: BuiltinCommand) {
 		self.command_aliases.push(CommandAlias {
 			name:                name.to_string(),
-			resolved_command_id: Some(command_id.to_string()),
-			run:                 command_id.to_string(),
+			resolved_command_id: Some(CommandId::Builtin(command)),
+			run:                 RunDirective::Builtin(command),
 			desc:                None,
 			error:               None,
 		});
@@ -1483,7 +1267,7 @@ pub struct CommandAliasSection {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct KeymapBindingConfig {
 	pub on:   KeyBindingOn,
-	pub run:  String,
+	pub run:  RunDirective,
 	pub desc: Option<String>,
 }
 
@@ -1532,20 +1316,20 @@ impl<'de> Deserialize<'de> for KeyBindingOn {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CommandAliasConfig {
 	pub name: String,
-	pub run:  String,
+	pub run:  RunDirective,
 	pub desc: Option<String>,
 }
 
 trait KeyBindingView {
 	fn keys(&self) -> &[NormalSequenceKey];
-	fn command_id(&self) -> &str;
+	fn command_id(&self) -> &CommandId;
 	fn desc(&self) -> Option<&str>;
 }
 
 impl KeyBindingView for ScopedKeyBinding {
 	fn keys(&self) -> &[NormalSequenceKey] { self.keys.as_slice() }
 
-	fn command_id(&self) -> &str { self.command_id.as_str() }
+	fn command_id(&self) -> &CommandId { &self.command_id }
 
 	fn desc(&self) -> Option<&str> { self.desc.as_deref() }
 }
@@ -1554,13 +1338,14 @@ impl KeyBindingView for ScopedKeyBinding {
 pub struct PluginCommandRegistration {
 	pub id:          String,
 	pub plugin_id:   String,
+	pub command_id:  String,
 	pub category:    String,
 	pub description: String,
 	pub arg_kind:    CommandArgKind,
 }
 
 fn resolve_key_binding_set<T>(
-	commands: &HashMap<String, CommandSpec>,
+	commands: &HashMap<CommandId, CommandSpec>,
 	bindings: &[T],
 	keys: &[NormalSequenceKey],
 ) -> BindingMatch<CommandTarget>
@@ -1582,7 +1367,7 @@ where
 }
 
 fn export_keymap_bindings<T>(
-	commands: &HashMap<String, CommandSpec>,
+	commands: &HashMap<CommandId, CommandSpec>,
 	bindings: &[T],
 ) -> Vec<KeymapBindingConfig>
 where
@@ -1595,7 +1380,10 @@ where
 		};
 		exported.push(KeymapBindingConfig {
 			on:   KeyBindingOn::single(render_normal_sequence(binding.keys())),
-			run:  binding.command_id().to_string(),
+			run:  match binding.command_id() {
+				CommandId::Builtin(command) => RunDirective::Builtin(*command),
+				CommandId::Plugin(command_id) => RunDirective::Unresolved(command_id.clone()),
+			},
 			desc: binding.desc().map(ToString::to_string).or_else(|| Some(spec.description.clone())),
 		});
 	}
@@ -1603,15 +1391,15 @@ where
 }
 
 fn collect_key_hints(
-	commands: &HashMap<String, CommandSpec>,
+	commands: &HashMap<CommandId, CommandSpec>,
 	bindings: &[ScopedKeyBinding],
 	prefix: &[NormalSequenceKey],
 ) -> Vec<FloatingWindowLine> {
 	#[derive(Default)]
 	struct HintAggregate {
 		exact_description: Option<String>,
-		exact_category:    Option<String>,
-		child_categories:  Vec<String>,
+		exact_category:    Option<CommandCategoryInfo>,
+		child_categories:  Vec<CommandCategoryInfo>,
 		has_children:      bool,
 	}
 
@@ -1640,7 +1428,8 @@ fn collect_key_hints(
 		.map(|(key, aggregate)| {
 			let summary = if aggregate.has_children {
 				let category = common_category_label(aggregate.child_categories.as_slice())
-					.or(aggregate.exact_category.as_deref())
+					.or(aggregate.exact_category.as_ref())
+					.map(|category| category.label.as_str())
 					.unwrap_or("more");
 				format!("+{}", category)
 			} else {
@@ -1651,9 +1440,9 @@ fn collect_key_hints(
 		.collect()
 }
 
-fn common_category_label(categories: &[String]) -> Option<&str> {
+fn common_category_label(categories: &[CommandCategoryInfo]) -> Option<&CommandCategoryInfo> {
 	let first = categories.first()?;
-	if categories.iter().all(|candidate| candidate == first) { Some(first.as_str()) } else { None }
+	if categories.iter().all(|candidate| candidate == first) { Some(first) } else { None }
 }
 
 fn parse_normal_sequence(input: &str) -> Result<Vec<NormalSequenceKey>, String> {
@@ -1773,7 +1562,7 @@ mod tests {
 				normal: CommandKeymapSection {
 					keymap: vec![KeymapBindingConfig {
 						on:   KeyBindingOn::single("H"),
-						run:  "core.buffer.next".to_string(),
+						run:  "core.buffer.next".into(),
 						desc: Some("custom".to_string()),
 					}],
 				},
@@ -1787,7 +1576,7 @@ mod tests {
 		assert!(errors.is_empty());
 		assert_eq!(
 			registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('H')]),
-			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::BufferSwitchNext))
+			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::Buffer(BufferCommand::Next)))
 		);
 		assert_eq!(
 			registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('L')]),
@@ -1795,7 +1584,7 @@ mod tests {
 		);
 		assert_eq!(
 			registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('j')]),
-			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::MoveDown))
+			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::Cursor(CursorCommand::Down)))
 		);
 	}
 
@@ -1806,7 +1595,7 @@ mod tests {
 			command: CommandAliasSection {
 				commands: vec![CommandAliasConfig {
 					name: "qq".to_string(),
-					run:  "core.quit_all".to_string(),
+					run:  "core.quit_all".into(),
 					desc: Some("custom".to_string()),
 				}],
 			},
@@ -1817,7 +1606,10 @@ mod tests {
 		let resolved = registry.resolve_command_input("qq").expect("command alias should resolve");
 
 		assert!(errors.is_empty());
-		assert_eq!(resolved.spec.target, CommandTarget::Builtin(BuiltinCommand::QuitAll));
+		assert_eq!(
+			resolved.spec.target,
+			CommandTarget::Builtin(BuiltinCommand::Command(CommandCommand::QuitAll))
+		);
 	}
 
 	#[test]
@@ -1827,7 +1619,7 @@ mod tests {
 			command: CommandAliasSection {
 				commands: vec![CommandAliasConfig {
 					name: "haha".to_string(),
-					run:  "core.quit_all".to_string(),
+					run:  "core.quit_all".into(),
 					desc: Some("custom".to_string()),
 				}],
 			},
@@ -1849,7 +1641,7 @@ mod tests {
 				normal: CommandKeymapSection {
 					keymap: vec![KeymapBindingConfig {
 						on:   KeyBindingOn::many(vec!["gg".to_string(), "G".to_string()]),
-						run:  "core.cursor.file_end".to_string(),
+						run:  "core.cursor.file_end".into(),
 						desc: Some("custom".to_string()),
 					}],
 				},
@@ -1866,11 +1658,11 @@ mod tests {
 				NormalSequenceKey::Char('g'),
 				NormalSequenceKey::Char('g')
 			]),
-			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::MoveFileEnd))
+			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::Cursor(CursorCommand::FileEnd)))
 		);
 		assert_eq!(
 			registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('G')]),
-			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::MoveFileEnd))
+			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::Cursor(CursorCommand::FileEnd)))
 		);
 	}
 
@@ -1882,7 +1674,7 @@ mod tests {
 				normal: CommandKeymapSection {
 					keymap: vec![KeymapBindingConfig {
 						on:   KeyBindingOn::many(vec!["cm".to_string(), "mc".to_string()]),
-						run:  "plugin chmod".to_string(),
+						run:  "plugin chmod".into(),
 						desc: Some("plugin".to_string()),
 					}],
 				},
@@ -1936,7 +1728,7 @@ mod tests {
 				normal: CommandKeymapSection {
 					keymap: vec![KeymapBindingConfig {
 						on:   KeyBindingOn::single("gg"),
-						run:  "core.cursor.file_start".to_string(),
+						run:  "core.cursor.file_start".into(),
 						desc: Some("Jump to beginning".to_string()),
 					}],
 				},
@@ -1958,10 +1750,12 @@ mod tests {
 		let config = CommandRegistry::with_defaults().export_config();
 
 		assert!(config.mode.normal.keymap.iter().any(|binding| {
-			matches!(binding.on.entries(), [token] if token == "<F1>") && binding.run == "core.help.keymap"
+			matches!(binding.on.entries(), [token] if token == "<F1>")
+				&& binding.run == RunDirective::Builtin(BuiltinCommand::Help(HelpCommand::Keymap))
 		}));
 		assert!(config.mode.visual.keymap.iter().any(|binding| {
-			matches!(binding.on.entries(), [token] if token == "<F1>") && binding.run == "core.help.keymap"
+			matches!(binding.on.entries(), [token] if token == "<F1>")
+				&& binding.run == RunDirective::Builtin(BuiltinCommand::Help(HelpCommand::Keymap))
 		}));
 	}
 
@@ -1972,13 +1766,24 @@ mod tests {
 		let id_matches = registry.command_palette_matches("yazi", 12);
 		let desc_matches = registry.command_palette_matches("yazi picker", 12);
 
-		assert!(id_matches.iter().any(|item| item.command_id == "core.picker.yazi"));
-		assert!(desc_matches.iter().any(|item| item.command_id == "core.picker.yazi"));
-		assert!(id_matches.iter().any(|item| item.name == "yazi" && item.command_id == "core.picker.yazi"));
 		assert!(
 			id_matches
 				.iter()
-				.find(|item| item.command_id == "core.picker.yazi")
+				.any(|item| item.command_id == CommandId::Builtin(BuiltinCommand::Picker(PickerCommand::Yazi)))
+		);
+		assert!(
+			desc_matches
+				.iter()
+				.any(|item| item.command_id == CommandId::Builtin(BuiltinCommand::Picker(PickerCommand::Yazi)))
+		);
+		assert!(id_matches.iter().any(|item| {
+			item.name == "yazi"
+				&& item.command_id == CommandId::Builtin(BuiltinCommand::Picker(PickerCommand::Yazi))
+		}));
+		assert!(
+			id_matches
+				.iter()
+				.find(|item| item.command_id == CommandId::Builtin(BuiltinCommand::Picker(PickerCommand::Yazi)))
 				.is_some_and(|item| !item.name_match_indices.is_empty())
 		);
 	}
@@ -1989,17 +1794,27 @@ mod tests {
 
 		let matches = registry.command_palette_matches("", 128);
 
-		assert!(matches.iter().any(|item| item.name == "yazi" && item.command_id == "core.picker.yazi"));
-		assert!(
-			matches.iter().any(|item| item.name.is_empty() && item.command_id == "core.window.split_vertical")
-		);
+		assert!(matches.iter().any(|item| {
+			item.name == "yazi"
+				&& item.command_id == CommandId::Builtin(BuiltinCommand::Picker(PickerCommand::Yazi))
+		}));
+		assert!(matches.iter().any(|item| {
+			item.name.is_empty()
+				&& item.command_id == CommandId::Builtin(BuiltinCommand::Window(WindowCommand::SplitVertical))
+		}));
 		let yazi_position = matches
 			.iter()
-			.position(|item| item.name == "yazi" && item.command_id == "core.picker.yazi")
+			.position(|item| {
+				item.name == "yazi"
+					&& item.command_id == CommandId::Builtin(BuiltinCommand::Picker(PickerCommand::Yazi))
+			})
 			.expect("aliased command should be listed");
 		let unaliased_position = matches
 			.iter()
-			.position(|item| item.name.is_empty() && item.command_id == "core.window.split_vertical")
+			.position(|item| {
+				item.name.is_empty()
+					&& item.command_id == CommandId::Builtin(BuiltinCommand::Window(WindowCommand::SplitVertical))
+			})
 			.expect("unaliased command should be listed");
 		assert!(yazi_position < unaliased_position);
 	}
@@ -2010,7 +1825,7 @@ mod tests {
 
 		let resolved = registry.resolve_command_input("core.tab.new").expect("direct command id should resolve");
 
-		assert_eq!(resolved.spec.id, "core.tab.new");
+		assert_eq!(resolved.spec.id, CommandId::Builtin(BuiltinCommand::Tab(TabCommand::New)));
 	}
 
 	#[test]
@@ -2020,7 +1835,7 @@ mod tests {
 			command: CommandAliasSection {
 				commands: vec![CommandAliasConfig {
 					name: "bad".to_string(),
-					run:  "core.not.exists".to_string(),
+					run:  "core.not.exists".into(),
 					desc: Some("Broken alias".to_string()),
 				}],
 			},

@@ -189,7 +189,7 @@ fn render_command_palette_item(
 	);
 	spans.push(Span::styled(" ", row_style));
 	spans.extend(highlighted_text(
-		item.command_id.as_str(),
+		item.command_id_label.as_str(),
 		command_width,
 		&item.command_id_match_indices,
 		command_style,

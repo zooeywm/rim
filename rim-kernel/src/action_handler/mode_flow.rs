@@ -1,7 +1,7 @@
 use std::ops::ControlFlow;
 
 use super::{command_flow, enqueue_history_save_for_buffer, handle_pending_swap_decision_key, post_edit_flow};
-use crate::{action::{AppAction, EditorAction, KeyCode, KeyEvent, KeyModifiers}, command::{BindingMatch, CommandRegistry, CommandTarget}, ports::{FilePicker, FileWatcher, StorageIo}, state::{EditorMode, NormalSequenceKey, RimState}};
+use crate::{action::{AppAction, EditorAction, KeyCode, KeyEvent, KeyModifiers}, command::{BindingMatch, CommandRegistry, CommandTarget, HelpCommand, InsertCommand, ModeCommand}, ports::{FilePicker, FileWatcher, StorageIo}, state::{EditorMode, NormalSequenceKey, RimState}};
 
 #[derive(Debug)]
 pub(super) enum SequenceMatch {
@@ -381,39 +381,57 @@ where P: StorageIo + FileWatcher + FilePicker {
 fn handle_insert_scope_key(state: &mut RimState, key: KeyEvent) -> Option<ControlFlow<()>> {
 	let normal_key = to_normal_key(state, key)?;
 	match state.command_registry.resolve_scope_sequence(crate::state::KeymapScope::ModeInsert, &[normal_key]) {
-		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::EnterNormalMode)) => {
+		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Mode(
+			ModeCommand::Normal,
+		))) => {
 			state.exit_insert_mode();
 			Some(ControlFlow::Continue(()))
 		}
-		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::InsertNewline)) => {
+		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(
+			InsertCommand::Newline,
+		))) => {
 			state.insert_newline_at_cursor();
 			Some(ControlFlow::Continue(()))
 		}
-		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::InsertBackspace)) => {
+		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(
+			InsertCommand::Backspace,
+		))) => {
 			state.backspace_at_cursor();
 			Some(ControlFlow::Continue(()))
 		}
-		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::InsertMoveLeft)) => {
+		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(
+			InsertCommand::Left,
+		))) => {
 			state.move_cursor_left();
 			Some(ControlFlow::Continue(()))
 		}
-		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::InsertMoveDown)) => {
+		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(
+			InsertCommand::Down,
+		))) => {
 			state.move_cursor_down();
 			Some(ControlFlow::Continue(()))
 		}
-		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::InsertMoveUp)) => {
+		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(
+			InsertCommand::Up,
+		))) => {
 			state.move_cursor_up();
 			Some(ControlFlow::Continue(()))
 		}
-		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::InsertMoveRight)) => {
+		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(
+			InsertCommand::Right,
+		))) => {
 			state.move_cursor_right_for_insert();
 			Some(ControlFlow::Continue(()))
 		}
-		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::InsertTab)) => {
+		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(
+			InsertCommand::Tab,
+		))) => {
 			state.insert_char_at_cursor('\t');
 			Some(ControlFlow::Continue(()))
 		}
-		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::ShowKeyHints)) => {
+		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Help(
+			HelpCommand::Keymap,
+		))) => {
 			state.open_key_hints_overview();
 			Some(ControlFlow::Continue(()))
 		}

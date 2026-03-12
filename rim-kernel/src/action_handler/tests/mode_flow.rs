@@ -217,7 +217,7 @@ fn configured_normal_key_binding_should_override_builtin_mapping() {
 			normal: CommandKeymapSection {
 				keymap: vec![KeymapBindingConfig {
 					on:   KeyBindingOn::single("H"),
-					run:  "core.buffer.next".to_string(),
+					run:  "core.buffer.next".into(),
 					desc: Some("custom".to_string()),
 				}],
 			},
@@ -694,7 +694,7 @@ fn open_key_hint_popup_should_refresh_after_config_reload() {
 			normal: CommandKeymapSection {
 				keymap: vec![KeymapBindingConfig {
 					on:   KeyBindingOn::single("H"),
-					run:  "core.buffer.next".to_string(),
+					run:  "core.buffer.next".into(),
 					desc: Some("custom".to_string()),
 				}],
 			},
@@ -726,7 +726,7 @@ fn open_command_palette_should_refresh_after_config_reload() {
 		command: CommandAliasSection {
 			commands: vec![CommandAliasConfig {
 				name: "y".to_string(),
-				run:  "core.picker.yazi".to_string(),
+				run:  "core.picker.yazi".into(),
 				desc: Some("Open custom picker".to_string()),
 			}],
 		},
@@ -914,7 +914,12 @@ fn command_mode_should_show_palette_matches_for_command_ids() {
 	let palette = state.command_palette().expect("command palette should open in command mode");
 	assert!(!palette.items.is_empty());
 	assert_eq!(palette.items[0].name, "yazi");
-	assert_eq!(palette.items[0].command_id, "core.picker.yazi");
+	assert_eq!(
+		palette.items[0].command_id,
+		crate::command::CommandId::Builtin(crate::command::BuiltinCommand::Picker(
+			crate::command::PickerCommand::Yazi,
+		))
+	);
 }
 
 #[test]

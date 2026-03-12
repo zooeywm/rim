@@ -3,7 +3,7 @@ use std::{ops::ControlFlow, path::PathBuf};
 use tracing::error;
 
 use super::ActionHandlerError;
-use crate::{action::{AppAction, FileAction, KeyCode, KeyEvent, WindowAction}, command::{BindingMatch, BuiltinCommand, CommandTarget, ResolvedCommand}, ports::{FilePicker, FileWatcher, StorageIo}, state::{KeymapScope, RimState}};
+use crate::{action::{AppAction, FileAction, KeyCode, KeyEvent, WindowAction}, command::{BindingMatch, BuiltinCommand, CommandCommand, CommandPaletteCommand, CommandTarget, InsertCommand, ModeCommand, OverlayCommand, PickerCommand, ResolvedCommand}, ports::{FilePicker, FileWatcher, StorageIo}, state::{KeymapScope, RimState}};
 
 pub(super) fn handle_command_mode_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
 where P: StorageIo + FileWatcher + FilePicker {
@@ -81,7 +81,7 @@ where P: StorageIo + FileWatcher + FilePicker {
 	let argument = command.split_once(' ').map(|(_, tail)| tail.trim().to_string());
 	let resolved = state.command_registry.resolve_command_input(command.as_str()).or_else(|| {
 		state.selected_command_palette_match().and_then(|palette_item| {
-			state.command_registry.resolve_command_id_with_argument(palette_item.command_id.as_str(), argument)
+			state.command_registry.resolve_command_id_with_argument(&palette_item.command_id, argument)
 		})
 	});
 	let Some(resolved) = resolved else {
@@ -141,39 +141,39 @@ where
 			let action = command.normal_mode_action().expect("checked above");
 			RimState::dispatch_internal(ports, state, action)
 		}
-		BuiltinCommand::Quit => quit_current_scope(ports, state, false),
-		BuiltinCommand::QuitForce => quit_current_scope(ports, state, true),
-		BuiltinCommand::QuitAll => quit_application(ports, state, false),
-		BuiltinCommand::QuitAllForce => quit_application(ports, state, true),
-		BuiltinCommand::Save => {
+		BuiltinCommand::Command(CommandCommand::Quit) => quit_current_scope(ports, state, false),
+		BuiltinCommand::Command(CommandCommand::QuitForce) => quit_current_scope(ports, state, true),
+		BuiltinCommand::Command(CommandCommand::QuitAll) => quit_application(ports, state, false),
+		BuiltinCommand::Command(CommandCommand::QuitAllForce) => quit_application(ports, state, true),
+		BuiltinCommand::Command(CommandCommand::Save) => {
 			enqueue_save_active_buffer(ports, state, false, false, argument.map(PathBuf::from));
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::SaveForce => {
+		BuiltinCommand::Command(CommandCommand::SaveForce) => {
 			enqueue_save_active_buffer(ports, state, false, true, argument.map(PathBuf::from));
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::SaveAll => {
+		BuiltinCommand::Command(CommandCommand::SaveAll) => {
 			enqueue_save_all_buffers(ports, state, false, false);
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::SaveAndQuit => {
+		BuiltinCommand::Command(CommandCommand::SaveAndQuit) => {
 			enqueue_save_active_buffer(ports, state, true, false, argument.map(PathBuf::from));
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::SaveAndQuitForce => {
+		BuiltinCommand::Command(CommandCommand::SaveAndQuitForce) => {
 			enqueue_save_active_buffer(ports, state, true, true, argument.map(PathBuf::from));
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::SaveAllAndQuit => {
+		BuiltinCommand::Command(CommandCommand::SaveAllAndQuit) => {
 			enqueue_save_all_buffers(ports, state, true, false);
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::SaveAllAndQuitForce => {
+		BuiltinCommand::Command(CommandCommand::SaveAllAndQuitForce) => {
 			enqueue_save_all_buffers(ports, state, true, true);
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::Reload => {
+		BuiltinCommand::Command(CommandCommand::Reload) => {
 			if let Some(path) = argument {
 				RimState::dispatch_internal(
 					ports,
@@ -185,7 +185,7 @@ where
 				ControlFlow::Continue(())
 			}
 		}
-		BuiltinCommand::ReloadForce => {
+		BuiltinCommand::Command(CommandCommand::ReloadForce) => {
 			if let Some(path) = argument {
 				RimState::dispatch_internal(
 					ports,
@@ -197,15 +197,15 @@ where
 				ControlFlow::Continue(())
 			}
 		}
-		BuiltinCommand::OpenWorkspaceFilePicker => {
+		BuiltinCommand::Picker(PickerCommand::Files) => {
 			open_workspace_file_picker(ports, state);
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::OpenPickerYazi => {
+		BuiltinCommand::Picker(PickerCommand::Yazi) => {
 			enqueue_open_with_picker(ports, state);
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::EnterNormalMode => {
+		BuiltinCommand::Mode(ModeCommand::Normal) => {
 			if state.is_command_mode() {
 				state.exit_command_mode();
 			} else if state.is_insert_mode() {
@@ -219,34 +219,34 @@ where
 			}
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::CommandSubmit => execute_current_command_input(ports, state),
-		BuiltinCommand::CommandBackspace => {
+		BuiltinCommand::Command(CommandCommand::Submit) => execute_current_command_input(ports, state),
+		BuiltinCommand::Command(CommandCommand::Backspace) => {
 			state.pop_command_char();
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::CommandPaletteSelectPrev => {
+		BuiltinCommand::CommandPalette(CommandPaletteCommand::Prev) => {
 			let _ = state.move_command_palette_selection(-1);
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::CommandPaletteSelectNext => {
+		BuiltinCommand::CommandPalette(CommandPaletteCommand::Next) => {
 			let _ = state.move_command_palette_selection(1);
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::PickerSelectPrev => {
+		BuiltinCommand::Picker(PickerCommand::Prev) => {
 			if !state.workspace_file_picker_loading() {
 				let moved = state.move_workspace_file_picker_selection(-1);
 				enqueue_workspace_file_picker_preview(ports, state, moved);
 			}
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::PickerSelectNext => {
+		BuiltinCommand::Picker(PickerCommand::Next) => {
 			if !state.workspace_file_picker_loading() {
 				let moved = state.move_workspace_file_picker_selection(1);
 				enqueue_workspace_file_picker_preview(ports, state, moved);
 			}
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::PickerConfirm => {
+		BuiltinCommand::Picker(PickerCommand::Confirm) => {
 			let Some(path) = state.selected_workspace_file_picker_path().map(PathBuf::from) else {
 				state.status_bar.message = "open failed: no file selected".to_string();
 				return ControlFlow::Continue(());
@@ -254,7 +254,7 @@ where
 			state.close_workspace_file_picker();
 			RimState::dispatch_internal(ports, state, AppAction::File(FileAction::OpenRequested { path }))
 		}
-		BuiltinCommand::OverlayClose => {
+		BuiltinCommand::Overlay(OverlayCommand::Close) => {
 			if state.key_hints_open() {
 				state.close_key_hints();
 			} else if state.workspace_file_picker_open() {
@@ -262,35 +262,35 @@ where
 			}
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::OverlayBack => {
+		BuiltinCommand::Overlay(OverlayCommand::Back) => {
 			let _ = state.step_back_key_hint_prefix();
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::InsertNewline => {
+		BuiltinCommand::Insert(InsertCommand::Newline) => {
 			state.insert_newline_at_cursor();
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::InsertBackspace => {
+		BuiltinCommand::Insert(InsertCommand::Backspace) => {
 			state.backspace_at_cursor();
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::InsertMoveLeft => {
+		BuiltinCommand::Insert(InsertCommand::Left) => {
 			state.move_cursor_left();
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::InsertMoveDown => {
+		BuiltinCommand::Insert(InsertCommand::Down) => {
 			state.move_cursor_down();
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::InsertMoveUp => {
+		BuiltinCommand::Insert(InsertCommand::Up) => {
 			state.move_cursor_up();
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::InsertMoveRight => {
+		BuiltinCommand::Insert(InsertCommand::Right) => {
 			state.move_cursor_right_for_insert();
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::InsertTab => {
+		BuiltinCommand::Insert(InsertCommand::Tab) => {
 			state.insert_char_at_cursor('\t');
 			ControlFlow::Continue(())
 		}

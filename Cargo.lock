@@ -1509,6 +1509,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rim-command-macros"
+version = "0.0.2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "rim-infra-file-watcher"
 version = "0.0.2"
 dependencies = [
@@ -1564,6 +1573,7 @@ version = "0.0.2"
 dependencies = [
  "anyhow",
  "frizbee",
+ "rim-command-macros",
  "ropey",
  "serde",
  "slotmap",
