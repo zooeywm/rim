@@ -1,31 +1,38 @@
 use ropey::Rope;
-use unicode_width::UnicodeWidthChar;
 
-use super::{CursorState, RimState, rope_ends_with_newline, rope_line_count, rope_line_len_chars, rope_line_without_newline};
+use super::{
+	CursorState, RimState, rope_ends_with_newline, rope_line_count, rope_line_len_chars,
+	rope_line_without_newline,
+};
+use crate::display_geometry::{
+	char_display_width as geom_char_display_width,
+	display_width_of_char_prefix as geom_display_width_of_char_prefix,
+	navigable_col_for_display_target as geom_navigable_col_for_display_target,
+	wrapped_row_index_for_cursor as geom_wrapped_row_index_for_cursor,
+	wrapped_total_rows_for_rope as geom_wrapped_total_rows_for_rope,
+};
 use crate::state::{WindowId, rope_is_empty};
-
-const TAB_DISPLAY_WIDTH: usize = 4;
 
 impl RimState {
 	pub fn move_cursor_up(&mut self) {
 		tracing::trace!("move up");
-		let target_col = self.capture_preferred_col_for_vertical();
+		let target_display_col = self.capture_preferred_col_for_vertical();
 		if let Some(cursor) = self.active_buffer_cursor_mut()
 			&& cursor.row > 1
 		{
 			cursor.row = cursor.row.saturating_sub(1);
 		}
 		let row = self.active_cursor().row;
-		let max_col = self.max_navigable_col_for_row(row);
+		let target_col = self.navigable_col_for_display_target(row, target_display_col);
 		if let Some(cursor) = self.active_buffer_cursor_mut() {
-			cursor.col = target_col.min(max_col).max(1);
+			cursor.col = target_col;
 		}
 		self.adjust_scroll_after_vertical_move(VerticalMoveDirection::Up);
 	}
 
 	pub fn move_cursor_down(&mut self) {
 		tracing::trace!("move down");
-		let target_col = self.capture_preferred_col_for_vertical();
+		let target_display_col = self.capture_preferred_col_for_vertical();
 		let max_row = self.max_row();
 		if let Some(cursor) = self.active_buffer_cursor_mut()
 			&& cursor.row < max_row
@@ -33,9 +40,9 @@ impl RimState {
 			cursor.row = cursor.row.saturating_add(1);
 		}
 		let row = self.active_cursor().row;
-		let max_col = self.max_navigable_col_for_row(row);
+		let target_col = self.navigable_col_for_display_target(row, target_display_col);
 		if let Some(cursor) = self.active_buffer_cursor_mut() {
-			cursor.col = target_col.min(max_col).max(1);
+			cursor.col = target_col;
 		}
 		self.adjust_scroll_after_vertical_move(VerticalMoveDirection::Down);
 	}
@@ -105,26 +112,26 @@ impl RimState {
 	}
 
 	pub fn move_cursor_file_start(&mut self) {
-		let target_col = self.capture_preferred_col_for_vertical();
+		let target_display_col = self.capture_preferred_col_for_vertical();
 		if let Some(cursor) = self.active_buffer_cursor_mut() {
 			cursor.row = 1;
 		}
-		let max_col = self.max_navigable_col_for_row(1);
+		let target_col = self.navigable_col_for_display_target(1, target_display_col);
 		if let Some(cursor) = self.active_buffer_cursor_mut() {
-			cursor.col = target_col.min(max_col).max(1);
+			cursor.col = target_col;
 		}
 		self.adjust_scroll_after_vertical_move(VerticalMoveDirection::Up);
 	}
 
 	pub fn move_cursor_file_end(&mut self) {
-		let target_col = self.capture_preferred_col_for_vertical();
+		let target_display_col = self.capture_preferred_col_for_vertical();
 		let max_row = self.max_row();
 		if let Some(cursor) = self.active_buffer_cursor_mut() {
 			cursor.row = max_row;
 		}
-		let max_col = self.max_navigable_col_for_row(max_row);
+		let target_col = self.navigable_col_for_display_target(max_row, target_display_col);
 		if let Some(cursor) = self.active_buffer_cursor_mut() {
-			cursor.col = target_col.min(max_col).max(1);
+			cursor.col = target_col;
 		}
 		self.adjust_scroll_after_vertical_move(VerticalMoveDirection::Down);
 	}
@@ -151,31 +158,31 @@ impl RimState {
 	}
 
 	pub fn scroll_view_down_one_line(&mut self) {
-		let target_col = self.capture_preferred_col_for_vertical();
-		self.scroll_view_with_col_memory(1, target_col);
+		let target_display_col = self.capture_preferred_col_for_vertical();
+		self.scroll_view_with_col_memory(1, target_display_col);
 	}
 
 	pub fn scroll_view_up_one_line(&mut self) {
-		let target_col = self.capture_preferred_col_for_vertical();
-		self.scroll_view_with_col_memory(-1, target_col);
+		let target_display_col = self.capture_preferred_col_for_vertical();
+		self.scroll_view_with_col_memory(-1, target_display_col);
 	}
 
 	pub fn scroll_view_down_half_page(&mut self) {
-		let target_col = self.capture_preferred_col_for_vertical();
+		let target_display_col = self.capture_preferred_col_for_vertical();
 		let step = self.active_window_visible_rows().saturating_div(2).max(1) as i16;
-		self.move_cursor_and_scroll_half_page(step, target_col);
+		self.move_cursor_and_scroll_half_page(step, target_display_col);
 	}
 
 	pub fn scroll_view_up_half_page(&mut self) {
-		let target_col = self.capture_preferred_col_for_vertical();
+		let target_display_col = self.capture_preferred_col_for_vertical();
 		let step = self.active_window_visible_rows().saturating_div(2).max(1) as i16;
-		self.move_cursor_and_scroll_half_page(-step, target_col);
+		self.move_cursor_and_scroll_half_page(-step, target_display_col);
 	}
 
-	fn scroll_view_with_col_memory(&mut self, delta: i16, target_col: u16) -> bool {
+	fn scroll_view_with_col_memory(&mut self, delta: i16, target_display_col: u16) -> bool {
 		let active_window_id = self.active_window_id();
 		let visible_rows = self.active_window_visible_rows();
-		let max_scroll = self.max_row().saturating_sub(visible_rows);
+		let max_scroll = self.max_scroll_y_for_active_window(visible_rows);
 		let mut changed = false;
 		if let Some(window) = self.windows.get_mut(active_window_id) {
 			let previous_scroll = window.scroll_y;
@@ -186,7 +193,7 @@ impl RimState {
 			}
 			changed = window.scroll_y != previous_scroll;
 		}
-		self.keep_cursor_in_view_after_scroll(target_col);
+		self.keep_cursor_in_view_after_scroll(target_display_col);
 		changed
 	}
 
@@ -198,12 +205,12 @@ impl RimState {
 		if let Some(col) = self.preferred_col {
 			return col;
 		}
-		let col = self.active_cursor().col;
+		let col = self.active_cursor_display_col();
 		self.preferred_col = Some(col);
 		col
 	}
 
-	fn move_cursor_and_scroll_half_page(&mut self, delta: i16, target_col: u16) {
+	fn move_cursor_and_scroll_half_page(&mut self, delta: i16, target_display_col: u16) {
 		let active_window_id = self.active_window_id();
 		let Some(window_snapshot) = self.windows.get(active_window_id).copied() else {
 			return;
@@ -220,16 +227,17 @@ impl RimState {
 		let relative_row = current_row.saturating_sub(window_snapshot.scroll_y.saturating_add(1));
 		let next_cursor_line = next_row.saturating_sub(1);
 		let next_scroll = next_cursor_line.saturating_sub(relative_row).min(max_scroll);
-		let max_col = self.max_navigable_col_for_row(next_row);
-
+		let target_col = self.navigable_col_for_display_target(next_row, target_display_col);
 		if let Some(window) = self.windows.get_mut(active_window_id) {
 			window.cursor.row = next_row;
-			window.cursor.col = target_col.min(max_col).max(1);
+			window.cursor.col = target_col;
 			window.scroll_y = next_scroll;
 		}
 	}
 
-	fn max_row(&self) -> u16 { self.active_buffer_rope().map(|text| rope_line_count(text) as u16).unwrap_or(1) }
+	fn max_row(&self) -> u16 {
+		self.active_buffer_rope().map(|text| rope_line_count(text) as u16).unwrap_or(1)
+	}
 
 	pub(super) fn max_col_for_row(&self, row: u16) -> u16 {
 		let row_index = row.saturating_sub(1) as usize;
@@ -238,7 +246,9 @@ impl RimState {
 		line_len.saturating_add(1)
 	}
 
-	fn max_navigable_col_for_row(&self, row: u16) -> u16 { self.max_col_for_row(row).saturating_sub(1).max(1) }
+	fn max_navigable_col_for_row(&self, row: u16) -> u16 {
+		self.max_col_for_row(row).saturating_sub(1).max(1)
+	}
 
 	fn max_visual_char_col_for_row(&self, row: u16) -> u16 {
 		let line_len = self.max_col_for_row(row).saturating_sub(1);
@@ -271,7 +281,11 @@ impl RimState {
 			.unwrap_or(1)
 	}
 
-	fn keep_cursor_in_view_after_scroll(&mut self, target_col: u16) {
+	fn keep_cursor_in_view_after_scroll(&mut self, target_display_col: u16) {
+		if self.word_wrap_enabled() {
+			// Keep current behavior predictable in wrap mode: scroll follows viewport only.
+			return;
+		}
 		let active_window_id = self.active_window_id();
 		let Some(window) = self.windows.get(active_window_id).cloned() else {
 			return;
@@ -292,10 +306,10 @@ impl RimState {
 			return;
 		};
 
-		let max_col = self.max_navigable_col_for_row(target_row);
+		let target_col = self.navigable_col_for_display_target(target_row, target_display_col);
 		if let Some(cursor) = self.active_buffer_cursor_mut() {
 			cursor.row = target_row;
-			cursor.col = target_col.min(max_col).max(1);
+			cursor.col = target_col;
 		}
 	}
 
@@ -317,6 +331,10 @@ impl RimState {
 	}
 
 	fn adjust_scroll_after_vertical_move(&mut self, direction: VerticalMoveDirection) {
+		if self.word_wrap_enabled() {
+			self.adjust_scroll_after_move_wrapped(direction);
+			return;
+		}
 		let active_window_id = self.active_window_id();
 		let cursor_row = self.active_cursor().row;
 		let cursor_line = cursor_row.saturating_sub(1);
@@ -347,6 +365,14 @@ impl RimState {
 	}
 
 	fn adjust_scroll_after_horizontal_move(&mut self, direction: HorizontalMoveDirection) {
+		if self.word_wrap_enabled() {
+			let _ = direction;
+			self.align_active_window_scroll_to_cursor();
+			if let Some(window) = self.windows.get_mut(self.active_window_id()) {
+				window.scroll_x = 0;
+			}
+			return;
+		}
 		let active_window_id = self.active_window_id();
 		let visible_cols = self.active_window_visible_text_cols();
 		let visible_tail = visible_cols.saturating_sub(1);
@@ -376,6 +402,10 @@ impl RimState {
 	}
 
 	pub(in crate::state) fn align_active_window_scroll_to_cursor(&mut self) {
+		if self.word_wrap_enabled() {
+			self.align_active_window_scroll_to_cursor_wrapped();
+			return;
+		}
 		let active_window_id = self.active_window_id();
 		self.center_window_on_cursor_if_hidden(active_window_id);
 		let Some(window) = self.windows.get(active_window_id).cloned() else {
@@ -422,6 +452,10 @@ impl RimState {
 	}
 
 	pub(crate) fn center_window_on_cursor_if_hidden(&mut self, window_id: WindowId) {
+		if self.word_wrap_enabled() {
+			self.center_window_on_cursor_if_hidden_wrapped(window_id);
+			return;
+		}
 		let Some(window) = self.windows.get(window_id).cloned() else {
 			return;
 		};
@@ -464,7 +498,7 @@ impl RimState {
 		self
 			.active_buffer_rope()
 			.and_then(|text| rope_line_without_newline(text, row_index))
-			.map(|line| display_width_of_char_prefix(line.as_str(), char_index) as u16)
+			.map(|line| geom_display_width_of_char_prefix(line.as_str(), char_index) as u16)
 			.unwrap_or(0)
 	}
 
@@ -473,8 +507,117 @@ impl RimState {
 		self
 			.active_buffer_rope()
 			.and_then(|text| rope_line_without_newline(text, row_index))
-			.map(|line| line.chars().map(|ch| char_display_width(ch) as u16).sum())
+			.map(|line| line.chars().map(|ch| geom_char_display_width(ch) as u16).sum())
 			.unwrap_or(0)
+	}
+
+	fn navigable_col_for_display_target(&self, row: u16, target_display_col: u16) -> u16 {
+		let Some(text) = self.active_buffer_rope() else {
+			return 1;
+		};
+		let col = geom_navigable_col_for_display_target(text, row, target_display_col);
+		col.min(self.max_navigable_col_for_row(row)).max(1)
+	}
+
+	fn max_scroll_y_for_active_window(&self, visible_rows: u16) -> u16 {
+		if self.word_wrap_enabled() {
+			self.wrapped_total_rows_for_active_buffer().saturating_sub(visible_rows)
+		} else {
+			self.max_row().saturating_sub(visible_rows)
+		}
+	}
+
+	fn wrapped_total_rows_for_active_buffer(&self) -> u16 {
+		let Some(text) = self.active_buffer_rope() else {
+			return 1;
+		};
+		let width = self.active_window_visible_text_cols().max(1) as usize;
+		geom_wrapped_total_rows_for_rope(text, width)
+	}
+
+	fn active_cursor_wrapped_row_index(&self) -> u16 {
+		let cursor = self.active_cursor();
+		let width = self.active_window_visible_text_cols().max(1) as usize;
+		let Some(text) = self.active_buffer_rope() else {
+			return 0;
+		};
+		geom_wrapped_row_index_for_cursor(text, cursor, width)
+	}
+
+	fn adjust_scroll_after_move_wrapped(&mut self, direction: VerticalMoveDirection) {
+		let active_window_id = self.active_window_id();
+		let visible_rows = self.active_window_visible_rows();
+		let max_scroll = self.max_scroll_y_for_active_window(visible_rows);
+		let threshold = self.cursor_scroll_threshold.min(visible_rows.saturating_sub(1));
+		let visible_tail = visible_rows.saturating_sub(1);
+		let cursor_wrapped_row = self.active_cursor_wrapped_row_index();
+
+		if let Some(window) = self.windows.get_mut(active_window_id) {
+			match direction {
+				VerticalMoveDirection::Up => {
+					let top_trigger = window.scroll_y.saturating_add(threshold);
+					if cursor_wrapped_row < top_trigger {
+						window.scroll_y = cursor_wrapped_row.saturating_sub(threshold).min(max_scroll);
+					}
+				}
+				VerticalMoveDirection::Down => {
+					let bottom = window.scroll_y.saturating_add(visible_tail);
+					let bottom_trigger = bottom.saturating_sub(threshold);
+					if cursor_wrapped_row > bottom_trigger {
+						let needed_top = cursor_wrapped_row.saturating_add(threshold).saturating_sub(visible_tail);
+						window.scroll_y = needed_top.min(max_scroll);
+					}
+				}
+			}
+		}
+	}
+
+	fn align_active_window_scroll_to_cursor_wrapped(&mut self) {
+		let active_window_id = self.active_window_id();
+		self.center_window_on_cursor_if_hidden_wrapped(active_window_id);
+		let Some(window) = self.windows.get(active_window_id).cloned() else {
+			return;
+		};
+		let cursor_wrapped_row = self.active_cursor_wrapped_row_index();
+		let visible_rows = self.active_window_visible_rows();
+		let max_scroll = self.max_scroll_y_for_active_window(visible_rows);
+		let threshold = self.cursor_scroll_threshold.min(visible_rows.saturating_sub(1));
+		let visible_tail = visible_rows.saturating_sub(1);
+		let top_trigger = window.scroll_y.saturating_add(threshold);
+		let bottom = window.scroll_y.saturating_add(visible_tail);
+		let bottom_trigger = bottom.saturating_sub(threshold);
+
+		let mut next_scroll = window.scroll_y;
+		if cursor_wrapped_row < top_trigger {
+			next_scroll = cursor_wrapped_row.saturating_sub(threshold);
+		} else if cursor_wrapped_row > bottom_trigger {
+			next_scroll = cursor_wrapped_row.saturating_add(threshold).saturating_sub(visible_tail);
+		}
+		next_scroll = next_scroll.min(max_scroll);
+
+		if let Some(active_window) = self.windows.get_mut(active_window_id) {
+			active_window.scroll_y = next_scroll;
+			active_window.scroll_x = 0;
+		}
+	}
+
+	fn center_window_on_cursor_if_hidden_wrapped(&mut self, window_id: WindowId) {
+		let Some(window) = self.windows.get(window_id).cloned() else {
+			return;
+		};
+		let visible_rows = window_visible_rows(&window);
+		let top = window.scroll_y;
+		let bottom = window.scroll_y.saturating_add(visible_rows.saturating_sub(1));
+		let cursor_wrapped_row = self.active_cursor_wrapped_row_index();
+		if cursor_wrapped_row >= top && cursor_wrapped_row <= bottom {
+			return;
+		}
+		let max_scroll = self.max_scroll_y_for_active_window(visible_rows);
+		let next_scroll = cursor_wrapped_row.saturating_sub(visible_rows / 2).min(max_scroll);
+		if let Some(target_window) = self.windows.get_mut(window_id) {
+			target_window.scroll_y = next_scroll;
+			target_window.scroll_x = 0;
+		}
 	}
 }
 
@@ -496,23 +639,15 @@ fn cursor_display_col_for_window(text: &Rope, cursor: CursorState) -> u16 {
 	let row_index = cursor.row.saturating_sub(1) as usize;
 	let char_index = cursor.col.saturating_sub(1) as usize;
 	rope_line_without_newline(text, row_index)
-		.map(|line| display_width_of_char_prefix(line.as_str(), char_index) as u16)
+		.map(|line| geom_display_width_of_char_prefix(line.as_str(), char_index) as u16)
 		.unwrap_or(0)
 }
 
 fn line_display_width_for_window(text: &Rope, cursor: CursorState) -> u16 {
 	let row_index = cursor.row.saturating_sub(1) as usize;
 	rope_line_without_newline(text, row_index)
-		.map(|line| line.chars().map(|ch| char_display_width(ch) as u16).sum())
+		.map(|line| line.chars().map(|ch| geom_char_display_width(ch) as u16).sum())
 		.unwrap_or(0)
-}
-
-fn display_width_of_char_prefix(line: &str, char_count: usize) -> usize {
-	line.chars().take(char_count).map(char_display_width).sum()
-}
-
-fn char_display_width(ch: char) -> usize {
-	if ch == '\t' { TAB_DISPLAY_WIDTH } else { UnicodeWidthChar::width(ch).unwrap_or(0) }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

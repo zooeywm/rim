@@ -1,8 +1,13 @@
 use ropey::Rope;
 use tracing::{error, trace};
-use unicode_width::UnicodeWidthChar;
 
 use super::{FocusDirection, RimState, SplitAxis, WindowId, WindowState};
+use crate::display_geometry::{
+	char_display_width as geom_char_display_width,
+	display_width_of_char_prefix as geom_display_width_of_char_prefix,
+	wrapped_row_index_for_cursor as geom_wrapped_row_index_for_cursor,
+	wrapped_total_rows_for_rope as geom_wrapped_total_rows_for_rope,
+};
 
 impl RimState {
 	pub fn focus_window(&mut self, direction: FocusDirection) {
@@ -397,6 +402,26 @@ impl RimState {
 		let visible_cols = window_visible_text_cols(&window_snapshot, &buffer.text);
 		let cursor_line = cursor.row.saturating_sub(1);
 		let cursor_display_col = cursor_display_col_for_window(&buffer.text, cursor);
+		if self.word_wrap_enabled() {
+			let wrap_width = visible_cols.max(1) as usize;
+			let cursor_wrapped_row = geom_wrapped_row_index_for_cursor(&buffer.text, cursor, wrap_width);
+			let max_scroll_y =
+				geom_wrapped_total_rows_for_rope(&buffer.text, wrap_width).saturating_sub(visible_rows);
+			let visible_row_tail = visible_rows.saturating_sub(1);
+			let mut next_scroll_y = window_snapshot.scroll_y.min(max_scroll_y);
+			let bottom = next_scroll_y.saturating_add(visible_row_tail);
+			if cursor_wrapped_row < next_scroll_y {
+				next_scroll_y = cursor_wrapped_row;
+			} else if cursor_wrapped_row > bottom {
+				next_scroll_y = cursor_wrapped_row.saturating_sub(visible_row_tail).min(max_scroll_y);
+			}
+			if let Some(window) = self.windows.get_mut(window_id) {
+				window.cursor = cursor;
+				window.scroll_y = next_scroll_y;
+				window.scroll_x = 0;
+			}
+			return;
+		}
 		let max_scroll_y = (crate::state::rope_line_count(&buffer.text) as u16).saturating_sub(visible_rows);
 		let visible_row_tail = visible_rows.saturating_sub(1);
 		let max_visible_col_tail = visible_cols.saturating_sub(1);
@@ -550,21 +575,13 @@ fn cursor_display_col_for_window(text: &Rope, cursor: crate::state::CursorState)
 	let row_index = cursor.row.saturating_sub(1) as usize;
 	let char_index = cursor.col.saturating_sub(1) as usize;
 	crate::state::rope_line_without_newline(text, row_index)
-		.map(|line| display_width_of_char_prefix(line.as_str(), char_index) as u16)
+		.map(|line| geom_display_width_of_char_prefix(line.as_str(), char_index) as u16)
 		.unwrap_or(0)
 }
 
 fn line_display_width_for_window(text: &Rope, cursor: crate::state::CursorState) -> u16 {
 	let row_index = cursor.row.saturating_sub(1) as usize;
 	crate::state::rope_line_without_newline(text, row_index)
-		.map(|line| line.chars().map(|ch| char_display_width(ch) as u16).sum())
+		.map(|line| line.chars().map(|ch| geom_char_display_width(ch) as u16).sum())
 		.unwrap_or(0)
-}
-
-fn display_width_of_char_prefix(line: &str, char_count: usize) -> usize {
-	line.chars().take(char_count).map(char_display_width).sum()
-}
-
-fn char_display_width(ch: char) -> usize {
-	if ch == '\t' { 4 } else { UnicodeWidthChar::width(ch).unwrap_or(0) }
 }
