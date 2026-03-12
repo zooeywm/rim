@@ -1,4 +1,4 @@
-use std::{cell::RefCell, fs, ops::ControlFlow, path::PathBuf, process::Command};
+use std::{cell::RefCell, fs, ops::ControlFlow, path::{Path, PathBuf}, process::Command};
 
 use anyhow::{Context, Result};
 use rim_infra_file_watcher::FileWatcherState;
@@ -45,11 +45,12 @@ impl<'a> AppPorts<'a> {
 }
 
 impl App {
-	pub fn new() -> Result<Self> {
+	pub fn new(workspace_root: PathBuf) -> Result<Self> {
 		// One bounded queue coordinates input, IO callbacks, and kernel actions.
 		let (event_tx, event_rx) = flume::bounded(1024);
 		initialize_config_files()?;
 		let mut state = RimState::new();
+		state.set_workspace_root(workspace_root);
 		Self::apply_all_configs(&mut state)?;
 		Ok(Self {
 			state,
@@ -207,6 +208,22 @@ impl App {
 	}
 }
 
+pub fn detect_workspace_root(start_dir: &Path) -> PathBuf {
+	let git_root = Command::new("git")
+		.arg("rev-parse")
+		.arg("--show-toplevel")
+		.current_dir(start_dir)
+		.output()
+		.ok()
+		.filter(|output| output.status.success())
+		.and_then(|output| String::from_utf8(output.stdout).ok())
+		.map(|stdout| stdout.trim().to_string())
+		.filter(|stdout| !stdout.is_empty())
+		.map(PathBuf::from);
+	let root = git_root.unwrap_or_else(|| start_dir.to_path_buf());
+	fs::canonicalize(&root).unwrap_or(root)
+}
+
 impl FilePicker for AppPorts<'_> {
 	fn pick_open_path(&self) -> Result<Option<PathBuf>, FilePickerError> {
 		let chooser_file = std::env::temp_dir().join(format!(
@@ -262,7 +279,7 @@ impl FilePicker for AppPorts<'_> {
 
 #[cfg(test)]
 mod tests {
-	use rim_kernel::{command::{BindingMatch, BuiltinCommand, CommandConfigFile, CommandKeymapSection, CommandTarget, KeyBindingOn, KeymapBindingConfig}, state::{NormalSequenceKey, RimState}};
+	use rim_kernel::{command::{BindingMatch, BuiltinCommand, CommandConfigFile, CommandKeymapSection, CommandTarget, KeyBindingOn, KeymapBindingConfig, ModeKeymapSections}, state::{KeymapScope, NormalSequenceKey, RimState}};
 
 	use super::App;
 
@@ -270,35 +287,41 @@ mod tests {
 	fn reset_config_state_to_defaults_should_restore_removed_user_keymap_override() {
 		let mut state = RimState::new();
 		let errors = state.apply_command_config(&CommandConfigFile {
-			normal: CommandKeymapSection {
-				keymap: vec![KeymapBindingConfig {
-					on:   KeyBindingOn::single("go"),
-					run:  "core.cursor.file_start".to_string(),
-					desc: Some("custom".to_string()),
-				}],
+			mode: ModeKeymapSections {
+				normal: CommandKeymapSection {
+					keymap: vec![KeymapBindingConfig {
+						on:   KeyBindingOn::single("go"),
+						run:  "core.cursor.file_start".to_string(),
+						desc: Some("custom".to_string()),
+					}],
+				},
+				..ModeKeymapSections::default()
 			},
 			..CommandConfigFile::default()
 		});
 		assert!(errors.is_empty());
 		assert_eq!(
-			state
-				.command_registry
-				.resolve_normal_sequence(&[NormalSequenceKey::Char('g'), NormalSequenceKey::Char('g')]),
+			state.command_registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[
+				NormalSequenceKey::Char('g'),
+				NormalSequenceKey::Char('g')
+			]),
 			BindingMatch::NoMatch
 		);
 
 		App::reset_config_state_to_defaults(&mut state);
 
 		assert_eq!(
-			state
-				.command_registry
-				.resolve_normal_sequence(&[NormalSequenceKey::Char('g'), NormalSequenceKey::Char('g')]),
+			state.command_registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[
+				NormalSequenceKey::Char('g'),
+				NormalSequenceKey::Char('g')
+			]),
 			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::MoveFileStart))
 		);
 		assert_eq!(
-			state
-				.command_registry
-				.resolve_normal_sequence(&[NormalSequenceKey::Char('g'), NormalSequenceKey::Char('o')]),
+			state.command_registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[
+				NormalSequenceKey::Char('g'),
+				NormalSequenceKey::Char('o')
+			]),
 			BindingMatch::NoMatch
 		);
 	}
@@ -307,31 +330,28 @@ mod tests {
 	fn reset_config_state_to_defaults_should_restore_default_key_hint_description() {
 		let mut state = RimState::new();
 		let errors = state.apply_command_config(&CommandConfigFile {
-			normal: CommandKeymapSection {
-				keymap: vec![KeymapBindingConfig {
-					on:   KeyBindingOn::single("gg"),
-					run:  "core.cursor.file_start".to_string(),
-					desc: Some("Jump to beginning".to_string()),
-				}],
+			mode: ModeKeymapSections {
+				normal: CommandKeymapSection {
+					keymap: vec![KeymapBindingConfig {
+						on:   KeyBindingOn::single("gg"),
+						run:  "core.cursor.file_start".to_string(),
+						desc: Some("Jump to beginning".to_string()),
+					}],
+				},
+				..ModeKeymapSections::default()
 			},
 			..CommandConfigFile::default()
 		});
 		assert!(errors.is_empty());
 		assert_eq!(
-			state
-				.command_registry
-				.key_hints(rim_kernel::state::KeymapScope::Normal, &[NormalSequenceKey::Char('g')])[0]
-				.summary,
+			state.command_registry.key_hints(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('g')])[0].summary,
 			"Jump to beginning"
 		);
 
 		App::reset_config_state_to_defaults(&mut state);
 
 		assert_eq!(
-			state
-				.command_registry
-				.key_hints(rim_kernel::state::KeymapScope::Normal, &[NormalSequenceKey::Char('g')])[0]
-				.summary,
+			state.command_registry.key_hints(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('g')])[0].summary,
 			"Move to file start"
 		);
 	}

@@ -17,6 +17,14 @@ where P: StorageIo + FileWatcher + FilePicker {
 		return handle_pending_swap_decision_key(ports, state, key);
 	}
 
+	if handle_overlay_key(ports, state, key).is_break() {
+		return ControlFlow::Continue(());
+	}
+
+	if state.workspace_file_picker_open() {
+		return command_flow::handle_workspace_file_picker_key(ports, state, key);
+	}
+
 	if !state.is_visual_mode() {
 		state.visual_g_pending = false;
 	}
@@ -76,32 +84,6 @@ where P: StorageIo + FileWatcher + FilePicker {
 
 pub(super) fn handle_normal_mode_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
 where P: StorageIo + FileWatcher + FilePicker {
-	if key.code == KeyCode::F1 {
-		state.normal_sequence.clear();
-		state.status_bar.key_sequence.clear();
-		state.open_key_hints_overview();
-		return ControlFlow::Continue(());
-	}
-	if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('d') && state.key_hints_open()
-	{
-		let _ = state.scroll_key_hints_half_page_down();
-		return ControlFlow::Continue(());
-	}
-	if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('u') && state.key_hints_open()
-	{
-		let _ = state.scroll_key_hints_half_page_up();
-		return ControlFlow::Continue(());
-	}
-	if key.code == KeyCode::Backspace && state.step_back_key_hint_prefix() {
-		return ControlFlow::Continue(());
-	}
-	if key.code == KeyCode::Esc && matches!(state.overlay, Some(crate::state::OverlayState::KeyHints(_))) {
-		state.normal_sequence.clear();
-		state.status_bar.key_sequence.clear();
-		state.close_key_hints();
-		return ControlFlow::Continue(());
-	}
-
 	let Some(normal_key) = to_normal_key(state, key) else {
 		state.normal_sequence.clear();
 		state.status_bar.key_sequence.clear();
@@ -176,11 +158,23 @@ pub(super) fn to_normal_key(state: &RimState, key: KeyEvent) -> Option<NormalSeq
 	if key.code == KeyCode::Tab {
 		return Some(NormalSequenceKey::Tab);
 	}
+	if key.code == KeyCode::Enter {
+		return Some(NormalSequenceKey::Enter);
+	}
+	if key.code == KeyCode::Backspace {
+		return Some(NormalSequenceKey::Backspace);
+	}
 	if key.code == KeyCode::Esc {
 		return Some(NormalSequenceKey::Esc);
 	}
 	if key.code == KeyCode::F1 {
 		return Some(NormalSequenceKey::F1);
+	}
+	if key.code == KeyCode::Left {
+		return Some(NormalSequenceKey::Left);
+	}
+	if key.code == KeyCode::Right {
+		return Some(NormalSequenceKey::Right);
 	}
 	if key.code == KeyCode::Up {
 		return Some(NormalSequenceKey::Up);
@@ -196,7 +190,7 @@ pub(super) fn resolve_normal_sequence_with_registry(
 	registry: &CommandRegistry,
 	keys: &[NormalSequenceKey],
 ) -> SequenceMatch {
-	match registry.resolve_normal_sequence(keys) {
+	match registry.resolve_scope_sequence(crate::state::KeymapScope::ModeNormal, keys) {
 		BindingMatch::Pending => SequenceMatch::Pending,
 		BindingMatch::NoMatch => SequenceMatch::NoMatch,
 		BindingMatch::Exact(CommandTarget::Builtin(builtin)) => {
@@ -214,7 +208,7 @@ pub(super) fn resolve_visual_sequence_with_registry(
 	registry: &CommandRegistry,
 	keys: &[NormalSequenceKey],
 ) -> SequenceMatch {
-	match registry.resolve_visual_sequence(keys) {
+	match registry.resolve_scope_sequence(crate::state::KeymapScope::ModeVisual, keys) {
 		BindingMatch::Pending => SequenceMatch::Pending,
 		BindingMatch::NoMatch => SequenceMatch::NoMatch,
 		BindingMatch::Exact(CommandTarget::Builtin(builtin)) => {
@@ -235,7 +229,11 @@ pub(super) fn render_normal_sequence(keys: &[NormalSequenceKey]) -> String {
 			NormalSequenceKey::Leader => "<leader>".to_string(),
 			NormalSequenceKey::Tab => "<tab>".to_string(),
 			NormalSequenceKey::Esc => "<Esc>".to_string(),
+			NormalSequenceKey::Enter => "<Enter>".to_string(),
+			NormalSequenceKey::Backspace => "<Backspace>".to_string(),
 			NormalSequenceKey::F1 => "<F1>".to_string(),
+			NormalSequenceKey::Left => "<Left>".to_string(),
+			NormalSequenceKey::Right => "<Right>".to_string(),
 			NormalSequenceKey::Up => "<Up>".to_string(),
 			NormalSequenceKey::Down => "<Down>".to_string(),
 			NormalSequenceKey::Char(ch) => ch.to_string(),
@@ -246,6 +244,9 @@ pub(super) fn render_normal_sequence(keys: &[NormalSequenceKey]) -> String {
 }
 
 pub(super) fn handle_insert_mode_key(state: &mut RimState, key: KeyEvent) -> ControlFlow<()> {
+	if let Some(flow) = handle_insert_scope_key(state, key) {
+		return flow;
+	}
 	if state.is_block_insert_mode() {
 		return handle_block_insert_mode_key(state, key);
 	}
@@ -299,26 +300,6 @@ fn handle_block_insert_mode_key(state: &mut RimState, key: KeyEvent) -> ControlF
 
 pub(super) fn handle_visual_mode_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
 where P: StorageIo + FileWatcher + FilePicker {
-	if key.code == KeyCode::F1 {
-		state.normal_sequence.clear();
-		state.status_bar.key_sequence.clear();
-		state.open_key_hints_overview();
-		return ControlFlow::Continue(());
-	}
-	if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('d') && state.key_hints_open()
-	{
-		let _ = state.scroll_key_hints_half_page_down();
-		return ControlFlow::Continue(());
-	}
-	if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('u') && state.key_hints_open()
-	{
-		let _ = state.scroll_key_hints_half_page_up();
-		return ControlFlow::Continue(());
-	}
-	if key.code == KeyCode::Backspace && state.step_back_key_hint_prefix() {
-		return ControlFlow::Continue(());
-	}
-
 	let Some(visual_key) = to_normal_key(state, key) else {
 		state.normal_sequence.clear();
 		state.status_bar.key_sequence.clear();
@@ -366,5 +347,76 @@ where P: StorageIo + FileWatcher + FilePicker {
 }
 
 fn should_keep_key_hints_open_for_action(action: &AppAction) -> bool {
-	matches!(action, AppAction::Editor(EditorAction::ScrollKeyHintsUp | EditorAction::ScrollKeyHintsDown))
+	matches!(
+		action,
+		AppAction::Editor(
+			EditorAction::ScrollKeyHintsUp
+				| EditorAction::ScrollKeyHintsDown
+				| EditorAction::ScrollKeyHintsHalfPageUp
+				| EditorAction::ScrollKeyHintsHalfPageDown
+		)
+	)
+}
+
+fn handle_overlay_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
+where P: StorageIo + FileWatcher + FilePicker {
+	if !state.key_hints_open() {
+		return ControlFlow::Continue(());
+	}
+	let Some(normal_key) = to_normal_key(state, key) else {
+		return ControlFlow::Continue(());
+	};
+	match state
+		.command_registry
+		.resolve_scope_sequence(crate::state::KeymapScope::OverlayWhichKey, &[normal_key])
+	{
+		BindingMatch::Exact(target) => {
+			let _ = command_flow::execute_command_target(ports, state, target, None);
+			ControlFlow::Break(())
+		}
+		BindingMatch::Pending | BindingMatch::NoMatch => ControlFlow::Continue(()),
+	}
+}
+
+fn handle_insert_scope_key(state: &mut RimState, key: KeyEvent) -> Option<ControlFlow<()>> {
+	let normal_key = to_normal_key(state, key)?;
+	match state.command_registry.resolve_scope_sequence(crate::state::KeymapScope::ModeInsert, &[normal_key]) {
+		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::EnterNormalMode)) => {
+			state.exit_insert_mode();
+			Some(ControlFlow::Continue(()))
+		}
+		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::InsertNewline)) => {
+			state.insert_newline_at_cursor();
+			Some(ControlFlow::Continue(()))
+		}
+		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::InsertBackspace)) => {
+			state.backspace_at_cursor();
+			Some(ControlFlow::Continue(()))
+		}
+		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::InsertMoveLeft)) => {
+			state.move_cursor_left();
+			Some(ControlFlow::Continue(()))
+		}
+		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::InsertMoveDown)) => {
+			state.move_cursor_down();
+			Some(ControlFlow::Continue(()))
+		}
+		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::InsertMoveUp)) => {
+			state.move_cursor_up();
+			Some(ControlFlow::Continue(()))
+		}
+		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::InsertMoveRight)) => {
+			state.move_cursor_right_for_insert();
+			Some(ControlFlow::Continue(()))
+		}
+		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::InsertTab)) => {
+			state.insert_char_at_cursor('\t');
+			Some(ControlFlow::Continue(()))
+		}
+		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::ShowKeyHints)) => {
+			state.open_key_hints_overview();
+			Some(ControlFlow::Continue(()))
+		}
+		BindingMatch::Exact(_) | BindingMatch::Pending | BindingMatch::NoMatch => None,
+	}
 }

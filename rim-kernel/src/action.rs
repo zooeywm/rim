@@ -93,6 +93,8 @@ pub enum EditorAction {
 	ShowKeyHints,
 	ScrollKeyHintsUp,
 	ScrollKeyHintsDown,
+	ScrollKeyHintsHalfPageUp,
+	ScrollKeyHintsHalfPageDown,
 	Undo,
 	Redo,
 	JoinLineBelow,
@@ -170,6 +172,14 @@ pub enum FileAction {
 	},
 	WorkspaceSessionLoaded {
 		result: anyhow::Result<Option<WorkspaceSessionSnapshot>>,
+	},
+	WorkspaceFilesListed {
+		workspace_root: PathBuf,
+		result:         anyhow::Result<Vec<PathBuf>>,
+	},
+	WorkspaceFilePreviewLoaded {
+		path:   PathBuf,
+		result: anyhow::Result<String>,
 	},
 	LoadCompleted {
 		buffer_id: BufferId,

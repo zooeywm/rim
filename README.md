@@ -15,7 +15,7 @@ This release focuses on runtime consistency and configuration ergonomics:
 - `:wq` now persists workspace session consistently
 - `:yazi` picker integration is stabilized for cursor/window restore behavior
 - Command config supports inline table style:
-  - `[normal] keymap = [ { on = "...", run = "...", desc = "..." } ]`
+  - `[mode.normal] keymap = [ { on = "...", run = "...", desc = "..." } ]`
   - `[command] commands = [ { name = "...", run = "...", desc = "..." } ]`
 - Config file changes are hot-reloaded through `FileWatcher` events (no polling loop in app runtime)
 - Override semantics are explicit:
@@ -189,7 +189,7 @@ Workspace session rules:
 
 - Built-in commands are registered under stable command IDs such as `core.quit`, `core.save`, and `core.picker.yazi`
 - Future plugins can register additional command IDs under their own namespace
-- Normal-mode key bindings, visual-mode key bindings, and command-line aliases are all resolved through the same command registry
+- Mode key bindings, overlay key bindings, and command-line aliases are all resolved through the same command registry
 
 User overrides are loaded from:
 
@@ -216,32 +216,71 @@ cursor_scroll_threshold = 0
 key_hints_width = 42
 key_hints_max_height = 36
 
-[normal]
+[mode.normal]
 keymap = [
   { on = "H", run = "core.buffer.next", desc = "Switch to next buffer" },
   { on = "<leader>wv", run = "core.window.split_vertical", desc = "Split vertically" },
   { on = "<F1>", run = "core.help.keymap", desc = "Show current mode key hints" },
-  { on = "<Up>", run = "core.help.keymap_scroll_up", desc = "Scroll key hint window up" },
-  { on = "<Down>", run = "core.help.keymap_scroll_down", desc = "Scroll key hint window down" },
-  { on = "<C-p>", run = "core.help.keymap_scroll_up", desc = "Scroll key hint window up" },
-  { on = "<C-n>", run = "core.help.keymap_scroll_down", desc = "Scroll key hint window down" },
   { on = ["<leader>wh", "<leader>w-"], run = "core.window.split_horizontal", desc = "Split horizontally" },
 ]
 
-[visual]
+[mode.visual]
 keymap = [
   { on = "<Esc>", run = "core.visual.exit", desc = "Exit visual mode" },
   { on = "<F1>", run = "core.help.keymap", desc = "Show current mode key hints" },
+]
+
+[mode.command]
+keymap = [
+  { on = "<Esc>", run = "core.mode.normal", desc = "Return to normal mode" },
+  { on = "<Enter>", run = "core.command.submit", desc = "Execute current command input" },
+  { on = "<Backspace>", run = "core.command.backspace", desc = "Delete previous command character" },
+]
+
+[mode.insert]
+keymap = [
+  { on = "<Esc>", run = "core.mode.normal", desc = "Return to normal mode" },
+  { on = "<Enter>", run = "core.insert.newline", desc = "Insert newline" },
+  { on = "<Backspace>", run = "core.insert.backspace", desc = "Delete previous character" },
+  { on = "<Left>", run = "core.insert.left", desc = "Move left in insert mode" },
+  { on = "<Right>", run = "core.insert.right", desc = "Move right in insert mode" },
+]
+
+[overlay.whichkey]
+keymap = [
+  { on = "<Esc>", run = "core.overlay.close", desc = "Close key hints" },
+  { on = "<Backspace>", run = "core.overlay.back", desc = "Step back one prefix level" },
   { on = "<Up>", run = "core.help.keymap_scroll_up", desc = "Scroll key hint window up" },
   { on = "<Down>", run = "core.help.keymap_scroll_down", desc = "Scroll key hint window down" },
   { on = "<C-p>", run = "core.help.keymap_scroll_up", desc = "Scroll key hint window up" },
   { on = "<C-n>", run = "core.help.keymap_scroll_down", desc = "Scroll key hint window down" },
+  { on = "<C-u>", run = "core.help.keymap_half_page_up", desc = "Scroll key hint window up half page" },
+  { on = "<C-d>", run = "core.help.keymap_half_page_down", desc = "Scroll key hint window down half page" },
+]
+
+[overlay.command_palette]
+keymap = [
+  { on = "<Up>", run = "core.command_palette.prev", desc = "Select previous command candidate" },
+  { on = "<Down>", run = "core.command_palette.next", desc = "Select next command candidate" },
+  { on = "<C-p>", run = "core.command_palette.prev", desc = "Select previous command candidate" },
+  { on = "<C-n>", run = "core.command_palette.next", desc = "Select next command candidate" },
+]
+
+[overlay.picker]
+keymap = [
+  { on = "<Esc>", run = "core.overlay.close", desc = "Close picker" },
+  { on = "<Enter>", run = "core.picker.confirm", desc = "Open selected file" },
+  { on = "<Up>", run = "core.picker.prev", desc = "Select previous file" },
+  { on = "<Down>", run = "core.picker.next", desc = "Select next file" },
+  { on = "<C-p>", run = "core.picker.prev", desc = "Select previous file" },
+  { on = "<C-n>", run = "core.picker.next", desc = "Select next file" },
 ]
 
 [command]
 commands = [
   { name = "qq", run = "core.quit_all", desc = "Quit application" },
-  { name = "files", run = "core.picker.yazi", desc = "Open yazi picker" },
+  { name = "files", run = "core.picker.files", desc = "Open workspace file picker" },
+  { name = "yazi", run = "core.picker.yazi", desc = "Open yazi picker" },
 ]
 ```
 
@@ -250,14 +289,15 @@ Rules:
 - `run` must reference a registered command ID
 - `keymaps.toml`, `commands.toml`, and `config.toml` are always reloaded as full snapshots
 - If an alias in `commands.toml` points to an unsupported `run`, the command palette still shows it as an error entry so the misconfiguration is visible
-- `normal.keymap` and `visual.keymap` accept `on = "..."` and `on = ["...", "..."]`
+- `mode.*.keymap` and `overlay.*.keymap` accept `on = "..."` and `on = ["...", "..."]`
 - A single string means one complete shortcut sequence such as `"<leader>wv"`
 - A string array means multiple complete shortcuts bound to the same command
 - `run` can be a command invocation such as `quit` or `quit!`, or a command ID such as `core.quit_all`
 - `desc` is part of the runtime model and hot-reloads together with `run`
 - `command.commands` defines command-line aliases entered after `:`
-- `normal.keymap` and `visual.keymap` are command-oriented overrides: configured commands replace their built-in bindings, while untouched commands keep built-in defaults
+- `mode.*.keymap` and `overlay.*.keymap` are command-oriented overrides: configured commands replace their built-in bindings inside that scope, while untouched commands keep built-in defaults
 - If `command.commands` is provided, it replaces the default command alias table
+- `:files` opens the built-in workspace file picker rooted at the detected workspace root; `:yazi` keeps using the host yazi picker
 - Missing sections keep the built-in code defaults
 - Invalid config entries are ignored and reported in the log
 - `config.toml` covers editor-wide settings such as `leader_key`, `cursor_scroll_threshold`, `key_hints_width`, and `key_hints_max_height`

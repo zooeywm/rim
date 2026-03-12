@@ -1,5 +1,6 @@
 use std::{collections::{BTreeMap, HashMap, HashSet}, fmt, path::{Path, PathBuf}, time::{Duration, Instant}};
 
+use frizbee::{Config as FrizbeeConfig, match_list_indices};
 use ropey::Rope;
 use serde::{Deserialize, Serialize};
 use slotmap::{SlotMap, new_key_type};
@@ -167,17 +168,26 @@ pub enum NormalSequenceKey {
 	Leader,
 	Tab,
 	Esc,
+	Enter,
+	Backspace,
 	F1,
+	Left,
+	Right,
 	Up,
 	Down,
 	Char(char),
 	Ctrl(char),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeymapScope {
-	Normal,
-	Visual,
+	ModeNormal,
+	ModeVisual,
+	ModeCommand,
+	ModeInsert,
+	OverlayWhichKey,
+	OverlayCommandPalette,
+	OverlayPicker,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,6 +245,32 @@ pub struct CommandPaletteState {
 	pub query:    String,
 	pub items:    Vec<CommandPaletteMatch>,
 	pub selected: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceFileEntry {
+	pub absolute_path: PathBuf,
+	pub relative_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceFileMatch {
+	pub absolute_path: PathBuf,
+	pub relative_path: String,
+	pub match_indices: Vec<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceFilePickerState {
+	pub query:         String,
+	pub entries:       Vec<WorkspaceFileEntry>,
+	pub items:         Vec<WorkspaceFileMatch>,
+	pub selected:      usize,
+	pub total_files:   usize,
+	pub total_matches: usize,
+	pub preview_title: String,
+	pub preview_lines: Vec<String>,
+	pub loading:       bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -327,6 +363,7 @@ pub struct WorkspaceWindowBufferViewSnapshot {
 #[derive(Debug)]
 pub struct RimState {
 	pub title:                        String,
+	pub workspace_root:               PathBuf,
 	pub active_tab:                   TabId,
 	pub leader_key:                   char,
 	pub mode:                         EditorMode,
@@ -351,6 +388,7 @@ pub struct RimState {
 	pub command_registry:             CommandRegistry,
 	pub overlay:                      Option<OverlayState>,
 	pub command_palette:              Option<CommandPaletteState>,
+	pub workspace_file_picker:        Option<WorkspaceFilePickerState>,
 	pub(crate) window_buffer_views:   HashMap<(WindowId, BufferId), WindowBufferViewState>,
 	pub buffers:                      SlotMap<BufferId, BufferState>,
 	pub buffer_order:                 Vec<BufferId>,
@@ -379,6 +417,7 @@ impl RimState {
 
 		Self {
 			title: "Rim".to_string(),
+			workspace_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
 			active_tab: tab_id,
 			leader_key: ' ',
 			mode: EditorMode::Normal,
@@ -403,6 +442,7 @@ impl RimState {
 			command_registry: CommandRegistry::with_defaults(),
 			overlay: None,
 			command_palette: None,
+			workspace_file_picker: None,
 			window_buffer_views: HashMap::new(),
 			buffers,
 			buffer_order: Vec::new(),
@@ -422,6 +462,14 @@ impl RimState {
 
 	pub fn command_palette(&self) -> Option<&CommandPaletteState> { self.command_palette.as_ref() }
 
+	pub fn workspace_file_picker(&self) -> Option<&WorkspaceFilePickerState> {
+		self.workspace_file_picker.as_ref()
+	}
+
+	pub fn workspace_root(&self) -> &Path { self.workspace_root.as_path() }
+
+	pub fn set_workspace_root(&mut self, workspace_root: PathBuf) { self.workspace_root = workspace_root; }
+
 	pub fn refresh_command_palette(&mut self) {
 		if !self.is_command_mode() {
 			self.command_palette = None;
@@ -438,6 +486,165 @@ impl RimState {
 	}
 
 	pub fn close_command_palette(&mut self) { self.command_palette = None; }
+
+	pub fn open_workspace_file_picker(&mut self, entries: Vec<WorkspaceFileEntry>) {
+		let total_files = entries.len();
+		self.close_key_hints();
+		self.close_command_palette();
+		self.workspace_file_picker = Some(WorkspaceFilePickerState {
+			query: String::new(),
+			entries,
+			items: Vec::new(),
+			selected: 0,
+			total_files,
+			total_matches: 0,
+			preview_title: String::new(),
+			preview_lines: Vec::new(),
+			loading: false,
+		});
+		self.refresh_workspace_file_picker_matches();
+	}
+
+	pub fn open_workspace_file_picker_loading(&mut self) {
+		self.close_key_hints();
+		self.close_command_palette();
+		self.workspace_file_picker = Some(WorkspaceFilePickerState {
+			query:         String::new(),
+			entries:       Vec::new(),
+			items:         Vec::new(),
+			selected:      0,
+			total_files:   0,
+			total_matches: 0,
+			preview_title: String::new(),
+			preview_lines: vec!["Loading workspace files...".to_string()],
+			loading:       true,
+		});
+	}
+
+	pub fn close_workspace_file_picker(&mut self) { self.workspace_file_picker = None; }
+
+	pub fn workspace_file_picker_open(&self) -> bool { self.workspace_file_picker.is_some() }
+
+	pub fn workspace_file_picker_loading(&self) -> bool {
+		self.workspace_file_picker.as_ref().is_some_and(|picker| picker.loading)
+	}
+
+	pub fn refresh_workspace_file_picker_matches(&mut self) {
+		let Some(picker) = self.workspace_file_picker.as_mut() else {
+			return;
+		};
+		let query = picker.query.trim();
+		picker.loading = false;
+		let mut matches = picker
+			.entries
+			.iter()
+			.filter_map(|entry| {
+				if query.is_empty() {
+					return Some((0u16, WorkspaceFileMatch {
+						absolute_path: entry.absolute_path.clone(),
+						relative_path: entry.relative_path.clone(),
+						match_indices: Vec::new(),
+					}));
+				}
+				let (score, mut indices) = workspace_file_match(query, entry.relative_path.as_str())?;
+				indices.sort_unstable();
+				Some((score, WorkspaceFileMatch {
+					absolute_path: entry.absolute_path.clone(),
+					relative_path: entry.relative_path.clone(),
+					match_indices: indices,
+				}))
+			})
+			.collect::<Vec<_>>();
+		matches.sort_by(|left, right| {
+			right.0.cmp(&left.0).then_with(|| left.1.relative_path.cmp(&right.1.relative_path))
+		});
+		picker.total_matches = matches.len();
+		picker.items = matches.into_iter().take(512).map(|(_, item)| item).collect();
+		picker.selected = picker.selected.min(picker.items.len().saturating_sub(1));
+		if picker.items.is_empty() {
+			picker.preview_title.clear();
+			picker.preview_lines.clear();
+		}
+	}
+
+	pub fn move_workspace_file_picker_selection(&mut self, delta: isize) -> bool {
+		let Some(picker) = self.workspace_file_picker.as_mut() else {
+			return false;
+		};
+		if picker.items.is_empty() {
+			return false;
+		}
+		let next = picker.selected.saturating_add_signed(delta).min(picker.items.len().saturating_sub(1));
+		let changed = next != picker.selected;
+		picker.selected = next;
+		changed
+	}
+
+	pub fn push_workspace_file_picker_char(&mut self, ch: char) {
+		let Some(picker) = self.workspace_file_picker.as_mut() else {
+			return;
+		};
+		picker.query.push(ch);
+		picker.selected = 0;
+		self.refresh_workspace_file_picker_matches();
+	}
+
+	pub fn pop_workspace_file_picker_char(&mut self) {
+		let Some(picker) = self.workspace_file_picker.as_mut() else {
+			return;
+		};
+		let _ = picker.query.pop();
+		picker.selected = 0;
+		self.refresh_workspace_file_picker_matches();
+	}
+
+	pub fn selected_workspace_file_picker_path(&self) -> Option<&Path> {
+		let picker = self.workspace_file_picker.as_ref()?;
+		let selected = picker.items.get(picker.selected)?;
+		Some(selected.absolute_path.as_path())
+	}
+
+	pub fn set_workspace_file_picker_preview(&mut self, path: &Path, preview: String) {
+		let Some(picker) = self.workspace_file_picker.as_mut() else {
+			return;
+		};
+		let selected = picker.items.get(picker.selected).map(|item| item.absolute_path.as_path());
+		if selected != Some(path) {
+			return;
+		}
+		picker.preview_title = path
+			.file_name()
+			.map(|name| name.to_string_lossy().to_string())
+			.unwrap_or_else(|| path.display().to_string());
+		picker.preview_lines = if preview.is_empty() {
+			vec!["<empty>".to_string()]
+		} else {
+			preview.lines().map(ToString::to_string).collect()
+		};
+	}
+
+	pub fn set_workspace_file_picker_preview_loading(&mut self, path: &Path) {
+		let Some(picker) = self.workspace_file_picker.as_mut() else {
+			return;
+		};
+		let selected = picker.items.get(picker.selected).map(|item| item.absolute_path.as_path());
+		if selected != Some(path) {
+			return;
+		}
+		picker.preview_title = path
+			.file_name()
+			.map(|name| name.to_string_lossy().to_string())
+			.unwrap_or_else(|| path.display().to_string());
+		picker.preview_lines = vec!["Loading preview...".to_string()];
+	}
+
+	pub fn clear_workspace_file_picker_preview(&mut self) {
+		let Some(picker) = self.workspace_file_picker.as_mut() else {
+			return;
+		};
+		picker.preview_title.clear();
+		picker.preview_lines.clear();
+	}
 
 	pub fn move_command_palette_selection(&mut self, delta: isize) -> bool {
 		let Some(palette) = self.command_palette.as_mut() else {
@@ -458,7 +665,15 @@ impl RimState {
 	}
 
 	pub fn active_keymap_scope(&self) -> KeymapScope {
-		if self.is_visual_mode() { KeymapScope::Visual } else { KeymapScope::Normal }
+		if self.is_visual_mode() {
+			KeymapScope::ModeVisual
+		} else if self.is_command_mode() {
+			KeymapScope::ModeCommand
+		} else if self.is_insert_mode() {
+			KeymapScope::ModeInsert
+		} else {
+			KeymapScope::ModeNormal
+		}
 	}
 
 	pub fn floating_window(&self) -> Option<&FloatingWindowState> {
@@ -534,8 +749,13 @@ impl RimState {
 
 	fn active_keymap_scope_label(&self, scope: KeymapScope) -> &'static str {
 		match scope {
-			KeymapScope::Normal => "NORMAL",
-			KeymapScope::Visual => "VISUAL",
+			KeymapScope::ModeNormal => "NORMAL",
+			KeymapScope::ModeVisual => "VISUAL",
+			KeymapScope::ModeCommand => "COMMAND",
+			KeymapScope::ModeInsert => "INSERT",
+			KeymapScope::OverlayWhichKey => "WHICHKEY",
+			KeymapScope::OverlayCommandPalette => "COMMAND",
+			KeymapScope::OverlayPicker => "PICKER",
 		}
 	}
 
@@ -546,7 +766,11 @@ impl RimState {
 				NormalSequenceKey::Leader => "<leader>".to_string(),
 				NormalSequenceKey::Tab => "<Tab>".to_string(),
 				NormalSequenceKey::Esc => "<Esc>".to_string(),
+				NormalSequenceKey::Enter => "<Enter>".to_string(),
+				NormalSequenceKey::Backspace => "<Backspace>".to_string(),
 				NormalSequenceKey::F1 => "<F1>".to_string(),
+				NormalSequenceKey::Left => "<Left>".to_string(),
+				NormalSequenceKey::Right => "<Right>".to_string(),
 				NormalSequenceKey::Up => "<Up>".to_string(),
 				NormalSequenceKey::Down => "<Down>".to_string(),
 				NormalSequenceKey::Char(ch) => ch.to_string(),
@@ -815,6 +1039,14 @@ pub enum FocusDirection {
 pub enum BufferSwitchDirection {
 	Prev,
 	Next,
+}
+
+fn workspace_file_match(query: &str, haystack: &str) -> Option<(u16, Vec<usize>)> {
+	let config = FrizbeeConfig::default();
+	let matched = match_list_indices(query, &[haystack], &config).into_iter().next()?;
+	let mut indices = matched.indices;
+	indices.sort_unstable();
+	Some((matched.score, indices))
 }
 
 #[cfg(test)]

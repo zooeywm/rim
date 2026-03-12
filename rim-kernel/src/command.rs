@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use frizbee::{Config as FrizbeeConfig, match_list_indices};
 use serde::{Deserialize, Serialize};
@@ -50,6 +50,25 @@ pub enum BuiltinCommand {
 	ShowKeyHints,
 	KeyHintScrollUp,
 	KeyHintScrollDown,
+	KeyHintHalfPageUp,
+	KeyHintHalfPageDown,
+	EnterNormalMode,
+	CommandSubmit,
+	CommandBackspace,
+	CommandPaletteSelectPrev,
+	CommandPaletteSelectNext,
+	PickerSelectPrev,
+	PickerSelectNext,
+	PickerConfirm,
+	OverlayClose,
+	OverlayBack,
+	InsertNewline,
+	InsertBackspace,
+	InsertMoveLeft,
+	InsertMoveDown,
+	InsertMoveUp,
+	InsertMoveRight,
+	InsertTab,
 	Quit,
 	QuitForce,
 	QuitAll,
@@ -63,6 +82,7 @@ pub enum BuiltinCommand {
 	SaveAllAndQuitForce,
 	Reload,
 	ReloadForce,
+	OpenWorkspaceFilePicker,
 	OpenPickerYazi,
 	VisualExit,
 	VisualDelete,
@@ -121,6 +141,8 @@ impl BuiltinCommand {
 			Self::ShowKeyHints => Some(AppAction::Editor(EditorAction::ShowKeyHints)),
 			Self::KeyHintScrollUp => Some(AppAction::Editor(EditorAction::ScrollKeyHintsUp)),
 			Self::KeyHintScrollDown => Some(AppAction::Editor(EditorAction::ScrollKeyHintsDown)),
+			Self::KeyHintHalfPageUp => Some(AppAction::Editor(EditorAction::ScrollKeyHintsHalfPageUp)),
+			Self::KeyHintHalfPageDown => Some(AppAction::Editor(EditorAction::ScrollKeyHintsHalfPageDown)),
 			_ => None,
 		}
 	}
@@ -143,6 +165,8 @@ impl BuiltinCommand {
 			Self::ShowKeyHints => Some(AppAction::Editor(EditorAction::ShowKeyHints)),
 			Self::KeyHintScrollUp => Some(AppAction::Editor(EditorAction::ScrollKeyHintsUp)),
 			Self::KeyHintScrollDown => Some(AppAction::Editor(EditorAction::ScrollKeyHintsDown)),
+			Self::KeyHintHalfPageUp => Some(AppAction::Editor(EditorAction::ScrollKeyHintsHalfPageUp)),
+			Self::KeyHintHalfPageDown => Some(AppAction::Editor(EditorAction::ScrollKeyHintsHalfPageDown)),
 			Self::VisualExit => Some(AppAction::Editor(EditorAction::ExitVisualMode)),
 			Self::VisualDelete => Some(AppAction::Editor(EditorAction::DeleteVisualSelectionToSlot)),
 			Self::VisualYank => Some(AppAction::Editor(EditorAction::YankVisualSelectionToSlot)),
@@ -212,14 +236,7 @@ pub enum BindingMatch<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct NormalKeyBinding {
-	keys:       Vec<NormalSequenceKey>,
-	command_id: String,
-	desc:       Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct VisualKeyBinding {
+struct ScopedKeyBinding {
 	keys:       Vec<NormalSequenceKey>,
 	command_id: String,
 	desc:       Option<String>,
@@ -236,10 +253,15 @@ struct CommandAlias {
 
 #[derive(Debug, Clone, Default)]
 pub struct CommandRegistry {
-	commands:        HashMap<String, CommandSpec>,
-	normal_bindings: Vec<NormalKeyBinding>,
-	visual_bindings: Vec<VisualKeyBinding>,
-	command_aliases: Vec<CommandAlias>,
+	commands:                         HashMap<String, CommandSpec>,
+	normal_bindings:                  Vec<ScopedKeyBinding>,
+	visual_bindings:                  Vec<ScopedKeyBinding>,
+	command_mode_bindings:            Vec<ScopedKeyBinding>,
+	insert_mode_bindings:             Vec<ScopedKeyBinding>,
+	overlay_whichkey_bindings:        Vec<ScopedKeyBinding>,
+	overlay_command_palette_bindings: Vec<ScopedKeyBinding>,
+	overlay_picker_bindings:          Vec<ScopedKeyBinding>,
+	command_aliases:                  Vec<CommandAlias>,
 }
 
 impl CommandRegistry {
@@ -251,60 +273,33 @@ impl CommandRegistry {
 
 	pub fn apply_config(&mut self, config: &CommandConfigFile) -> Vec<String> {
 		let mut errors = Vec::new();
-
-		let mut overridden_normal_commands = Vec::new();
-		for binding in &config.normal.keymap {
-			let key_sets = match binding.on.parse_bindings() {
-				Ok(key_sets) => key_sets,
-				Err(err) => {
-					errors.push(format!("invalid normal key binding '{}': {}", binding.on.display_for_error(), err));
-					continue;
-				}
-			};
-			let Some(resolved) = self.resolve_or_register_run_directive(binding.run.as_str()) else {
-				errors.push(format!("unknown run directive in normal keymap: {}", binding.run));
-				continue;
-			};
-			if !overridden_normal_commands.iter().any(|command_id| command_id == &resolved.spec.id) {
-				self.normal_bindings.retain(|candidate| candidate.command_id != resolved.spec.id);
-				overridden_normal_commands.push(resolved.spec.id.clone());
-			}
-			for keys in key_sets {
-				self.normal_bindings.retain(|candidate| candidate.keys != keys);
-				self.normal_bindings.push(NormalKeyBinding {
-					keys,
-					command_id: resolved.spec.id.clone(),
-					desc: binding.desc.clone(),
-				});
-			}
-		}
-
-		let mut overridden_visual_commands = Vec::new();
-		for binding in &config.visual.keymap {
-			let key_sets = match binding.on.parse_bindings() {
-				Ok(key_sets) => key_sets,
-				Err(err) => {
-					errors.push(format!("invalid visual key binding '{}': {}", binding.on.display_for_error(), err));
-					continue;
-				}
-			};
-			let Some(resolved) = self.resolve_or_register_run_directive(binding.run.as_str()) else {
-				errors.push(format!("unknown run directive in visual keymap: {}", binding.run));
-				continue;
-			};
-			if !overridden_visual_commands.iter().any(|command_id| command_id == &resolved.spec.id) {
-				self.visual_bindings.retain(|candidate| candidate.command_id != resolved.spec.id);
-				overridden_visual_commands.push(resolved.spec.id.clone());
-			}
-			for keys in key_sets {
-				self.visual_bindings.retain(|candidate| candidate.keys != keys);
-				self.visual_bindings.push(VisualKeyBinding {
-					keys,
-					command_id: resolved.spec.id.clone(),
-					desc: binding.desc.clone(),
-				});
-			}
-		}
+		self.apply_scope_keymap(KeymapScope::ModeNormal, "mode.normal", &config.mode.normal.keymap, &mut errors);
+		self.apply_scope_keymap(KeymapScope::ModeVisual, "mode.visual", &config.mode.visual.keymap, &mut errors);
+		self.apply_scope_keymap(
+			KeymapScope::ModeCommand,
+			"mode.command",
+			&config.mode.command.keymap,
+			&mut errors,
+		);
+		self.apply_scope_keymap(KeymapScope::ModeInsert, "mode.insert", &config.mode.insert.keymap, &mut errors);
+		self.apply_scope_keymap(
+			KeymapScope::OverlayWhichKey,
+			"overlay.whichkey",
+			&config.overlay.whichkey.keymap,
+			&mut errors,
+		);
+		self.apply_scope_keymap(
+			KeymapScope::OverlayCommandPalette,
+			"overlay.command_palette",
+			&config.overlay.command_palette.keymap,
+			&mut errors,
+		);
+		self.apply_scope_keymap(
+			KeymapScope::OverlayPicker,
+			"overlay.picker",
+			&config.overlay.picker.keymap,
+			&mut errors,
+		);
 
 		if !config.command.commands.is_empty() {
 			// Treat configured command aliases as an authoritative replacement set.
@@ -335,6 +330,47 @@ impl CommandRegistry {
 		errors
 	}
 
+	fn apply_scope_keymap(
+		&mut self,
+		scope: KeymapScope,
+		scope_label: &str,
+		configured_bindings: &[KeymapBindingConfig],
+		errors: &mut Vec<String>,
+	) {
+		let mut overridden_commands = Vec::new();
+		for binding in configured_bindings {
+			let key_sets = match binding.on.parse_bindings() {
+				Ok(key_sets) => key_sets,
+				Err(err) => {
+					errors.push(format!(
+						"invalid {} key binding '{}': {}",
+						scope_label,
+						binding.on.display_for_error(),
+						err
+					));
+					continue;
+				}
+			};
+			let Some(resolved) = self.resolve_or_register_run_directive(binding.run.as_str()) else {
+				errors.push(format!("unknown run directive in {}: {}", scope_label, binding.run));
+				continue;
+			};
+			let bindings = self.bindings_mut(scope);
+			if !overridden_commands.iter().any(|command_id| command_id == &resolved.spec.id) {
+				bindings.retain(|candidate| candidate.command_id != resolved.spec.id);
+				overridden_commands.push(resolved.spec.id.clone());
+			}
+			for keys in key_sets {
+				bindings.retain(|candidate| candidate.keys != keys);
+				bindings.push(ScopedKeyBinding {
+					keys,
+					command_id: resolved.spec.id.clone(),
+					desc: binding.desc.clone(),
+				});
+			}
+		}
+	}
+
 	pub fn register_plugin_command(&mut self, registration: PluginCommandRegistration) -> Result<(), String> {
 		if self.commands.contains_key(registration.id.as_str()) {
 			return Err(format!("duplicate command id: {}", registration.id));
@@ -349,20 +385,16 @@ impl CommandRegistry {
 		Ok(())
 	}
 
-	pub fn resolve_normal_sequence(&self, keys: &[NormalSequenceKey]) -> BindingMatch<CommandTarget> {
-		resolve_key_binding_set(&self.commands, &self.normal_bindings, keys)
-	}
-
-	pub fn resolve_visual_sequence(&self, keys: &[NormalSequenceKey]) -> BindingMatch<CommandTarget> {
-		resolve_key_binding_set(&self.commands, &self.visual_bindings, keys)
+	pub fn resolve_scope_sequence(
+		&self,
+		scope: KeymapScope,
+		keys: &[NormalSequenceKey],
+	) -> BindingMatch<CommandTarget> {
+		resolve_key_binding_set(&self.commands, self.bindings(scope), keys)
 	}
 
 	pub fn key_hints(&self, scope: KeymapScope, prefix: &[NormalSequenceKey]) -> Vec<FloatingWindowLine> {
-		let bindings = match scope {
-			KeymapScope::Normal => KeyBindingSet::Normal(self.normal_bindings.as_slice()),
-			KeymapScope::Visual => KeyBindingSet::Visual(self.visual_bindings.as_slice()),
-		};
-		collect_key_hints(&self.commands, bindings, prefix)
+		collect_key_hints(&self.commands, self.bindings(scope), prefix)
 	}
 
 	pub fn resolve_command_input(&self, input: &str) -> Option<ResolvedCommand> {
@@ -445,9 +477,12 @@ impl CommandRegistry {
 			.collect::<Vec<_>>();
 
 		matches.sort_by(|left, right| {
-			right
-				.0
-				.cmp(&left.0)
+			left
+				.1
+				.name
+				.is_empty()
+				.cmp(&right.1.name.is_empty())
+				.then_with(|| right.0.cmp(&left.0))
 				.then_with(|| left.1.name.cmp(&right.1.name))
 				.then_with(|| left.1.command_id.cmp(&right.1.command_id))
 		});
@@ -457,8 +492,12 @@ impl CommandRegistry {
 
 	fn command_palette_candidates(&self) -> Vec<CommandPaletteCandidate> {
 		let mut candidates = Vec::with_capacity(self.command_aliases.len().max(self.commands.len()));
+		let mut aliased_command_ids = HashSet::new();
 
 		for alias in &self.command_aliases {
+			if let Some(command_id) = alias.resolved_command_id.as_deref() {
+				aliased_command_ids.insert(command_id.to_string());
+			}
 			candidates.push(CommandPaletteCandidate {
 				name:        alias.name.clone(),
 				command_id:  alias.resolved_command_id.clone().unwrap_or_else(|| alias.run.clone()),
@@ -476,6 +515,22 @@ impl CommandRegistry {
 					(None, None, None) => "Error: invalid command alias. Check commands.toml".to_string(),
 				},
 				is_error:    alias.error.is_some(),
+			});
+		}
+
+		let mut unaliased_specs = self
+			.commands
+			.values()
+			.filter(|spec| !aliased_command_ids.contains(spec.id.as_str()))
+			.cloned()
+			.collect::<Vec<_>>();
+		unaliased_specs.sort_by(|left, right| left.id.cmp(&right.id));
+		for spec in unaliased_specs {
+			candidates.push(CommandPaletteCandidate {
+				name:        String::new(),
+				command_id:  spec.id,
+				description: spec.description,
+				is_error:    false,
 			});
 		}
 
@@ -532,9 +587,40 @@ impl CommandRegistry {
 		Some(ResolvedCommand { spec, argument })
 	}
 
+	fn bindings(&self, scope: KeymapScope) -> &[ScopedKeyBinding] {
+		match scope {
+			KeymapScope::ModeNormal => self.normal_bindings.as_slice(),
+			KeymapScope::ModeVisual => self.visual_bindings.as_slice(),
+			KeymapScope::ModeCommand => self.command_mode_bindings.as_slice(),
+			KeymapScope::ModeInsert => self.insert_mode_bindings.as_slice(),
+			KeymapScope::OverlayWhichKey => self.overlay_whichkey_bindings.as_slice(),
+			KeymapScope::OverlayCommandPalette => self.overlay_command_palette_bindings.as_slice(),
+			KeymapScope::OverlayPicker => self.overlay_picker_bindings.as_slice(),
+		}
+	}
+
+	fn bindings_mut(&mut self, scope: KeymapScope) -> &mut Vec<ScopedKeyBinding> {
+		match scope {
+			KeymapScope::ModeNormal => &mut self.normal_bindings,
+			KeymapScope::ModeVisual => &mut self.visual_bindings,
+			KeymapScope::ModeCommand => &mut self.command_mode_bindings,
+			KeymapScope::ModeInsert => &mut self.insert_mode_bindings,
+			KeymapScope::OverlayWhichKey => &mut self.overlay_whichkey_bindings,
+			KeymapScope::OverlayCommandPalette => &mut self.overlay_command_palette_bindings,
+			KeymapScope::OverlayPicker => &mut self.overlay_picker_bindings,
+		}
+	}
+
 	pub fn export_config(&self) -> CommandConfigFile {
-		let normal = export_keymap_bindings(&self.commands, &self.normal_bindings);
-		let visual = export_keymap_bindings(&self.commands, &self.visual_bindings);
+		let normal = export_keymap_bindings(&self.commands, self.bindings(KeymapScope::ModeNormal));
+		let visual = export_keymap_bindings(&self.commands, self.bindings(KeymapScope::ModeVisual));
+		let command_mode = export_keymap_bindings(&self.commands, self.bindings(KeymapScope::ModeCommand));
+		let insert_mode = export_keymap_bindings(&self.commands, self.bindings(KeymapScope::ModeInsert));
+		let overlay_whichkey =
+			export_keymap_bindings(&self.commands, self.bindings(KeymapScope::OverlayWhichKey));
+		let overlay_command_palette =
+			export_keymap_bindings(&self.commands, self.bindings(KeymapScope::OverlayCommandPalette));
+		let overlay_picker = export_keymap_bindings(&self.commands, self.bindings(KeymapScope::OverlayPicker));
 
 		let mut command = Vec::with_capacity(self.command_aliases.len());
 		for alias in &self.command_aliases {
@@ -552,8 +638,17 @@ impl CommandRegistry {
 		}
 
 		CommandConfigFile {
-			normal:  CommandKeymapSection { keymap: normal },
-			visual:  CommandKeymapSection { keymap: visual },
+			mode:    ModeKeymapSections {
+				normal:  CommandKeymapSection { keymap: normal },
+				visual:  CommandKeymapSection { keymap: visual },
+				command: CommandKeymapSection { keymap: command_mode },
+				insert:  CommandKeymapSection { keymap: insert_mode },
+			},
+			overlay: OverlayKeymapSections {
+				whichkey:        CommandKeymapSection { keymap: overlay_whichkey },
+				command_palette: CommandKeymapSection { keymap: overlay_command_palette },
+				picker:          CommandKeymapSection { keymap: overlay_picker },
+			},
 			command: CommandAliasSection { commands: command },
 		}
 	}
@@ -849,6 +944,139 @@ impl CommandRegistry {
 			BuiltinCommand::KeyHintScrollDown,
 		);
 		self.register_builtin(
+			"core.help.keymap_half_page_up",
+			"help",
+			"Scroll key hint window up half page",
+			CommandArgKind::None,
+			BuiltinCommand::KeyHintHalfPageUp,
+		);
+		self.register_builtin(
+			"core.help.keymap_half_page_down",
+			"help",
+			"Scroll key hint window down half page",
+			CommandArgKind::None,
+			BuiltinCommand::KeyHintHalfPageDown,
+		);
+		self.register_builtin(
+			"core.mode.normal",
+			"mode",
+			"Return to normal mode",
+			CommandArgKind::None,
+			BuiltinCommand::EnterNormalMode,
+		);
+		self.register_builtin(
+			"core.command.submit",
+			"command",
+			"Execute current command input",
+			CommandArgKind::None,
+			BuiltinCommand::CommandSubmit,
+		);
+		self.register_builtin(
+			"core.command.backspace",
+			"command",
+			"Delete previous command character",
+			CommandArgKind::None,
+			BuiltinCommand::CommandBackspace,
+		);
+		self.register_builtin(
+			"core.command_palette.prev",
+			"overlay",
+			"Select previous command candidate",
+			CommandArgKind::None,
+			BuiltinCommand::CommandPaletteSelectPrev,
+		);
+		self.register_builtin(
+			"core.command_palette.next",
+			"overlay",
+			"Select next command candidate",
+			CommandArgKind::None,
+			BuiltinCommand::CommandPaletteSelectNext,
+		);
+		self.register_builtin(
+			"core.picker.prev",
+			"overlay",
+			"Select previous picker item",
+			CommandArgKind::None,
+			BuiltinCommand::PickerSelectPrev,
+		);
+		self.register_builtin(
+			"core.picker.next",
+			"overlay",
+			"Select next picker item",
+			CommandArgKind::None,
+			BuiltinCommand::PickerSelectNext,
+		);
+		self.register_builtin(
+			"core.picker.confirm",
+			"overlay",
+			"Confirm picker selection",
+			CommandArgKind::None,
+			BuiltinCommand::PickerConfirm,
+		);
+		self.register_builtin(
+			"core.overlay.close",
+			"overlay",
+			"Close active overlay",
+			CommandArgKind::None,
+			BuiltinCommand::OverlayClose,
+		);
+		self.register_builtin(
+			"core.overlay.back",
+			"overlay",
+			"Go back inside active overlay",
+			CommandArgKind::None,
+			BuiltinCommand::OverlayBack,
+		);
+		self.register_builtin(
+			"core.insert.newline",
+			"insert",
+			"Insert newline",
+			CommandArgKind::None,
+			BuiltinCommand::InsertNewline,
+		);
+		self.register_builtin(
+			"core.insert.backspace",
+			"insert",
+			"Delete previous character in insert mode",
+			CommandArgKind::None,
+			BuiltinCommand::InsertBackspace,
+		);
+		self.register_builtin(
+			"core.insert.left",
+			"insert",
+			"Move left in insert mode",
+			CommandArgKind::None,
+			BuiltinCommand::InsertMoveLeft,
+		);
+		self.register_builtin(
+			"core.insert.down",
+			"insert",
+			"Move down in insert mode",
+			CommandArgKind::None,
+			BuiltinCommand::InsertMoveDown,
+		);
+		self.register_builtin(
+			"core.insert.up",
+			"insert",
+			"Move up in insert mode",
+			CommandArgKind::None,
+			BuiltinCommand::InsertMoveUp,
+		);
+		self.register_builtin(
+			"core.insert.right",
+			"insert",
+			"Move right in insert mode",
+			CommandArgKind::None,
+			BuiltinCommand::InsertMoveRight,
+		);
+		self.register_builtin(
+			"core.insert.tab",
+			"insert",
+			"Insert tab",
+			CommandArgKind::None,
+			BuiltinCommand::InsertTab,
+		);
+		self.register_builtin(
 			"core.quit",
 			"command",
 			"Quit current scope",
@@ -938,6 +1166,13 @@ impl CommandRegistry {
 			"Force reload current buffer",
 			CommandArgKind::OptionalPath,
 			BuiltinCommand::ReloadForce,
+		);
+		self.register_builtin(
+			"core.picker.files",
+			"command",
+			"Open the workspace file picker",
+			CommandArgKind::None,
+			BuiltinCommand::OpenWorkspaceFilePicker,
 		);
 		self.register_builtin(
 			"core.picker.yazi",
@@ -1045,10 +1280,6 @@ impl CommandRegistry {
 		self.bind_default_normal("<C-u>", "core.view.scroll_half_page_up");
 		self.bind_default_normal("<C-r>", "core.edit.redo");
 		self.bind_default_normal("<F1>", "core.help.keymap");
-		self.bind_default_normal("<Up>", "core.help.keymap_scroll_up");
-		self.bind_default_normal("<Down>", "core.help.keymap_scroll_down");
-		self.bind_default_normal("<C-p>", "core.help.keymap_scroll_up");
-		self.bind_default_normal("<C-n>", "core.help.keymap_scroll_down");
 		self.bind_default_normal("<leader>wv", "core.window.split_vertical");
 		self.bind_default_normal("<leader>wh", "core.window.split_horizontal");
 		self.bind_default_normal("<leader><Tab>n", "core.tab.new");
@@ -1081,10 +1312,36 @@ impl CommandRegistry {
 		self.bind_default_visual("<C-d>", "core.view.scroll_half_page_down");
 		self.bind_default_visual("<C-u>", "core.view.scroll_half_page_up");
 		self.bind_default_visual("<F1>", "core.help.keymap");
-		self.bind_default_visual("<Up>", "core.help.keymap_scroll_up");
-		self.bind_default_visual("<Down>", "core.help.keymap_scroll_down");
-		self.bind_default_visual("<C-p>", "core.help.keymap_scroll_up");
-		self.bind_default_visual("<C-n>", "core.help.keymap_scroll_down");
+		self.bind_default_command_mode("<Esc>", "core.mode.normal");
+		self.bind_default_command_mode("<Enter>", "core.command.submit");
+		self.bind_default_command_mode("<Backspace>", "core.command.backspace");
+		self.bind_default_insert_mode("<Esc>", "core.mode.normal");
+		self.bind_default_insert_mode("<Enter>", "core.insert.newline");
+		self.bind_default_insert_mode("<Backspace>", "core.insert.backspace");
+		self.bind_default_insert_mode("<Left>", "core.insert.left");
+		self.bind_default_insert_mode("<Down>", "core.insert.down");
+		self.bind_default_insert_mode("<Up>", "core.insert.up");
+		self.bind_default_insert_mode("<Right>", "core.insert.right");
+		self.bind_default_insert_mode("<Tab>", "core.insert.tab");
+		self.bind_default_insert_mode("<F1>", "core.help.keymap");
+		self.bind_default_overlay_whichkey("<Esc>", "core.overlay.close");
+		self.bind_default_overlay_whichkey("<Backspace>", "core.overlay.back");
+		self.bind_default_overlay_whichkey("<Up>", "core.help.keymap_scroll_up");
+		self.bind_default_overlay_whichkey("<Down>", "core.help.keymap_scroll_down");
+		self.bind_default_overlay_whichkey("<C-p>", "core.help.keymap_scroll_up");
+		self.bind_default_overlay_whichkey("<C-n>", "core.help.keymap_scroll_down");
+		self.bind_default_overlay_whichkey("<C-u>", "core.help.keymap_half_page_up");
+		self.bind_default_overlay_whichkey("<C-d>", "core.help.keymap_half_page_down");
+		self.bind_default_overlay_command_palette("<Up>", "core.command_palette.prev");
+		self.bind_default_overlay_command_palette("<Down>", "core.command_palette.next");
+		self.bind_default_overlay_command_palette("<C-p>", "core.command_palette.prev");
+		self.bind_default_overlay_command_palette("<C-n>", "core.command_palette.next");
+		self.bind_default_overlay_picker("<Esc>", "core.overlay.close");
+		self.bind_default_overlay_picker("<Enter>", "core.picker.confirm");
+		self.bind_default_overlay_picker("<Up>", "core.picker.prev");
+		self.bind_default_overlay_picker("<Down>", "core.picker.next");
+		self.bind_default_overlay_picker("<C-p>", "core.picker.prev");
+		self.bind_default_overlay_picker("<C-n>", "core.picker.next");
 
 		self.bind_default_command("q", "core.quit");
 		self.bind_default_command("quit", "core.quit");
@@ -1101,8 +1358,9 @@ impl CommandRegistry {
 		self.bind_default_command("wqa!", "core.save_all_and_quit_force");
 		self.bind_default_command("e", "core.reload");
 		self.bind_default_command("e!", "core.reload_force");
+		self.bind_default_command("files", "core.picker.files");
+		self.bind_default_command("find", "core.picker.files");
 		self.bind_default_command("yazi", "core.picker.yazi");
-		self.bind_default_command("files", "core.picker.yazi");
 	}
 
 	fn register_builtin(
@@ -1123,13 +1381,36 @@ impl CommandRegistry {
 	}
 
 	fn bind_default_normal(&mut self, on: &str, command_id: &str) {
-		let keys = parse_normal_sequence(on).expect("default key binding should be valid");
-		self.normal_bindings.push(NormalKeyBinding { keys, command_id: command_id.to_string(), desc: None });
+		self.bind_default(KeymapScope::ModeNormal, on, command_id);
 	}
 
 	fn bind_default_visual(&mut self, on: &str, command_id: &str) {
+		self.bind_default(KeymapScope::ModeVisual, on, command_id);
+	}
+
+	fn bind_default_command_mode(&mut self, on: &str, command_id: &str) {
+		self.bind_default(KeymapScope::ModeCommand, on, command_id);
+	}
+
+	fn bind_default_insert_mode(&mut self, on: &str, command_id: &str) {
+		self.bind_default(KeymapScope::ModeInsert, on, command_id);
+	}
+
+	fn bind_default_overlay_whichkey(&mut self, on: &str, command_id: &str) {
+		self.bind_default(KeymapScope::OverlayWhichKey, on, command_id);
+	}
+
+	fn bind_default_overlay_command_palette(&mut self, on: &str, command_id: &str) {
+		self.bind_default(KeymapScope::OverlayCommandPalette, on, command_id);
+	}
+
+	fn bind_default_overlay_picker(&mut self, on: &str, command_id: &str) {
+		self.bind_default(KeymapScope::OverlayPicker, on, command_id);
+	}
+
+	fn bind_default(&mut self, scope: KeymapScope, on: &str, command_id: &str) {
 		let keys = parse_normal_sequence(on).expect("default key binding should be valid");
-		self.visual_bindings.push(VisualKeyBinding { keys, command_id: command_id.to_string(), desc: None });
+		self.bindings_mut(scope).push(ScopedKeyBinding { keys, command_id: command_id.to_string(), desc: None });
 	}
 
 	fn bind_default_command(&mut self, name: &str, command_id: &str) {
@@ -1153,10 +1434,10 @@ fn frizbee_match(query: &str, haystack: &str) -> Option<(u16, Vec<usize>)> {
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct CommandConfigFile {
-	#[serde(default, alias = "mgr")]
-	pub normal:  CommandKeymapSection,
 	#[serde(default)]
-	pub visual:  CommandKeymapSection,
+	pub mode:    ModeKeymapSections,
+	#[serde(default)]
+	pub overlay: OverlayKeymapSections,
 	#[serde(default)]
 	pub command: CommandAliasSection,
 }
@@ -1169,6 +1450,28 @@ impl CommandConfigFile {
 pub struct CommandKeymapSection {
 	#[serde(default)]
 	pub keymap: Vec<KeymapBindingConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct ModeKeymapSections {
+	#[serde(default, alias = "mgr")]
+	pub normal:  CommandKeymapSection,
+	#[serde(default)]
+	pub visual:  CommandKeymapSection,
+	#[serde(default)]
+	pub command: CommandKeymapSection,
+	#[serde(default)]
+	pub insert:  CommandKeymapSection,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct OverlayKeymapSections {
+	#[serde(default)]
+	pub whichkey:        CommandKeymapSection,
+	#[serde(default)]
+	pub command_palette: CommandKeymapSection,
+	#[serde(default)]
+	pub picker:          CommandKeymapSection,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -1239,34 +1542,12 @@ trait KeyBindingView {
 	fn desc(&self) -> Option<&str>;
 }
 
-impl KeyBindingView for NormalKeyBinding {
+impl KeyBindingView for ScopedKeyBinding {
 	fn keys(&self) -> &[NormalSequenceKey] { self.keys.as_slice() }
 
 	fn command_id(&self) -> &str { self.command_id.as_str() }
 
 	fn desc(&self) -> Option<&str> { self.desc.as_deref() }
-}
-
-impl KeyBindingView for VisualKeyBinding {
-	fn keys(&self) -> &[NormalSequenceKey] { self.keys.as_slice() }
-
-	fn command_id(&self) -> &str { self.command_id.as_str() }
-
-	fn desc(&self) -> Option<&str> { self.desc.as_deref() }
-}
-
-enum KeyBindingSet<'a> {
-	Normal(&'a [NormalKeyBinding]),
-	Visual(&'a [VisualKeyBinding]),
-}
-
-impl<'a> KeyBindingSet<'a> {
-	fn iter(&self) -> Box<dyn Iterator<Item = &dyn KeyBindingView> + '_> {
-		match self {
-			Self::Normal(bindings) => Box::new(bindings.iter().map(|binding| binding as &dyn KeyBindingView)),
-			Self::Visual(bindings) => Box::new(bindings.iter().map(|binding| binding as &dyn KeyBindingView)),
-		}
-	}
 }
 
 #[derive(Debug, Clone)]
@@ -1323,7 +1604,7 @@ where
 
 fn collect_key_hints(
 	commands: &HashMap<String, CommandSpec>,
-	bindings: KeyBindingSet<'_>,
+	bindings: &[ScopedKeyBinding],
 	prefix: &[NormalSequenceKey],
 ) -> Vec<FloatingWindowLine> {
 	#[derive(Default)]
@@ -1335,7 +1616,7 @@ fn collect_key_hints(
 	}
 
 	let mut aggregates: BTreeMap<NormalSequenceKey, HintAggregate> = BTreeMap::new();
-	for binding in bindings.iter() {
+	for binding in bindings {
 		let keys = binding.keys();
 		if !keys.starts_with(prefix) || keys.len() <= prefix.len() {
 			continue;
@@ -1403,8 +1684,24 @@ fn parse_normal_sequence(input: &str) -> Result<Vec<NormalSequenceKey>, String> 
 				result.push(NormalSequenceKey::Esc);
 				continue;
 			}
+			if lowered == "enter" {
+				result.push(NormalSequenceKey::Enter);
+				continue;
+			}
+			if lowered == "backspace" {
+				result.push(NormalSequenceKey::Backspace);
+				continue;
+			}
 			if lowered == "f1" {
 				result.push(NormalSequenceKey::F1);
+				continue;
+			}
+			if lowered == "left" {
+				result.push(NormalSequenceKey::Left);
+				continue;
+			}
+			if lowered == "right" {
+				result.push(NormalSequenceKey::Right);
 				continue;
 			}
 			if lowered == "up" {
@@ -1443,7 +1740,11 @@ fn render_normal_sequence(keys: &[NormalSequenceKey]) -> String {
 			NormalSequenceKey::Leader => "<leader>".to_string(),
 			NormalSequenceKey::Tab => "<Tab>".to_string(),
 			NormalSequenceKey::Esc => "<Esc>".to_string(),
+			NormalSequenceKey::Enter => "<Enter>".to_string(),
+			NormalSequenceKey::Backspace => "<Backspace>".to_string(),
 			NormalSequenceKey::F1 => "<F1>".to_string(),
+			NormalSequenceKey::Left => "<Left>".to_string(),
+			NormalSequenceKey::Right => "<Right>".to_string(),
 			NormalSequenceKey::Up => "<Up>".to_string(),
 			NormalSequenceKey::Down => "<Down>".to_string(),
 			NormalSequenceKey::Char(ch) => ch.to_string(),
@@ -1468,12 +1769,15 @@ mod tests {
 	fn config_should_override_existing_normal_binding() {
 		let mut registry = CommandRegistry::with_defaults();
 		let config = CommandConfigFile {
-			normal: CommandKeymapSection {
-				keymap: vec![KeymapBindingConfig {
-					on:   KeyBindingOn::single("H"),
-					run:  "core.buffer.next".to_string(),
-					desc: Some("custom".to_string()),
-				}],
+			mode: ModeKeymapSections {
+				normal: CommandKeymapSection {
+					keymap: vec![KeymapBindingConfig {
+						on:   KeyBindingOn::single("H"),
+						run:  "core.buffer.next".to_string(),
+						desc: Some("custom".to_string()),
+					}],
+				},
+				..ModeKeymapSections::default()
 			},
 			..CommandConfigFile::default()
 		};
@@ -1482,12 +1786,15 @@ mod tests {
 
 		assert!(errors.is_empty());
 		assert_eq!(
-			registry.resolve_normal_sequence(&[NormalSequenceKey::Char('H')]),
+			registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('H')]),
 			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::BufferSwitchNext))
 		);
-		assert_eq!(registry.resolve_normal_sequence(&[NormalSequenceKey::Char('L')]), BindingMatch::NoMatch);
 		assert_eq!(
-			registry.resolve_normal_sequence(&[NormalSequenceKey::Char('j')]),
+			registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('L')]),
+			BindingMatch::NoMatch
+		);
+		assert_eq!(
+			registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('j')]),
 			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::MoveDown))
 		);
 	}
@@ -1538,12 +1845,15 @@ mod tests {
 	fn manager_keymap_should_accept_array_form() {
 		let mut registry = CommandRegistry::with_defaults();
 		let config = CommandConfigFile {
-			normal: CommandKeymapSection {
-				keymap: vec![KeymapBindingConfig {
-					on:   KeyBindingOn::many(vec!["gg".to_string(), "G".to_string()]),
-					run:  "core.cursor.file_end".to_string(),
-					desc: Some("custom".to_string()),
-				}],
+			mode: ModeKeymapSections {
+				normal: CommandKeymapSection {
+					keymap: vec![KeymapBindingConfig {
+						on:   KeyBindingOn::many(vec!["gg".to_string(), "G".to_string()]),
+						run:  "core.cursor.file_end".to_string(),
+						desc: Some("custom".to_string()),
+					}],
+				},
+				..ModeKeymapSections::default()
 			},
 			..CommandConfigFile::default()
 		};
@@ -1552,11 +1862,14 @@ mod tests {
 
 		assert!(errors.is_empty());
 		assert_eq!(
-			registry.resolve_normal_sequence(&[NormalSequenceKey::Char('g'), NormalSequenceKey::Char('g')]),
+			registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[
+				NormalSequenceKey::Char('g'),
+				NormalSequenceKey::Char('g')
+			]),
 			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::MoveFileEnd))
 		);
 		assert_eq!(
-			registry.resolve_normal_sequence(&[NormalSequenceKey::Char('G')]),
+			registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('G')]),
 			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::MoveFileEnd))
 		);
 	}
@@ -1565,21 +1878,28 @@ mod tests {
 	fn normal_keymap_should_accept_plugin_run_directive() {
 		let mut registry = CommandRegistry::with_defaults();
 		let config = CommandConfigFile {
-			normal: CommandKeymapSection {
-				keymap: vec![KeymapBindingConfig {
-					on:   KeyBindingOn::many(vec!["cm".to_string(), "mc".to_string()]),
-					run:  "plugin chmod".to_string(),
-					desc: Some("plugin".to_string()),
-				}],
+			mode: ModeKeymapSections {
+				normal: CommandKeymapSection {
+					keymap: vec![KeymapBindingConfig {
+						on:   KeyBindingOn::many(vec!["cm".to_string(), "mc".to_string()]),
+						run:  "plugin chmod".to_string(),
+						desc: Some("plugin".to_string()),
+					}],
+				},
+				..ModeKeymapSections::default()
 			},
 			..CommandConfigFile::default()
 		};
 
 		let errors = registry.apply_config(&config);
-		let resolved =
-			registry.resolve_normal_sequence(&[NormalSequenceKey::Char('c'), NormalSequenceKey::Char('m')]);
-		let alternate =
-			registry.resolve_normal_sequence(&[NormalSequenceKey::Char('m'), NormalSequenceKey::Char('c')]);
+		let resolved = registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[
+			NormalSequenceKey::Char('c'),
+			NormalSequenceKey::Char('m'),
+		]);
+		let alternate = registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[
+			NormalSequenceKey::Char('m'),
+			NormalSequenceKey::Char('c'),
+		]);
 
 		assert!(errors.is_empty());
 		assert!(matches!(resolved, BindingMatch::Exact(CommandTarget::Plugin { .. })));
@@ -1590,7 +1910,7 @@ mod tests {
 	fn key_hints_should_group_multi_key_prefixes() {
 		let registry = CommandRegistry::with_defaults();
 
-		let leader_hints = registry.key_hints(KeymapScope::Normal, &[NormalSequenceKey::Leader]);
+		let leader_hints = registry.key_hints(KeymapScope::ModeNormal, &[NormalSequenceKey::Leader]);
 
 		assert!(leader_hints.iter().any(|hint| hint.key == "b" && hint.summary == "+buffer" && hint.is_prefix));
 		assert!(leader_hints.iter().any(|hint| hint.key == "w" && hint.summary == "+window" && hint.is_prefix));
@@ -1600,7 +1920,7 @@ mod tests {
 	fn key_hints_should_describe_non_leader_multi_key_sequences() {
 		let registry = CommandRegistry::with_defaults();
 
-		let hints = registry.key_hints(KeymapScope::Normal, &[NormalSequenceKey::Char('g')]);
+		let hints = registry.key_hints(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('g')]);
 
 		assert_eq!(hints.len(), 1);
 		assert_eq!(hints[0].key, "g");
@@ -1612,18 +1932,21 @@ mod tests {
 	fn configured_keymap_desc_should_override_key_hint_summary() {
 		let mut registry = CommandRegistry::with_defaults();
 		let config = CommandConfigFile {
-			normal: CommandKeymapSection {
-				keymap: vec![KeymapBindingConfig {
-					on:   KeyBindingOn::single("gg"),
-					run:  "core.cursor.file_start".to_string(),
-					desc: Some("Jump to beginning".to_string()),
-				}],
+			mode: ModeKeymapSections {
+				normal: CommandKeymapSection {
+					keymap: vec![KeymapBindingConfig {
+						on:   KeyBindingOn::single("gg"),
+						run:  "core.cursor.file_start".to_string(),
+						desc: Some("Jump to beginning".to_string()),
+					}],
+				},
+				..ModeKeymapSections::default()
 			},
 			..CommandConfigFile::default()
 		};
 
 		let errors = registry.apply_config(&config);
-		let hints = registry.key_hints(KeymapScope::Normal, &[NormalSequenceKey::Char('g')]);
+		let hints = registry.key_hints(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('g')]);
 
 		assert!(errors.is_empty());
 		assert_eq!(hints.len(), 1);
@@ -1634,10 +1957,10 @@ mod tests {
 	fn default_export_should_include_f1_key_hint_binding() {
 		let config = CommandRegistry::with_defaults().export_config();
 
-		assert!(config.normal.keymap.iter().any(|binding| {
+		assert!(config.mode.normal.keymap.iter().any(|binding| {
 			matches!(binding.on.entries(), [token] if token == "<F1>") && binding.run == "core.help.keymap"
 		}));
-		assert!(config.visual.keymap.iter().any(|binding| {
+		assert!(config.mode.visual.keymap.iter().any(|binding| {
 			matches!(binding.on.entries(), [token] if token == "<F1>") && binding.run == "core.help.keymap"
 		}));
 	}
@@ -1661,13 +1984,24 @@ mod tests {
 	}
 
 	#[test]
-	fn empty_command_palette_should_prefer_alias_names_only() {
+	fn empty_command_palette_should_include_unaliased_commands_with_blank_name() {
 		let registry = CommandRegistry::with_defaults();
 
 		let matches = registry.command_palette_matches("", 128);
 
 		assert!(matches.iter().any(|item| item.name == "yazi" && item.command_id == "core.picker.yazi"));
-		assert!(!matches.iter().any(|item| item.name == "core.window.split_vertical"));
+		assert!(
+			matches.iter().any(|item| item.name.is_empty() && item.command_id == "core.window.split_vertical")
+		);
+		let yazi_position = matches
+			.iter()
+			.position(|item| item.name == "yazi" && item.command_id == "core.picker.yazi")
+			.expect("aliased command should be listed");
+		let unaliased_position = matches
+			.iter()
+			.position(|item| item.name.is_empty() && item.command_id == "core.window.split_vertical")
+			.expect("unaliased command should be listed");
+		assert!(yazi_position < unaliased_position);
 	}
 
 	#[test]

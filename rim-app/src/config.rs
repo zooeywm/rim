@@ -1,7 +1,7 @@
 use std::{fs, io::ErrorKind, path::{Path, PathBuf}};
 
 use anyhow::{Context, Result};
-use rim_kernel::command::{CommandAliasConfig, CommandAliasSection, CommandConfigFile, CommandKeymapSection, KeymapBindingConfig};
+use rim_kernel::command::{CommandAliasConfig, CommandAliasSection, CommandConfigFile, CommandKeymapSection, KeymapBindingConfig, ModeKeymapSections, OverlayKeymapSections};
 use rim_paths::user_config_root;
 use serde::{Deserialize, Serialize};
 
@@ -53,7 +53,7 @@ fn migrate_legacy_command_config_if_needed(config_root: &Path) -> Result<()> {
 		return Ok(());
 	};
 
-	fs::write(keymaps_path.as_path(), render_keymaps_config_toml(&legacy_config.normal, &legacy_config.visual))
+	fs::write(keymaps_path.as_path(), render_keymaps_config_toml(&legacy_config.mode, &legacy_config.overlay))
 		.with_context(|| format!("write migrated keymaps failed: {}", keymaps_path.display()))?;
 	fs::write(
 		commands_path.as_path(),
@@ -67,7 +67,7 @@ fn migrate_legacy_command_config_if_needed(config_root: &Path) -> Result<()> {
 
 fn ensure_default_keymaps_config_file(config_path: &Path) -> Result<()> {
 	let defaults = CommandConfigFile::with_defaults();
-	ensure_default_file(config_path, render_keymaps_config_toml(&defaults.normal, &defaults.visual))
+	ensure_default_file(config_path, render_keymaps_config_toml(&defaults.mode, &defaults.overlay))
 }
 
 fn ensure_default_commands_config_file(config_path: &Path) -> Result<()> {
@@ -100,11 +100,8 @@ fn load_keymap_config_from_path(config_path: &Path) -> Result<Option<CommandConf
 	};
 	let keymap_config = toml::from_str::<KeymapsConfigFile>(config_text.as_str())
 		.with_context(|| format!("parse keymaps config failed: {}", config_path.display()))?;
-	Ok(Some(CommandConfigFile {
-		normal:  keymap_config.normal,
-		visual:  keymap_config.visual,
-		command: CommandAliasSection::default(),
-	}))
+	let (mode, overlay) = keymap_config.into_runtime_sections();
+	Ok(Some(CommandConfigFile { mode, overlay, command: CommandAliasSection::default() }))
 }
 
 fn load_command_alias_config_from_path(config_path: &Path) -> Result<Option<CommandConfigFile>> {
@@ -115,8 +112,8 @@ fn load_command_alias_config_from_path(config_path: &Path) -> Result<Option<Comm
 	let command_config = toml::from_str::<CommandsConfigFile>(config_text.as_str())
 		.with_context(|| format!("parse commands config failed: {}", config_path.display()))?;
 	Ok(Some(CommandConfigFile {
-		normal:  CommandKeymapSection::default(),
-		visual:  CommandKeymapSection::default(),
+		mode:    ModeKeymapSections::default(),
+		overlay: OverlayKeymapSections::default(),
 		command: command_config.command,
 	}))
 }
@@ -139,19 +136,53 @@ fn read_optional_config_text(config_path: &Path) -> Result<Option<String>> {
 	}
 }
 
-fn render_keymaps_config_toml(normal: &CommandKeymapSection, visual: &CommandKeymapSection) -> String {
+fn render_keymaps_config_toml(mode: &ModeKeymapSections, overlay: &OverlayKeymapSections) -> String {
 	let mut output = String::new();
-	output.push_str("[normal]\n");
+	output.push_str("[mode.normal]\n");
 	output.push_str("keymap = [\n");
-	for binding in &normal.keymap {
+	for binding in &mode.normal.keymap {
 		output.push_str("  ");
 		output.push_str(render_keymap_binding(binding).as_str());
 		output.push_str(",\n");
 	}
-	output.push_str("]\n\n");
-	output.push_str("[visual]\n");
+	output.push_str("]\n\n[mode.visual]\n");
 	output.push_str("keymap = [\n");
-	for binding in &visual.keymap {
+	for binding in &mode.visual.keymap {
+		output.push_str("  ");
+		output.push_str(render_keymap_binding(binding).as_str());
+		output.push_str(",\n");
+	}
+	output.push_str("]\n\n[mode.command]\n");
+	output.push_str("keymap = [\n");
+	for binding in &mode.command.keymap {
+		output.push_str("  ");
+		output.push_str(render_keymap_binding(binding).as_str());
+		output.push_str(",\n");
+	}
+	output.push_str("]\n\n[mode.insert]\n");
+	output.push_str("keymap = [\n");
+	for binding in &mode.insert.keymap {
+		output.push_str("  ");
+		output.push_str(render_keymap_binding(binding).as_str());
+		output.push_str(",\n");
+	}
+	output.push_str("]\n\n[overlay.whichkey]\n");
+	output.push_str("keymap = [\n");
+	for binding in &overlay.whichkey.keymap {
+		output.push_str("  ");
+		output.push_str(render_keymap_binding(binding).as_str());
+		output.push_str(",\n");
+	}
+	output.push_str("]\n\n[overlay.command_palette]\n");
+	output.push_str("keymap = [\n");
+	for binding in &overlay.command_palette.keymap {
+		output.push_str("  ");
+		output.push_str(render_keymap_binding(binding).as_str());
+		output.push_str(",\n");
+	}
+	output.push_str("]\n\n[overlay.picker]\n");
+	output.push_str("keymap = [\n");
+	for binding in &overlay.picker.keymap {
 		output.push_str("  ");
 		output.push_str(render_keymap_binding(binding).as_str());
 		output.push_str(",\n");
@@ -228,10 +259,26 @@ fn toml_string_literal(text: &str) -> String { toml::Value::String(text.to_strin
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 struct KeymapsConfigFile {
-	#[serde(default, alias = "mgr")]
-	normal: CommandKeymapSection,
 	#[serde(default)]
-	visual: CommandKeymapSection,
+	mode:          ModeKeymapSections,
+	#[serde(default)]
+	overlay:       OverlayKeymapSections,
+	#[serde(default, rename = "normal", alias = "mgr")]
+	legacy_normal: CommandKeymapSection,
+	#[serde(default, rename = "visual")]
+	legacy_visual: CommandKeymapSection,
+}
+
+impl KeymapsConfigFile {
+	fn into_runtime_sections(mut self) -> (ModeKeymapSections, OverlayKeymapSections) {
+		if self.mode.normal.keymap.is_empty() && !self.legacy_normal.keymap.is_empty() {
+			self.mode.normal = self.legacy_normal;
+		}
+		if self.mode.visual.keymap.is_empty() && !self.legacy_visual.keymap.is_empty() {
+			self.mode.visual = self.legacy_visual;
+		}
+		(self.mode, self.overlay)
+	}
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -303,8 +350,9 @@ mod tests {
 		let app_text =
 			fs::read_to_string(config_dir.join("config.toml")).expect("default app config should be readable");
 
-		assert!(keymaps_text.contains("[normal]\nkeymap = ["));
-		assert!(keymaps_text.contains("[visual]\nkeymap = ["));
+		assert!(keymaps_text.contains("[mode.normal]\nkeymap = ["));
+		assert!(keymaps_text.contains("[mode.visual]\nkeymap = ["));
+		assert!(keymaps_text.contains("[overlay.whichkey]\nkeymap = ["));
 		assert!(keymaps_text.contains(r#"{ on = "<F1>", run = "core.help.keymap""#));
 		assert!(keymaps_text.contains(r#"{ on = "<Up>", run = "core.help.keymap_scroll_up""#));
 		assert!(keymaps_text.contains(r#"{ on = "<Down>", run = "core.help.keymap_scroll_down""#));
@@ -336,8 +384,8 @@ keymap = [
 		let loaded = load_keymap_config_from_path(keymaps_path.as_path())
 			.expect("partial keymaps config should load")
 			.expect("config");
-		assert_eq!(loaded.normal.keymap.len(), 1);
-		assert!(loaded.visual.keymap.is_empty());
+		assert_eq!(loaded.mode.normal.keymap.len(), 1);
+		assert!(loaded.mode.visual.keymap.is_empty());
 		assert!(loaded.command.commands.is_empty());
 		let _ = fs::remove_dir_all(config_dir);
 	}
@@ -362,7 +410,7 @@ commands = [
 			.expect("partial commands config should load")
 			.expect("config");
 		assert_eq!(loaded.command.commands.len(), 1);
-		assert!(loaded.normal.keymap.is_empty());
+		assert!(loaded.mode.normal.keymap.is_empty());
 		let _ = fs::remove_dir_all(config_dir);
 	}
 

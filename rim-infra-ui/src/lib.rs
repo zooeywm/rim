@@ -4,6 +4,7 @@ mod status_bar;
 mod terminal_session;
 mod top_bar;
 mod window_area;
+mod workspace_file_picker;
 
 use command_palette::CommandPaletteWidgets;
 use floating_window::FloatingWindowWidget;
@@ -13,6 +14,7 @@ use status_bar::StatusBarWidget;
 pub use terminal_session::{TerminalSession, TerminalSessionError};
 use top_bar::TopBarWidget;
 use window_area::WindowAreaWidget;
+use workspace_file_picker::WorkspaceFilePickerWidget;
 
 pub struct Renderer {
 	last_content_area: Option<Rect>,
@@ -39,6 +41,7 @@ impl Renderer {
 		let (window_area, cursor_position) = WindowAreaWidget::from_state(state, chunks[1]);
 		let status_bar = StatusBarWidget::from_state(state);
 		let command_palette = CommandPaletteWidgets::from_state(state, chunks[1]);
+		let workspace_file_picker = WorkspaceFilePickerWidget::from_state(state, chunks[1]);
 
 		frame.render_widget(top_bar, chunks[0]);
 		frame.render_widget(window_area, chunks[1]);
@@ -48,6 +51,13 @@ impl Renderer {
 		if let Some(command_palette) = command_palette {
 			let cursor_to_draw = command_palette.cursor_position();
 			frame.render_widget(command_palette, chunks[1]);
+			frame.render_widget(status_bar, chunks[2]);
+			frame.set_cursor_position(cursor_to_draw);
+			return;
+		}
+		if let Some(workspace_file_picker) = workspace_file_picker {
+			let cursor_to_draw = workspace_file_picker.cursor_position();
+			frame.render_widget(workspace_file_picker, chunks[1]);
 			frame.render_widget(status_bar, chunks[2]);
 			frame.set_cursor_position(cursor_to_draw);
 			return;

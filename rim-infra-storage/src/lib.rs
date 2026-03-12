@@ -64,6 +64,28 @@ where Deps: AsRef<StorageIoState>
 		)
 	}
 
+	fn enqueue_list_workspace_files(&self, workspace_root: PathBuf) -> Result<(), StorageIoError> {
+		send_request(
+			&self.request_tx,
+			StorageIoRequest::ListWorkspaceFiles { workspace_root },
+			"enqueue_list_workspace_files",
+			"list_workspace_files",
+		)
+	}
+
+	fn enqueue_load_workspace_file_preview(
+		&self,
+		path: PathBuf,
+		max_bytes: usize,
+	) -> Result<(), StorageIoError> {
+		send_request(
+			&self.request_tx,
+			StorageIoRequest::LoadWorkspaceFilePreview { path, max_bytes },
+			"enqueue_load_workspace_file_preview",
+			"load_workspace_file_preview",
+		)
+	}
+
 	fn enqueue_save(&self, buffer_id: BufferId, path: PathBuf, text: String) -> Result<(), StorageIoError> {
 		send_request(
 			&self.request_tx,

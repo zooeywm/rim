@@ -3,60 +3,99 @@ use std::{ops::ControlFlow, path::PathBuf};
 use tracing::error;
 
 use super::ActionHandlerError;
-use crate::{action::{AppAction, FileAction, KeyCode, KeyEvent, WindowAction}, command::{BuiltinCommand, CommandTarget, ResolvedCommand}, ports::{FilePicker, FileWatcher, StorageIo}, state::RimState};
+use crate::{action::{AppAction, FileAction, KeyCode, KeyEvent, WindowAction}, command::{BindingMatch, BuiltinCommand, CommandTarget, ResolvedCommand}, ports::{FilePicker, FileWatcher, StorageIo}, state::{KeymapScope, RimState}};
 
 pub(super) fn handle_command_mode_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
 where P: StorageIo + FileWatcher + FilePicker {
-	if key.modifiers.contains(crate::action::KeyModifiers::CONTROL) && key.code == KeyCode::Char('n') {
-		let _ = state.move_command_palette_selection(1);
-		return ControlFlow::Continue(());
+	if let Some(flow) = dispatch_scope_key(ports, state, key, KeymapScope::OverlayCommandPalette) {
+		return flow;
 	}
-	if key.modifiers.contains(crate::action::KeyModifiers::CONTROL) && key.code == KeyCode::Char('p') {
-		let _ = state.move_command_palette_selection(-1);
-		return ControlFlow::Continue(());
+	if let Some(flow) = dispatch_scope_key(ports, state, key, KeymapScope::ModeCommand) {
+		return flow;
 	}
 	if key.modifiers.contains(crate::action::KeyModifiers::CONTROL) {
 		return ControlFlow::Continue(());
 	}
-
-	match key.code {
-		KeyCode::Esc => state.exit_command_mode(),
-		KeyCode::Enter => {
-			let command = state.command_line.trim().to_string();
-			if command.is_empty() {
-				state.exit_command_mode();
-				return ControlFlow::Continue(());
-			}
-			let argument = command.split_once(' ').map(|(_, tail)| tail.trim().to_string());
-			let resolved = state.command_registry.resolve_command_input(command.as_str()).or_else(|| {
-				state.selected_command_palette_match().and_then(|palette_item| {
-					state.command_registry.resolve_command_id_with_argument(palette_item.command_id.as_str(), argument)
-				})
-			});
-			let Some(resolved) = resolved else {
-				if let Some(palette_item) = state.selected_command_palette_match()
-					&& palette_item.is_error
-				{
-					state.status_bar.message = format!("invalid command config: {}", palette_item.name);
-					return ControlFlow::Continue(());
-				}
-				state.status_bar.message = format!("unknown command: {}", command);
-				return ControlFlow::Continue(());
-			};
-			state.exit_command_mode();
-			return execute_resolved_command(ports, state, resolved);
-		}
-		KeyCode::Backspace => state.pop_command_char(),
-		KeyCode::Up => {
-			let _ = state.move_command_palette_selection(-1);
-		}
-		KeyCode::Down => {
-			let _ = state.move_command_palette_selection(1);
-		}
-		KeyCode::Char(ch) => state.push_command_char(ch),
-		_ => {}
+	if let KeyCode::Char(ch) = key.code {
+		state.push_command_char(ch);
 	}
 	ControlFlow::Continue(())
+}
+
+pub(super) fn handle_workspace_file_picker_key<P>(
+	ports: &P,
+	state: &mut RimState,
+	key: KeyEvent,
+) -> ControlFlow<()>
+where
+	P: StorageIo + FileWatcher + FilePicker,
+{
+	if let Some(flow) = dispatch_scope_key(ports, state, key, KeymapScope::OverlayPicker) {
+		return flow;
+	}
+	if key.modifiers.contains(crate::action::KeyModifiers::CONTROL) || state.workspace_file_picker_loading() {
+		return ControlFlow::Continue(());
+	}
+
+	match key.code {
+		KeyCode::Backspace => {
+			state.pop_workspace_file_picker_char();
+			enqueue_workspace_file_picker_preview(ports, state, true);
+		}
+		KeyCode::Char(ch) => {
+			state.push_workspace_file_picker_char(ch);
+			enqueue_workspace_file_picker_preview(ports, state, true);
+		}
+		_ => {}
+	}
+
+	ControlFlow::Continue(())
+}
+
+fn dispatch_scope_key<P>(
+	ports: &P,
+	state: &mut RimState,
+	key: KeyEvent,
+	scope: KeymapScope,
+) -> Option<ControlFlow<()>>
+where
+	P: StorageIo + FileWatcher + FilePicker,
+{
+	let normal_key = super::mode_flow::to_normal_key(state, key)?;
+	match state.command_registry.resolve_scope_sequence(scope, &[normal_key]) {
+		BindingMatch::Exact(CommandTarget::Builtin(builtin)) => {
+			Some(execute_builtin_command(ports, state, builtin, None))
+		}
+		BindingMatch::Exact(target) => Some(execute_command_target(ports, state, target, None)),
+		BindingMatch::Pending | BindingMatch::NoMatch => None,
+	}
+}
+
+fn execute_current_command_input<P>(ports: &P, state: &mut RimState) -> ControlFlow<()>
+where P: StorageIo + FileWatcher + FilePicker {
+	let command = state.command_line.trim().to_string();
+	if command.is_empty() {
+		state.exit_command_mode();
+		return ControlFlow::Continue(());
+	}
+	let argument = command.split_once(' ').map(|(_, tail)| tail.trim().to_string());
+	let resolved = state.command_registry.resolve_command_input(command.as_str()).or_else(|| {
+		state.selected_command_palette_match().and_then(|palette_item| {
+			state.command_registry.resolve_command_id_with_argument(palette_item.command_id.as_str(), argument)
+		})
+	});
+	let Some(resolved) = resolved else {
+		if let Some(palette_item) = state.selected_command_palette_match()
+			&& palette_item.is_error
+		{
+			state.status_bar.message = format!("invalid command config: {}", palette_item.name);
+			return ControlFlow::Continue(());
+		}
+		state.status_bar.message = format!("unknown command: {}", command);
+		return ControlFlow::Continue(());
+	};
+	state.exit_command_mode();
+	execute_resolved_command(ports, state, resolved)
 }
 
 pub(super) fn execute_command_target<P>(
@@ -158,8 +197,101 @@ where
 				ControlFlow::Continue(())
 			}
 		}
+		BuiltinCommand::OpenWorkspaceFilePicker => {
+			open_workspace_file_picker(ports, state);
+			ControlFlow::Continue(())
+		}
 		BuiltinCommand::OpenPickerYazi => {
 			enqueue_open_with_picker(ports, state);
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::EnterNormalMode => {
+			if state.is_command_mode() {
+				state.exit_command_mode();
+			} else if state.is_insert_mode() {
+				state.exit_insert_mode();
+			} else if state.is_visual_mode() {
+				state.exit_visual_mode();
+			} else if state.key_hints_open() {
+				state.close_key_hints();
+			} else if state.workspace_file_picker_open() {
+				state.close_workspace_file_picker();
+			}
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::CommandSubmit => execute_current_command_input(ports, state),
+		BuiltinCommand::CommandBackspace => {
+			state.pop_command_char();
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::CommandPaletteSelectPrev => {
+			let _ = state.move_command_palette_selection(-1);
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::CommandPaletteSelectNext => {
+			let _ = state.move_command_palette_selection(1);
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::PickerSelectPrev => {
+			if !state.workspace_file_picker_loading() {
+				let moved = state.move_workspace_file_picker_selection(-1);
+				enqueue_workspace_file_picker_preview(ports, state, moved);
+			}
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::PickerSelectNext => {
+			if !state.workspace_file_picker_loading() {
+				let moved = state.move_workspace_file_picker_selection(1);
+				enqueue_workspace_file_picker_preview(ports, state, moved);
+			}
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::PickerConfirm => {
+			let Some(path) = state.selected_workspace_file_picker_path().map(PathBuf::from) else {
+				state.status_bar.message = "open failed: no file selected".to_string();
+				return ControlFlow::Continue(());
+			};
+			state.close_workspace_file_picker();
+			RimState::dispatch_internal(ports, state, AppAction::File(FileAction::OpenRequested { path }))
+		}
+		BuiltinCommand::OverlayClose => {
+			if state.key_hints_open() {
+				state.close_key_hints();
+			} else if state.workspace_file_picker_open() {
+				state.close_workspace_file_picker();
+			}
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::OverlayBack => {
+			let _ = state.step_back_key_hint_prefix();
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::InsertNewline => {
+			state.insert_newline_at_cursor();
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::InsertBackspace => {
+			state.backspace_at_cursor();
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::InsertMoveLeft => {
+			state.move_cursor_left();
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::InsertMoveDown => {
+			state.move_cursor_down();
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::InsertMoveUp => {
+			state.move_cursor_up();
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::InsertMoveRight => {
+			state.move_cursor_right_for_insert();
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::InsertTab => {
+			state.insert_char_at_cursor('\t');
 			ControlFlow::Continue(())
 		}
 		_ => {
@@ -167,6 +299,34 @@ where
 				command.normal_mode_action().expect("normal-mode builtin command should map to app action");
 			RimState::dispatch_internal(ports, state, action)
 		}
+	}
+}
+
+fn open_workspace_file_picker<P>(ports: &P, state: &mut RimState)
+where P: FilePicker + StorageIo + FileWatcher {
+	state.open_workspace_file_picker_loading();
+	if let Err(source) = ports.enqueue_list_workspace_files(state.workspace_root().to_path_buf()) {
+		let err = ActionHandlerError::Reload { source };
+		error!("workspace file picker enqueue failed: {}", err);
+		state.close_workspace_file_picker();
+		state.status_bar.message = format!("workspace file picker failed: {}", err);
+	}
+}
+
+fn enqueue_workspace_file_picker_preview<P>(ports: &P, state: &mut RimState, force: bool)
+where P: StorageIo {
+	if !force {
+		return;
+	}
+	let Some(path) = state.selected_workspace_file_picker_path().map(PathBuf::from) else {
+		state.clear_workspace_file_picker_preview();
+		return;
+	};
+	state.set_workspace_file_picker_preview_loading(path.as_path());
+	if let Err(source) = ports.enqueue_load_workspace_file_preview(path.clone(), 8 * 1024) {
+		let err = ActionHandlerError::Reload { source };
+		error!("workspace preview enqueue failed: path={} error={}", path.display(), err);
+		state.set_workspace_file_picker_preview(path.as_path(), format!("<preview error: {}>", err));
 	}
 }
 

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use super::{super::mode_flow::SequenceMatch, support::{RecordingPorts, dispatch_test_action, map_normal_key, resolve_keys}};
+use super::{super::mode_flow::SequenceMatch, support::{FilePickerPorts, RecordingPorts, dispatch_test_action, map_normal_key, resolve_keys}};
 use crate::{action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction}, command::{CommandAliasConfig, CommandAliasSection, CommandConfigFile, CommandKeymapSection, KeyBindingOn, KeymapBindingConfig}, state::{FloatingWindowPlacement, NormalSequenceKey, RimState}};
 
 #[test]
@@ -213,12 +213,15 @@ fn configured_normal_key_binding_should_override_builtin_mapping() {
 	state.bind_buffer_to_active_window(second);
 	state.switch_active_window_buffer(crate::state::BufferSwitchDirection::Prev);
 	let errors = state.apply_command_config(&CommandConfigFile {
-		normal: CommandKeymapSection {
-			keymap: vec![KeymapBindingConfig {
-				on:   KeyBindingOn::single("H"),
-				run:  "core.buffer.next".to_string(),
-				desc: Some("custom".to_string()),
-			}],
+		mode: crate::command::ModeKeymapSections {
+			normal: CommandKeymapSection {
+				keymap: vec![KeymapBindingConfig {
+					on:   KeyBindingOn::single("H"),
+					run:  "core.buffer.next".to_string(),
+					desc: Some("custom".to_string()),
+				}],
+			},
+			..crate::command::ModeKeymapSections::default()
 		},
 		..CommandConfigFile::default()
 	});
@@ -687,12 +690,15 @@ fn open_key_hint_popup_should_refresh_after_config_reload() {
 	assert!(state.floating_window().is_some());
 
 	let errors = state.apply_command_config(&CommandConfigFile {
-		normal: CommandKeymapSection {
-			keymap: vec![KeymapBindingConfig {
-				on:   KeyBindingOn::single("H"),
-				run:  "core.buffer.next".to_string(),
-				desc: Some("custom".to_string()),
-			}],
+		mode: crate::command::ModeKeymapSections {
+			normal: CommandKeymapSection {
+				keymap: vec![KeymapBindingConfig {
+					on:   KeyBindingOn::single("H"),
+					run:  "core.buffer.next".to_string(),
+					desc: Some("custom".to_string()),
+				}],
+			},
+			..crate::command::ModeKeymapSections::default()
 		},
 		..CommandConfigFile::default()
 	});
@@ -932,4 +938,112 @@ fn command_mode_should_execute_selected_palette_command_on_enter() {
 	assert_eq!(state.tabs.len(), initial_tabs + 1);
 	assert!(!state.is_command_mode());
 	assert!(state.command_palette().is_none());
+}
+
+#[test]
+fn command_mode_should_open_workspace_file_picker_on_files_command() {
+	let workspace_root = PathBuf::from("/workspace");
+	let mut state = RimState::new();
+	state.set_workspace_root(workspace_root.clone());
+	let ports = FilePickerPorts::default();
+	ports
+		.workspace_files
+		.borrow_mut()
+		.extend([workspace_root.join("README.md"), workspace_root.join("src/main.rs")]);
+	ports.preview.replace("# README".to_string());
+
+	state.enter_command_mode();
+	for ch in "files".chars() {
+		let _ = state.apply_action(
+			&ports,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))),
+		);
+	}
+
+	let _ = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
+	);
+	let _ = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::WorkspaceFilesListed {
+			workspace_root: workspace_root.clone(),
+			result:         Ok(vec![workspace_root.join("README.md"), workspace_root.join("src/main.rs")]),
+		}),
+	);
+	let _ = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::WorkspaceFilePreviewLoaded {
+			path:   workspace_root.join("README.md"),
+			result: Ok("# README".to_string()),
+		}),
+	);
+
+	let picker = state.workspace_file_picker().expect("workspace file picker should open");
+	assert_eq!(picker.total_files, 2);
+	assert_eq!(picker.items[0].relative_path, "README.md");
+	assert_eq!(picker.preview_title, "README.md");
+	assert_eq!(ports.workspace_queries.borrow().as_slice(), &[workspace_root]);
+	assert_eq!(ports.preview_requests.borrow().len(), 1);
+}
+
+#[test]
+fn workspace_file_picker_should_open_selected_file_on_enter() {
+	let workspace_root = PathBuf::from("/workspace");
+	let mut state = RimState::new();
+	state.set_workspace_root(workspace_root.clone());
+	let ports = FilePickerPorts::default();
+	ports
+		.workspace_files
+		.borrow_mut()
+		.extend([workspace_root.join("README.md"), workspace_root.join("src/main.rs")]);
+	ports.preview.replace("fn main() {}".to_string());
+
+	state.enter_command_mode();
+	for ch in "files".chars() {
+		let _ = state.apply_action(
+			&ports,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))),
+		);
+	}
+	let _ = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
+	);
+	let _ = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::WorkspaceFilesListed {
+			workspace_root: workspace_root.clone(),
+			result:         Ok(vec![workspace_root.join("README.md"), workspace_root.join("src/main.rs")]),
+		}),
+	);
+	let _ = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::WorkspaceFilePreviewLoaded {
+			path:   workspace_root.join("README.md"),
+			result: Ok("README".to_string()),
+		}),
+	);
+	let _ = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))),
+	);
+	let _ = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::WorkspaceFilePreviewLoaded {
+			path:   workspace_root.join("src/main.rs"),
+			result: Ok("fn main() {}".to_string()),
+		}),
+	);
+	let _ = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
+	);
+
+	assert!(state.workspace_file_picker().is_none());
+	assert_eq!(ports.preview_requests.borrow().len(), 2);
+	assert_eq!(ports.open_requests.borrow().len(), 1);
+	assert_eq!(ports.file_loads.borrow().len(), 1);
+	assert_eq!(ports.open_requests.borrow()[0].1, workspace_root.join("src/main.rs"));
+	assert_eq!(ports.file_loads.borrow()[0].1, workspace_root.join("src/main.rs"));
 }

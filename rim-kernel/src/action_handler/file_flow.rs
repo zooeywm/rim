@@ -297,6 +297,51 @@ where P: StorageIo + FileWatcher + FilePicker {
 				state.status_bar.message = format!("session load failed: {}", err);
 			}
 		},
+		FileAction::WorkspaceFilesListed { workspace_root, result } => match result {
+			Ok(paths) => {
+				if !state.workspace_file_picker_open() {
+					return ControlFlow::Continue(());
+				}
+				if paths.is_empty() {
+					state.close_workspace_file_picker();
+					state.status_bar.message = "workspace file picker: no files found".to_string();
+					return ControlFlow::Continue(());
+				}
+				let entries = paths
+					.into_iter()
+					.filter_map(|path| {
+						let relative_path = path
+							.strip_prefix(workspace_root.as_path())
+							.ok()
+							.map(|relative| relative.to_string_lossy().replace('\\', "/"))?;
+						Some(crate::state::WorkspaceFileEntry { absolute_path: path, relative_path })
+					})
+					.collect::<Vec<_>>();
+				state.open_workspace_file_picker(entries);
+				if let Some(path) = state.selected_workspace_file_picker_path().map(PathBuf::from) {
+					state.set_workspace_file_picker_preview_loading(path.as_path());
+					if let Err(source) = ports.enqueue_load_workspace_file_preview(path.clone(), 8 * 1024) {
+						let err = ActionHandlerError::Reload { source };
+						error!("workspace preview enqueue failed: path={} error={}", path.display(), err);
+						state.set_workspace_file_picker_preview(path.as_path(), format!("<preview error: {}>", err));
+					}
+				}
+			}
+			Err(err) => {
+				error!("workspace file picker list failed: {}", err);
+				state.close_workspace_file_picker();
+				state.status_bar.message = format!("workspace file picker failed: {}", err);
+			}
+		},
+		FileAction::WorkspaceFilePreviewLoaded { path, result } => match result {
+			Ok(preview) => {
+				state.set_workspace_file_picker_preview(path.as_path(), preview);
+			}
+			Err(err) => {
+				error!("workspace preview load failed: path={} error={}", path.display(), err);
+				state.set_workspace_file_picker_preview(path.as_path(), format!("<preview error: {}>", err));
+			}
+		},
 		FileAction::LoadCompleted { buffer_id, source, result } => match (source, result) {
 			(crate::action::FileLoadSource::Open, Ok(text)) => {
 				if let Some(buffer) = state.buffers.get_mut(buffer_id) {
@@ -351,7 +396,7 @@ where P: StorageIo + FileWatcher + FilePicker {
 		},
 		FileAction::OpenRequested { path } => {
 			tracing::info!("open_file: {}", path.display());
-			let normalized_path = normalize_file_path(path.as_path());
+			let normalized_path = normalize_file_path(state.workspace_root(), path.as_path());
 			let replaceable_untitled = state.replaceable_active_untitled_buffer_id();
 			if let Some(buffer_id) = state.find_buffer_by_path(normalized_path.as_path()) {
 				if let Some(untitled_buffer_id) = replaceable_untitled
@@ -460,11 +505,7 @@ where P: StorageIo + FileWatcher + FilePicker {
 	ControlFlow::Continue(())
 }
 
-fn normalize_file_path(path: &Path) -> PathBuf {
-	let absolute = if path.is_absolute() {
-		path.to_path_buf()
-	} else {
-		std::env::current_dir().map(|cwd| cwd.join(path)).unwrap_or_else(|_| path.to_path_buf())
-	};
+fn normalize_file_path(workspace_root: &Path, path: &Path) -> PathBuf {
+	let absolute = if path.is_absolute() { path.to_path_buf() } else { workspace_root.join(path) };
 	std::fs::canonicalize(&absolute).unwrap_or(absolute)
 }

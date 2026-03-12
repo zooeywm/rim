@@ -18,6 +18,16 @@ impl FilePicker for TestPorts {
 impl StorageIo for TestPorts {
 	fn enqueue_load(&self, _buffer_id: BufferId, _path: PathBuf) -> Result<(), StorageIoError> { Ok(()) }
 
+	fn enqueue_list_workspace_files(&self, _workspace_root: PathBuf) -> Result<(), StorageIoError> { Ok(()) }
+
+	fn enqueue_load_workspace_file_preview(
+		&self,
+		_path: PathBuf,
+		_max_bytes: usize,
+	) -> Result<(), StorageIoError> {
+		Ok(())
+	}
+
 	fn enqueue_save(&self, _buffer_id: BufferId, _path: PathBuf, _text: String) -> Result<(), StorageIoError> {
 		Ok(())
 	}
@@ -137,6 +147,16 @@ impl StorageIo for RecordingPorts {
 		Ok(())
 	}
 
+	fn enqueue_list_workspace_files(&self, _workspace_root: PathBuf) -> Result<(), StorageIoError> { Ok(()) }
+
+	fn enqueue_load_workspace_file_preview(
+		&self,
+		_path: PathBuf,
+		_max_bytes: usize,
+	) -> Result<(), StorageIoError> {
+		Ok(())
+	}
+
 	fn enqueue_save(&self, _buffer_id: BufferId, _path: PathBuf, _text: String) -> Result<(), StorageIoError> {
 		Ok(())
 	}
@@ -244,8 +264,13 @@ impl FilePicker for SwapDecisionPorts {
 
 #[derive(Default)]
 pub(super) struct FilePickerPorts {
-	pub(super) picked_path: RefCell<Option<PathBuf>>,
-	pub(super) file_loads:  RefCell<Vec<(BufferId, PathBuf)>>,
+	pub(super) picked_path:       RefCell<Option<PathBuf>>,
+	pub(super) workspace_files:   RefCell<Vec<PathBuf>>,
+	pub(super) preview:           RefCell<String>,
+	pub(super) file_loads:        RefCell<Vec<(BufferId, PathBuf)>>,
+	pub(super) open_requests:     RefCell<Vec<(BufferId, PathBuf)>>,
+	pub(super) preview_requests:  RefCell<Vec<PathBuf>>,
+	pub(super) workspace_queries: RefCell<Vec<PathBuf>>,
 }
 
 impl FileWatcher for FilePickerPorts {
@@ -266,6 +291,20 @@ impl StorageIo for FilePickerPorts {
 		Ok(())
 	}
 
+	fn enqueue_list_workspace_files(&self, workspace_root: PathBuf) -> Result<(), StorageIoError> {
+		self.workspace_queries.borrow_mut().push(workspace_root);
+		Ok(())
+	}
+
+	fn enqueue_load_workspace_file_preview(
+		&self,
+		path: PathBuf,
+		_max_bytes: usize,
+	) -> Result<(), StorageIoError> {
+		self.preview_requests.borrow_mut().push(path);
+		Ok(())
+	}
+
 	fn enqueue_save(&self, _buffer_id: BufferId, _path: PathBuf, _text: String) -> Result<(), StorageIoError> {
 		Ok(())
 	}
@@ -274,7 +313,10 @@ impl StorageIo for FilePickerPorts {
 		Ok(())
 	}
 
-	fn enqueue_open(&self, _buffer_id: BufferId, _source_path: PathBuf) -> Result<(), StorageIoError> { Ok(()) }
+	fn enqueue_open(&self, buffer_id: BufferId, source_path: PathBuf) -> Result<(), StorageIoError> {
+		self.open_requests.borrow_mut().push((buffer_id, source_path));
+		Ok(())
+	}
 
 	fn enqueue_detect_conflict(
 		&self,

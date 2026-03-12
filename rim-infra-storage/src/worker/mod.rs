@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::{Path, PathBuf}, time::Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use rim_kernel::{action::{AppAction, FileAction, FileLoadSource}, ports::SwapEditOp, state::{BufferId, PersistedBufferHistory, WorkspaceSessionSnapshot}};
 use tracing::error;
 
@@ -109,6 +109,13 @@ pub(super) enum StorageIoRequest {
 		path:      PathBuf,
 		source:    FileLoadSource,
 	},
+	ListWorkspaceFiles {
+		workspace_root: PathBuf,
+	},
+	LoadWorkspaceFilePreview {
+		path:      PathBuf,
+		max_bytes: usize,
+	},
 	SaveFile {
 		buffer_id: BufferId,
 		path:      PathBuf,
@@ -204,7 +211,10 @@ async fn handle_request(request: StorageIoRequest, context: StorageIoContext<'_>
 	} = context;
 	match request {
 		StorageIoRequest::Shutdown => return false,
-		StorageIoRequest::LoadFile { .. } | StorageIoRequest::SaveFile { .. } => {
+		StorageIoRequest::LoadFile { .. }
+		| StorageIoRequest::ListWorkspaceFiles { .. }
+		| StorageIoRequest::LoadWorkspaceFilePreview { .. }
+		| StorageIoRequest::SaveFile { .. } => {
 			handle_file_transfer_request(request, event_tx, in_flight);
 		}
 		StorageIoRequest::Open { .. }
@@ -317,9 +327,84 @@ async fn load_file(path: PathBuf) -> Result<String> {
 	String::from_utf8(file_bytes).with_context(|| format!("decode utf-8 failed: {}", path.display()))
 }
 
+async fn list_workspace_files(workspace_root: PathBuf) -> Result<Vec<PathBuf>> {
+	let git_workspace_root = workspace_root.clone();
+	let git_paths = compio::runtime::spawn_blocking(move || -> Result<Option<Vec<PathBuf>>> {
+		let output = match std::process::Command::new("git")
+			.args(["ls-files", "--cached", "--others", "--exclude-standard"])
+			.current_dir(&git_workspace_root)
+			.output()
+		{
+			Ok(output) => output,
+			Err(_) => return Ok(None),
+		};
+		if !output.status.success() {
+			return Ok(None);
+		}
+		let stdout = String::from_utf8(output.stdout)
+			.with_context(|| format!("decode git ls-files output failed: {}", git_workspace_root.display()))?;
+		let mut paths = stdout
+			.lines()
+			.map(str::trim)
+			.filter(|line| !line.is_empty())
+			.map(|line| git_workspace_root.join(line))
+			.collect::<Vec<_>>();
+		paths.sort();
+		Ok(Some(paths))
+	})
+	.await
+	.map_err(|panic_payload| anyhow!("workspace git scan task panicked: {:?}", panic_payload))?;
+	if let Some(paths) = git_paths? {
+		return Ok(paths);
+	}
+
+	let mut paths =
+		compio::runtime::spawn_blocking(move || collect_workspace_files_recursive_blocking(&workspace_root))
+			.await
+			.map_err(|panic_payload| anyhow!("workspace file scan task panicked: {:?}", panic_payload))??;
+	paths.sort();
+	Ok(paths)
+}
+
+async fn load_workspace_file_preview(path: PathBuf, max_bytes: usize) -> Result<String> {
+	let file_bytes =
+		compio::fs::read(&path).await.with_context(|| format!("read preview file failed: {}", path.display()))?;
+	let preview_bytes = file_bytes.into_iter().take(max_bytes).collect::<Vec<_>>();
+	if preview_bytes.contains(&0) {
+		return Ok("<binary file>".to_string());
+	}
+	Ok(String::from_utf8_lossy(preview_bytes.as_slice()).into_owned())
+}
+
 async fn save_file(path: PathBuf, text: String) -> Result<()> {
 	let write_result = compio::fs::write(&path, text.into_bytes()).await.0;
 	write_result.with_context(|| format!("write file failed: {}", path.display())).map(|_| ())
+}
+
+fn collect_workspace_files_recursive_blocking(root: &Path) -> Result<Vec<PathBuf>> {
+	let mut paths = Vec::new();
+	collect_workspace_files_recursive_into(root, &mut paths)?;
+	Ok(paths)
+}
+
+fn collect_workspace_files_recursive_into(root: &Path, paths: &mut Vec<PathBuf>) -> Result<()> {
+	let entries = std::fs::read_dir(root).with_context(|| format!("read dir failed: {}", root.display()))?;
+	for entry_result in entries {
+		let entry = entry_result.with_context(|| format!("read dir entry failed: {}", root.display()))?;
+		let path = entry.path();
+		let metadata = entry.metadata().with_context(|| format!("read metadata failed: {}", path.display()))?;
+		if metadata.is_dir() {
+			if entry.file_name().to_string_lossy() == ".git" {
+				continue;
+			}
+			collect_workspace_files_recursive_into(path.as_path(), paths)?;
+			continue;
+		}
+		if metadata.is_file() {
+			paths.push(path);
+		}
+	}
+	Ok(())
 }
 
 fn current_username() -> String {

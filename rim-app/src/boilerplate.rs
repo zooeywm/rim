@@ -19,6 +19,18 @@ impl StorageIo for AppPorts<'_> {
 		StorageIoImpl::inj_ref(self.storage_io).enqueue_load(buffer_id, path)
 	}
 
+	fn enqueue_list_workspace_files(&self, workspace_root: PathBuf) -> Result<(), StorageIoError> {
+		StorageIoImpl::inj_ref(self.storage_io).enqueue_list_workspace_files(workspace_root)
+	}
+
+	fn enqueue_load_workspace_file_preview(
+		&self,
+		path: PathBuf,
+		max_bytes: usize,
+	) -> Result<(), StorageIoError> {
+		StorageIoImpl::inj_ref(self.storage_io).enqueue_load_workspace_file_preview(path, max_bytes)
+	}
+
 	fn enqueue_save(&self, buffer_id: BufferId, path: PathBuf, text: String) -> Result<(), StorageIoError> {
 		StorageIoImpl::inj_ref(self.storage_io).enqueue_save(buffer_id, path, text)
 	}
