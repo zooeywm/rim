@@ -360,7 +360,7 @@ fn should_keep_key_hints_open_for_action(action: &AppAction) -> bool {
 
 fn handle_overlay_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
 where P: StorageIo + FileWatcher + FilePicker {
-	if !state.key_hints_open() {
+	if !state.key_hints_open() || state.command_palette().is_some() || state.workspace_file_picker_open() {
 		return ControlFlow::Continue(());
 	}
 	let Some(normal_key) = to_normal_key(state, key) else {

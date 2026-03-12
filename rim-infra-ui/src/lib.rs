@@ -42,15 +42,16 @@ impl Renderer {
 		let status_bar = StatusBarWidget::from_state(state);
 		let command_palette = CommandPaletteWidgets::from_state(state, chunks[1]);
 		let workspace_file_picker = WorkspaceFilePickerWidget::from_state(state, chunks[1]);
+		let floating_window = FloatingWindowWidget::from_state(state, chunks[1]);
 
 		frame.render_widget(top_bar, chunks[0]);
 		frame.render_widget(window_area, chunks[1]);
-		if let Some(floating_window) = FloatingWindowWidget::from_state(state, chunks[1]) {
-			frame.render_widget(floating_window, chunks[1]);
-		}
 		if let Some(command_palette) = command_palette {
 			let cursor_to_draw = command_palette.cursor_position();
 			frame.render_widget(command_palette, chunks[1]);
+			if let Some(floating_window) = floating_window {
+				frame.render_widget(floating_window, chunks[1]);
+			}
 			frame.render_widget(status_bar, chunks[2]);
 			frame.set_cursor_position(cursor_to_draw);
 			return;
@@ -58,9 +59,15 @@ impl Renderer {
 		if let Some(workspace_file_picker) = workspace_file_picker {
 			let cursor_to_draw = workspace_file_picker.cursor_position();
 			frame.render_widget(workspace_file_picker, chunks[1]);
+			if let Some(floating_window) = floating_window {
+				frame.render_widget(floating_window, chunks[1]);
+			}
 			frame.render_widget(status_bar, chunks[2]);
 			frame.set_cursor_position(cursor_to_draw);
 			return;
+		}
+		if let Some(floating_window) = floating_window {
+			frame.render_widget(floating_window, chunks[1]);
 		}
 		frame.render_widget(status_bar, chunks[2]);
 		if let Some(cursor_to_draw) = cursor_position {

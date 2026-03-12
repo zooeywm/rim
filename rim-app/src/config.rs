@@ -353,6 +353,8 @@ mod tests {
 		assert!(keymaps_text.contains("[mode.normal]\nkeymap = ["));
 		assert!(keymaps_text.contains("[mode.visual]\nkeymap = ["));
 		assert!(keymaps_text.contains("[overlay.whichkey]\nkeymap = ["));
+		assert!(keymaps_text.contains("[overlay.command_palette]\nkeymap = ["));
+		assert!(keymaps_text.contains("[overlay.picker]\nkeymap = ["));
 		assert!(keymaps_text.contains(r#"{ on = "<F1>", run = "core.help.keymap""#));
 		assert!(keymaps_text.contains(r#"{ on = "<Up>", run = "core.help.keymap_scroll_up""#));
 		assert!(keymaps_text.contains(r#"{ on = "<Down>", run = "core.help.keymap_scroll_down""#));

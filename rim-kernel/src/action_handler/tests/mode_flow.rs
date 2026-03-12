@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use super::{super::mode_flow::SequenceMatch, support::{FilePickerPorts, RecordingPorts, dispatch_test_action, map_normal_key, resolve_keys}};
-use crate::{action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction}, command::{CommandAliasConfig, CommandAliasSection, CommandConfigFile, CommandKeymapSection, KeyBindingOn, KeymapBindingConfig}, state::{FloatingWindowPlacement, NormalSequenceKey, RimState}};
+use crate::{action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction}, command::{CommandAliasConfig, CommandAliasSection, CommandConfigFile, CommandKeymapSection, KeyBindingOn, KeymapBindingConfig}, state::{FloatingWindowPlacement, NormalSequenceKey, RimState, WorkspaceFileEntry}};
 
 #[test]
 fn to_normal_key_should_map_leader_char_to_leader_token() {
@@ -739,6 +739,99 @@ fn open_command_palette_should_refresh_after_config_reload() {
 	let palette = state.command_palette().expect("command palette should still be open");
 	assert_eq!(palette.items[0].name, "y");
 	assert_eq!(palette.items[0].description, "Open custom picker");
+}
+
+#[test]
+fn f1_should_open_command_palette_key_hints_for_overlay_scope() {
+	let mut state = RimState::new();
+
+	state.enter_command_mode();
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::F1, KeyModifiers::NONE))),
+	);
+
+	let floating = state.floating_window().expect("floating window should open");
+	assert_eq!(floating.title, "COMMAND keymap");
+	assert!(floating.lines.iter().any(|line| line.key == "<Up>"));
+}
+
+#[test]
+fn f1_should_open_picker_key_hints_for_overlay_scope() {
+	let mut state = RimState::new();
+
+	state.open_workspace_file_picker(vec![WorkspaceFileEntry {
+		absolute_path: PathBuf::from("/tmp/example.txt"),
+		relative_path: "example.txt".to_string(),
+	}]);
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::F1, KeyModifiers::NONE))),
+	);
+
+	let floating = state.floating_window().expect("floating window should open");
+	assert_eq!(floating.title, "PICKER keymap");
+	assert!(floating.lines.iter().any(|line| line.key == "<Enter>"));
+}
+
+#[test]
+fn f1_should_toggle_key_hints_closed() {
+	let mut state = RimState::new();
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::F1, KeyModifiers::NONE))),
+	);
+	assert!(state.key_hints_open());
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::F1, KeyModifiers::NONE))),
+	);
+	assert!(!state.key_hints_open());
+}
+
+#[test]
+fn command_palette_key_hints_should_not_block_command_input() {
+	let mut state = RimState::new();
+
+	state.enter_command_mode();
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::F1, KeyModifiers::NONE))),
+	);
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE))),
+	);
+
+	assert!(state.key_hints_open());
+	assert_eq!(state.command_line, "q");
+	assert!(state.command_palette().is_some());
+}
+
+#[test]
+fn picker_key_hints_should_not_block_picker_input_and_should_close_with_picker() {
+	let mut state = RimState::new();
+
+	state.open_workspace_file_picker(vec![
+		WorkspaceFileEntry { absolute_path: PathBuf::from("/tmp/a.txt"), relative_path: "a.txt".to_string() },
+		WorkspaceFileEntry { absolute_path: PathBuf::from("/tmp/b.txt"), relative_path: "b.txt".to_string() },
+	]);
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::F1, KeyModifiers::NONE))),
+	);
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))),
+	);
+
+	assert!(state.key_hints_open());
+	assert_eq!(state.workspace_file_picker().expect("picker should stay open").selected, 1);
+
+	state.close_workspace_file_picker();
+	assert!(!state.key_hints_open());
 }
 
 #[test]

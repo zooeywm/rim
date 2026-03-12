@@ -485,7 +485,15 @@ impl RimState {
 		self.command_palette = Some(CommandPaletteState { query: self.command_line.clone(), items, selected });
 	}
 
-	pub fn close_command_palette(&mut self) { self.command_palette = None; }
+	pub fn close_command_palette(&mut self) {
+		self.command_palette = None;
+		if matches!(
+			self.overlay,
+			Some(OverlayState::KeyHints(KeyHintsOverlayState { scope: KeymapScope::OverlayCommandPalette, .. }))
+		) {
+			self.overlay = None;
+		}
+	}
 
 	pub fn open_workspace_file_picker(&mut self, entries: Vec<WorkspaceFileEntry>) {
 		let total_files = entries.len();
@@ -521,7 +529,15 @@ impl RimState {
 		});
 	}
 
-	pub fn close_workspace_file_picker(&mut self) { self.workspace_file_picker = None; }
+	pub fn close_workspace_file_picker(&mut self) {
+		self.workspace_file_picker = None;
+		if matches!(
+			self.overlay,
+			Some(OverlayState::KeyHints(KeyHintsOverlayState { scope: KeymapScope::OverlayPicker, .. }))
+		) {
+			self.overlay = None;
+		}
+	}
 
 	pub fn workspace_file_picker_open(&self) -> bool { self.workspace_file_picker.is_some() }
 
@@ -665,7 +681,13 @@ impl RimState {
 	}
 
 	pub fn active_keymap_scope(&self) -> KeymapScope {
-		if self.is_visual_mode() {
+		if let Some(OverlayState::KeyHints(overlay)) = self.overlay.as_ref() {
+			overlay.scope
+		} else if self.workspace_file_picker_open() {
+			KeymapScope::OverlayPicker
+		} else if self.command_palette().is_some() {
+			KeymapScope::OverlayCommandPalette
+		} else if self.is_visual_mode() {
 			KeymapScope::ModeVisual
 		} else if self.is_command_mode() {
 			KeymapScope::ModeCommand

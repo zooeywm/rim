@@ -173,7 +173,7 @@ pub enum ViewCommand {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandGroup)]
 pub enum HelpCommand {
-	/// Show current mode key hints
+	/// Toggle current mode key hints
 	Keymap,
 	/// Scroll key hint window up
 	KeymapScrollUp,
@@ -886,13 +886,13 @@ impl CommandRegistry {
 					alias.desc.as_deref(),
 					alias.resolved_command_id.as_ref(),
 				) {
-					(Some(error), Some(desc), _) => format!("Error: {} ({})", desc, error),
-					(Some(error), None, _) => format!("Error: {}. Check commands.toml", error),
+					(Some(_), Some(_), _) => "invalid command".to_string(),
+					(Some(_), None, _) => "invalid command".to_string(),
 					(None, Some(desc), _) => desc.to_string(),
 					(None, None, Some(command_id)) => {
 						self.commands.get(command_id).map(|spec| spec.description.clone()).unwrap_or_default()
 					}
-					(None, None, None) => "Error: invalid command alias. Check commands.toml".to_string(),
+					(None, None, None) => "invalid command".to_string(),
 				},
 				is_error:         alias.error.is_some(),
 			});
@@ -1110,6 +1110,7 @@ impl CommandRegistry {
 		self.bind_default_insert_mode("<Right>", BuiltinCommand::Insert(InsertCommand::Right));
 		self.bind_default_insert_mode("<Tab>", BuiltinCommand::Insert(InsertCommand::Tab));
 		self.bind_default_insert_mode("<F1>", BuiltinCommand::Help(HelpCommand::Keymap));
+		self.bind_default_overlay_whichkey("<F1>", BuiltinCommand::Help(HelpCommand::Keymap));
 		self.bind_default_overlay_whichkey("<Esc>", BuiltinCommand::Overlay(OverlayCommand::Close));
 		self.bind_default_overlay_whichkey("<Backspace>", BuiltinCommand::Overlay(OverlayCommand::Back));
 		self.bind_default_overlay_whichkey("<Up>", BuiltinCommand::Help(HelpCommand::KeymapScrollUp));
@@ -1118,6 +1119,7 @@ impl CommandRegistry {
 		self.bind_default_overlay_whichkey("<C-n>", BuiltinCommand::Help(HelpCommand::KeymapScrollDown));
 		self.bind_default_overlay_whichkey("<C-u>", BuiltinCommand::Help(HelpCommand::KeymapHalfPageUp));
 		self.bind_default_overlay_whichkey("<C-d>", BuiltinCommand::Help(HelpCommand::KeymapHalfPageDown));
+		self.bind_default_overlay_command_palette("<F1>", BuiltinCommand::Help(HelpCommand::Keymap));
 		self.bind_default_overlay_command_palette(
 			"<Up>",
 			BuiltinCommand::CommandPalette(CommandPaletteCommand::Prev),
@@ -1134,6 +1136,7 @@ impl CommandRegistry {
 			"<C-n>",
 			BuiltinCommand::CommandPalette(CommandPaletteCommand::Next),
 		);
+		self.bind_default_overlay_picker("<F1>", BuiltinCommand::Help(HelpCommand::Keymap));
 		self.bind_default_overlay_picker("<Esc>", BuiltinCommand::Overlay(OverlayCommand::Close));
 		self.bind_default_overlay_picker("<Enter>", BuiltinCommand::Picker(PickerCommand::Confirm));
 		self.bind_default_overlay_picker("<Up>", BuiltinCommand::Picker(PickerCommand::Prev));
@@ -1757,6 +1760,18 @@ mod tests {
 			matches!(binding.on.entries(), [token] if token == "<F1>")
 				&& binding.run == RunDirective::Builtin(BuiltinCommand::Help(HelpCommand::Keymap))
 		}));
+		assert!(config.overlay.whichkey.keymap.iter().any(|binding| {
+			matches!(binding.on.entries(), [token] if token == "<F1>")
+				&& binding.run == RunDirective::Builtin(BuiltinCommand::Help(HelpCommand::Keymap))
+		}));
+		assert!(config.overlay.command_palette.keymap.iter().any(|binding| {
+			matches!(binding.on.entries(), [token] if token == "<F1>")
+				&& binding.run == RunDirective::Builtin(BuiltinCommand::Help(HelpCommand::Keymap))
+		}));
+		assert!(config.overlay.picker.keymap.iter().any(|binding| {
+			matches!(binding.on.entries(), [token] if token == "<F1>")
+				&& binding.run == RunDirective::Builtin(BuiltinCommand::Help(HelpCommand::Keymap))
+		}));
 	}
 
 	#[test]
@@ -1847,6 +1862,6 @@ mod tests {
 		let matches = registry.command_palette_matches("bad", 16);
 		let item = matches.iter().find(|item| item.name == "bad").expect("invalid alias should be visible");
 		assert!(item.is_error);
-		assert!(item.description.contains("Broken alias"));
+		assert_eq!(item.description, "invalid command");
 	}
 }
