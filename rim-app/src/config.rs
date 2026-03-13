@@ -152,7 +152,8 @@ fn migrate_legacy_editor_config_if_needed(config_root: &Path) -> Result<()> {
 		Ok(text) => text,
 		Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
 		Err(err) => {
-			return Err(err).with_context(|| format!("read legacy editor config failed: {}", legacy_path.display()));
+			return Err(err)
+				.with_context(|| format!("read legacy editor config failed: {}", legacy_path.display()));
 		}
 	};
 	let Ok(legacy_config) = toml::from_str::<EditorConfigFile>(legacy_text.as_str()) else {
@@ -706,8 +707,9 @@ key_hints_max_height = 28
 		)
 		.expect("editor config should be written");
 
-		let loaded =
-			load_editor_config_from_path(editor_path.as_path()).expect("editor config should load").expect("config");
+		let loaded = load_editor_config_from_path(editor_path.as_path())
+			.expect("editor config should load")
+			.expect("config");
 		assert_eq!(loaded.editor.leader_key, ',');
 		assert_eq!(loaded.editor.cursor_scroll_threshold, 3);
 		assert_eq!(loaded.editor.key_hints_width, 64);
@@ -733,10 +735,12 @@ key_hints_max_height = 28
 		)
 		.expect("legacy editor config should be written");
 
-		migrate_legacy_editor_config_if_needed(config_dir.as_path()).expect("legacy editor config should migrate");
+		migrate_legacy_editor_config_if_needed(config_dir.as_path())
+			.expect("legacy editor config should migrate");
 
-		let migrated =
-			load_editor_config_from_path(editor_path.as_path()).expect("migrated editor config should load").expect("config");
+		let migrated = load_editor_config_from_path(editor_path.as_path())
+			.expect("migrated editor config should load")
+			.expect("config");
 		assert_eq!(migrated.editor.leader_key, ',');
 		assert_eq!(migrated.editor.cursor_scroll_threshold, 7);
 		assert_eq!(migrated.editor.key_hints_width, 64);
