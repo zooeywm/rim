@@ -2,11 +2,9 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
-const isGitHubActions = process.env.GITHUB_ACTIONS === 'true';
-
 export default defineConfig({
 	site: 'https://zooeywm.github.io',
-	base: isGitHubActions ? '/rim' : '/',
+	base: '/rim/',
 	integrations: [
 		starlight({
 			title: 'rim Docs',
