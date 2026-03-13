@@ -1,5 +1,5 @@
 use super::common::{set_active_buffer_text, test_state};
-use crate::state::{BufferEditSnapshot, BufferHistoryEntry, CursorState};
+use crate::state::{BufferEditSnapshot, BufferHistoryEntry, CursorState, PendingBlockInsert};
 
 #[test]
 fn cursor_move_right_should_stop_at_line_end() {
@@ -499,6 +499,88 @@ fn visual_block_backspace_should_remove_mirrored_inserted_chars() {
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
 	assert_eq!(buffer.text.to_string(), "aXbc\ndXef\ngXhi");
 	assert_eq!(state.active_cursor(), CursorState { row: 1, col: 3 });
+}
+
+#[test]
+fn visual_block_insert_should_keep_cursor_on_block_start_row() {
+	let mut insert_before = test_state();
+	set_active_buffer_text(&mut insert_before, "abcdef
+        StorageIoImpl::inj_ref");
+	for _ in 0..8 {
+		insert_before.move_cursor_right();
+	}
+	insert_before.enter_visual_block_mode();
+	insert_before.move_cursor_down();
+	insert_before.begin_visual_block_insert(false);
+	assert_eq!(insert_before.active_cursor().row, 1);
+
+	let mut append = test_state();
+	set_active_buffer_text(&mut append, "abcdef
+        StorageIoImpl::inj_ref");
+	for _ in 0..8 {
+		append.move_cursor_right();
+	}
+	append.enter_visual_block_mode();
+	append.move_cursor_down();
+	append.begin_visual_block_insert(true);
+	assert_eq!(append.active_cursor().row, 1);
+}
+
+#[test]
+fn visual_block_append_should_pad_short_lines_before_first_input() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abc\nx\nzzz");
+	state.move_cursor_right();
+	state.move_cursor_right();
+	state.enter_visual_block_mode();
+	state.move_cursor_down();
+	state.move_cursor_down();
+
+	state.begin_visual_block_insert(true);
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "abc\nx  \nzzz");
+	assert!(state.is_block_insert_mode());
+	assert_eq!(state.active_cursor(), CursorState { row: 1, col: 4 });
+}
+
+#[test]
+fn visual_block_insert_should_expand_tab_padding_before_first_input() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "\tfoo\n    foo");
+	let active_window_id = state.active_window_id();
+	state.windows.get_mut(active_window_id).expect("window exists").cursor = CursorState { row: 1, col: 1 };
+	state.enter_block_insert_mode(PendingBlockInsert {
+		start_row: 1,
+		end_row: 2,
+		base_display_col: 2,
+		cursor_display_col: 2,
+	});
+
+	state.insert_char_at_block_cursor('X');
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "  X  foo\n  X  foo");
+	assert_eq!(state.active_cursor(), CursorState { row: 1, col: 4 });
+}
+
+#[test]
+fn visual_block_vertical_move_should_keep_virtual_column_beyond_short_lines() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abcdef\nx\nzzz");
+	for _ in 0..4 {
+		state.move_cursor_right();
+	}
+	assert_eq!(state.active_cursor().col, 5);
+
+	state.enter_visual_block_mode();
+	state.move_cursor_down();
+	state.move_cursor_down();
+
+	assert_eq!(state.active_cursor().row, 3);
+	assert_eq!(state.active_cursor().col, 5);
 }
 
 #[test]
