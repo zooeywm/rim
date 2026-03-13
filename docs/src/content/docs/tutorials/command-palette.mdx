@@ -1,0 +1,92 @@
+---
+title: Command Palette
+description: Use the `:` palette to filter commands, switch into file completion, and execute actions from the keyboard.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+## What this module does
+
+The command palette is the command-line and command browser combined into one overlay:
+
+- typing `:` enters command mode
+- the floating palette fuzzy-matches command aliases from `commands.toml`
+- some commands, such as `:e `, switch the palette from command candidates to workspace file candidates
+
+<Aside type="note" title="Default assumption">
+	This tutorial assumes the default aliases are active, including `files`, `find`, `notifications`, and `noti`.
+</Aside>
+
+<Aside type="caution" title="Windows terminal note">
+	If you are on Windows, prefer Git Bash over the built-in terminal. The host terminal often captures `Ctrl+e` and `Ctrl+y`, which can block command-palette preview scrolling.
+</Aside>
+
+## Exercise 1: run a command from the palette
+
+<Steps>
+	1. Press `:`.
+	2. Type `w`.
+	3. Watch the candidate list narrow to save-related commands.
+	4. Press `Down` if you want to inspect another candidate.
+	5. Press `Enter` to execute the selected command.
+	6. Check the status bar for the result, such as `saving...` or a validation message.
+</Steps>
+
+## Exercise 2: inspect a command before executing
+
+<Steps>
+	1. Press `:`.
+	2. Type `not`.
+	3. Read the candidate row. Each row includes alias name, resolved command target, and description.
+	4. Press `Esc` to leave command mode without executing anything.
+</Steps>
+
+## Palette navigation keys
+
+<Tabs syncKey="command-palette-nav">
+	<TabItem label="Candidate list">
+		Use `Up` and `Down`, or `Ctrl+p` and `Ctrl+n`, to move between candidate rows.
+	</TabItem>
+	<TabItem label="Preview">
+		When the palette is showing files, use `Ctrl+e` and `Ctrl+y` to scroll the file preview.
+	</TabItem>
+	<TabItem label="Pages">
+		Use `Ctrl+u` and `Ctrl+d` to page the candidate list when there are more rows than the visible area.
+	</TabItem>
+	<TabItem label="Exit">
+		Use `Esc` to close the palette. Use `Backspace` to edit the current command line.
+	</TabItem>
+</Tabs>
+
+## Exercise 3: switch from command completion to file completion
+
+<Steps>
+	1. Press `:`.
+	2. Type `e` and then a space, so the input becomes `e `.
+	3. Wait for the palette to switch from command aliases to workspace files.
+	4. Confirm that the first file candidate is selected automatically.
+	5. Use `Down` to move to another file.
+	6. If a preview panel is visible, use `Ctrl+e` and `Ctrl+y` to inspect it.
+	7. Press `Enter` to execute the command with the selected file as the argument.
+</Steps>
+
+## Two palette mindsets
+
+<Tabs syncKey="command-palette-intent">
+	<TabItem label="Action first">
+		Start with a command alias such as `wqa`, `files`, or `notifications` when you already know the operation.
+	</TabItem>
+	<TabItem label="Target first">
+		Start with `e ` when your real goal is to choose a workspace file from inside the palette.
+	</TabItem>
+</Tabs>
+
+## Failure cases you should expect
+
+- If you type an unknown alias and press `Enter`, `rim` reports `unknown command: ...` in the notification stream and status area.
+- If `commands.toml` contains an invalid `run`, the candidate can still appear as an error row so the misconfiguration remains visible.
+- If no workspace root is available, file-oriented palette flows cannot list workspace files.
+
+## Related next step
+
+Read [Workspace File Picker](../workspace-file-picker/) next for the dedicated file browser overlay opened by `:files`.

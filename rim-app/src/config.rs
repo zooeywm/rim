@@ -87,31 +87,33 @@ pub(crate) fn load_command_alias_config() -> std::result::Result<Option<LoadedCo
 	load_command_alias_config_from_path(commands_config_path().as_path())
 }
 
-pub(crate) fn load_app_config() -> std::result::Result<Option<AppConfigFile>, ConfigLoadError> {
-	load_app_config_from_path(app_config_path().as_path())
+pub(crate) fn load_editor_config() -> std::result::Result<Option<EditorConfigFile>, ConfigLoadError> {
+	load_editor_config_from_path(editor_config_path().as_path())
 }
 
 pub(crate) fn keymaps_config_path() -> PathBuf { user_config_root().join("keymaps.toml") }
 
 pub(crate) fn commands_config_path() -> PathBuf { user_config_root().join("commands.toml") }
 
-pub(crate) fn app_config_path() -> PathBuf { user_config_root().join("config.toml") }
+pub(crate) fn editor_config_path() -> PathBuf { user_config_root().join("editor.toml") }
 
 pub(crate) fn initialize_config_files() -> Result<()> {
 	let config_root = user_config_root();
 	fs::create_dir_all(config_root.as_path())
 		.with_context(|| format!("create config directory failed: {}", config_root.display()))?;
 	migrate_legacy_command_config_if_needed(config_root.as_path())?;
+	migrate_legacy_editor_config_if_needed(config_root.as_path())?;
 	ensure_default_keymaps_config_file(keymaps_config_path().as_path())?;
 	ensure_default_commands_config_file(commands_config_path().as_path())?;
-	ensure_default_app_config_file(app_config_path().as_path())?;
+	ensure_default_editor_config_file(editor_config_path().as_path())?;
 	Ok(())
 }
 
 fn migrate_legacy_command_config_if_needed(config_root: &Path) -> Result<()> {
 	let legacy_path = config_root.join("config.toml");
-	let keymaps_path = keymaps_config_path();
-	let commands_path = commands_config_path();
+	let keymaps_path = config_root.join("keymaps.toml");
+	let commands_path = config_root.join("commands.toml");
+	let editor_path = config_root.join("editor.toml");
 	if keymaps_path.exists() || commands_path.exists() || !legacy_path.exists() {
 		return Ok(());
 	}
@@ -134,8 +136,31 @@ fn migrate_legacy_command_config_if_needed(config_root: &Path) -> Result<()> {
 		render_commands_config_toml(&CommandAliasSection { commands: legacy_config.command.commands }),
 	)
 	.with_context(|| format!("write migrated commands failed: {}", commands_path.display()))?;
-	fs::write(app_config_path().as_path(), render_app_config_toml(&AppConfigFile::default()))
-		.with_context(|| format!("write migrated app config failed: {}", app_config_path().display()))?;
+	fs::write(editor_path.as_path(), render_editor_config_toml(&EditorConfigFile::default()))
+		.with_context(|| format!("write migrated editor config failed: {}", editor_path.display()))?;
+	Ok(())
+}
+
+fn migrate_legacy_editor_config_if_needed(config_root: &Path) -> Result<()> {
+	let legacy_path = config_root.join("config.toml");
+	let editor_path = config_root.join("editor.toml");
+	if editor_path.exists() || !legacy_path.exists() {
+		return Ok(());
+	}
+
+	let legacy_text = match fs::read_to_string(legacy_path.as_path()) {
+		Ok(text) => text,
+		Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+		Err(err) => {
+			return Err(err).with_context(|| format!("read legacy editor config failed: {}", legacy_path.display()));
+		}
+	};
+	let Ok(legacy_config) = toml::from_str::<EditorConfigFile>(legacy_text.as_str()) else {
+		return Ok(());
+	};
+
+	fs::write(editor_path.as_path(), render_editor_config_toml(&legacy_config))
+		.with_context(|| format!("write migrated editor config failed: {}", editor_path.display()))?;
 	Ok(())
 }
 
@@ -148,8 +173,8 @@ fn ensure_default_commands_config_file(config_path: &Path) -> Result<()> {
 	ensure_default_file(config_path, render_commands_config_toml(&CommandConfigFile::with_defaults().command))
 }
 
-fn ensure_default_app_config_file(config_path: &Path) -> Result<()> {
-	ensure_default_file(config_path, render_app_config_toml(&AppConfigFile::default()))
+fn ensure_default_editor_config_file(config_path: &Path) -> Result<()> {
+	ensure_default_file(config_path, render_editor_config_toml(&EditorConfigFile::default()))
 }
 
 fn ensure_default_file(config_path: &Path, default_text: String) -> Result<()> {
@@ -215,9 +240,9 @@ fn load_command_alias_config_from_path(
 	}))
 }
 
-fn load_app_config_from_path(
+fn load_editor_config_from_path(
 	config_path: &Path,
-) -> std::result::Result<Option<AppConfigFile>, ConfigLoadError> {
+) -> std::result::Result<Option<EditorConfigFile>, ConfigLoadError> {
 	let config_text = read_optional_config_text(config_path).map_err(|err| ConfigLoadError {
 		file:   config_path.to_path_buf(),
 		line:   None,
@@ -227,7 +252,7 @@ fn load_app_config_from_path(
 	let Some(config_text) = config_text else {
 		return Ok(None);
 	};
-	let config = toml::from_str::<AppConfigFile>(config_text.as_str())
+	let config = toml::from_str::<EditorConfigFile>(config_text.as_str())
 		.map_err(|err| map_toml_parse_error(config_path, config_text.as_str(), err))?;
 	Ok(Some(config))
 }
@@ -344,7 +369,7 @@ fn render_commands_config_toml(config: &CommandAliasSection) -> String {
 	output
 }
 
-fn render_app_config_toml(config: &AppConfigFile) -> String {
+fn render_editor_config_toml(config: &EditorConfigFile) -> String {
 	let mut output = String::new();
 	output.push_str("[editor]\n");
 	output.push_str(
@@ -531,12 +556,14 @@ fn collect_command_alias_section(
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
-pub(crate) struct AppConfigFile {
+#[serde(deny_unknown_fields)]
+pub(crate) struct EditorConfigFile {
 	#[serde(default)]
 	pub editor: EditorConfigSection,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct EditorConfigSection {
 	#[serde(default = "default_leader_key")]
 	pub leader_key:              char,
@@ -585,15 +612,15 @@ mod tests {
 			.expect("default keymaps should be created");
 		ensure_default_commands_config_file(config_dir.join("commands.toml").as_path())
 			.expect("default commands should be created");
-		ensure_default_app_config_file(config_dir.join("config.toml").as_path())
-			.expect("default app config should be created");
+		ensure_default_editor_config_file(config_dir.join("editor.toml").as_path())
+			.expect("default editor config should be created");
 
 		let keymaps_text =
 			fs::read_to_string(config_dir.join("keymaps.toml")).expect("default keymaps should be readable");
 		let commands_text =
 			fs::read_to_string(config_dir.join("commands.toml")).expect("default commands should be readable");
-		let app_text =
-			fs::read_to_string(config_dir.join("config.toml")).expect("default app config should be readable");
+		let editor_text =
+			fs::read_to_string(config_dir.join("editor.toml")).expect("default editor config should be readable");
 
 		assert!(keymaps_text.contains("[mode.normal]\nkeymap = ["));
 		assert!(keymaps_text.contains("[mode.visual]\nkeymap = ["));
@@ -607,9 +634,9 @@ mod tests {
 		assert!(keymaps_text.contains(r#"{ on = "<C-p>", run = "core.help.keymap_scroll_up""#));
 		assert!(keymaps_text.contains(r#"{ on = "<C-n>", run = "core.help.keymap_scroll_down""#));
 		assert!(commands_text.contains("[command]\ncommands = ["));
-		assert!(app_text.contains("[editor]\nleader_key = "));
-		assert!(app_text.contains("key_hints_width = 42"));
-		assert!(app_text.contains("key_hints_max_height = 36"));
+		assert!(editor_text.contains("[editor]\nleader_key = "));
+		assert!(editor_text.contains("key_hints_width = 42"));
+		assert!(editor_text.contains("key_hints_max_height = 36"));
 		let _ = fs::remove_dir_all(config_dir);
 	}
 
@@ -663,12 +690,12 @@ commands = [
 	}
 
 	#[test]
-	fn app_config_should_parse_scroll_threshold() {
-		let config_dir = unique_temp_config_dir("app");
-		let app_path = config_dir.join("config.toml");
+	fn editor_config_should_parse_scroll_threshold() {
+		let config_dir = unique_temp_config_dir("editor");
+		let editor_path = config_dir.join("editor.toml");
 		fs::create_dir_all(config_dir.as_path()).expect("config directory should be created");
 		fs::write(
-			app_path.as_path(),
+			editor_path.as_path(),
 			r#"
 [editor]
 leader_key = ","
@@ -677,14 +704,71 @@ key_hints_width = 64
 key_hints_max_height = 28
 "#,
 		)
-		.expect("app config should be written");
+		.expect("editor config should be written");
 
 		let loaded =
-			load_app_config_from_path(app_path.as_path()).expect("app config should load").expect("config");
+			load_editor_config_from_path(editor_path.as_path()).expect("editor config should load").expect("config");
 		assert_eq!(loaded.editor.leader_key, ',');
 		assert_eq!(loaded.editor.cursor_scroll_threshold, 3);
 		assert_eq!(loaded.editor.key_hints_width, 64);
 		assert_eq!(loaded.editor.key_hints_max_height, 28);
+		let _ = fs::remove_dir_all(config_dir);
+	}
+
+	#[test]
+	fn legacy_editor_config_should_migrate_to_editor_toml() {
+		let config_dir = unique_temp_config_dir("editor-migration");
+		let legacy_path = config_dir.join("config.toml");
+		let editor_path = config_dir.join("editor.toml");
+		fs::create_dir_all(config_dir.as_path()).expect("config directory should be created");
+		fs::write(
+			legacy_path.as_path(),
+			r#"
+[editor]
+leader_key = ","
+cursor_scroll_threshold = 7
+key_hints_width = 64
+key_hints_max_height = 28
+"#,
+		)
+		.expect("legacy editor config should be written");
+
+		migrate_legacy_editor_config_if_needed(config_dir.as_path()).expect("legacy editor config should migrate");
+
+		let migrated =
+			load_editor_config_from_path(editor_path.as_path()).expect("migrated editor config should load").expect("config");
+		assert_eq!(migrated.editor.leader_key, ',');
+		assert_eq!(migrated.editor.cursor_scroll_threshold, 7);
+		assert_eq!(migrated.editor.key_hints_width, 64);
+		assert_eq!(migrated.editor.key_hints_max_height, 28);
+		let _ = fs::remove_dir_all(config_dir);
+	}
+
+	#[test]
+	fn editor_config_should_fail_on_unknown_field() {
+		let config_dir = unique_temp_config_dir("editor-unknown-field");
+		let editor_path = config_dir.join("editor.toml");
+		fs::create_dir_all(config_dir.as_path()).expect("config directory should be created");
+		fs::write(
+			editor_path.as_path(),
+			r#"
+[editor]
+leader_key = ","
+
+[command]
+commands = [
+  { name = "qq", run = "core.quit_all" },
+]
+"#,
+		)
+		.expect("editor config should be written");
+
+		let err = load_editor_config_from_path(editor_path.as_path())
+			.expect_err("editor config with command section should fail");
+		assert_eq!(err.file, editor_path);
+		assert!(err.line.is_some());
+		assert!(err.column.is_some());
+		assert!(err.reason.contains("unknown field"));
 		let _ = fs::remove_dir_all(config_dir);
 	}
 

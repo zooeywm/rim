@@ -1,0 +1,68 @@
+---
+title: rim Docs
+description: Documentation for the rim terminal editor prototype.
+template: splash
+hero:
+  tagline: A terminal-first editor prototype built with a state-driven Rust core.
+  actions:
+    - text: Getting Started
+      link: /guides/getting-started/
+      icon: right-arrow
+    - text: Architecture
+      link: /reference/architecture/
+      icon: right-arrow
+    - text: Repository
+      link: https://github.com/zooeywm/rim
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Documentation map
+
+<CardGrid stagger>
+	<a class="rim-doc-card-link" href="./guides/getting-started/">
+		<Card title="Getting Started" icon="document">
+			Build, install, and launch `rim` locally through the getting started guide.
+		</Card>
+	</a>
+	<a class="rim-doc-card-link" href="./guides/configuration/">
+		<Card title="Configuration" icon="setting">
+			Learn how command aliases, keymaps, and config files are modeled in the configuration guide.
+		</Card>
+	</a>
+	<a class="rim-doc-card-link" href="./guides/editor-workflows/">
+		<Card title="Editor Workflows" icon="open-book">
+			Review mode behavior, movement, and picker flows in the editor workflows guide.
+		</Card>
+	</a>
+	<a class="rim-doc-card-link" href="./guides/runtime-and-recovery/">
+		<Card title="Runtime And Recovery" icon="add-document">
+			Inspect runtime storage, dirty semantics, swap recovery, and undo persistence in the runtime guide.
+		</Card>
+	</a>
+	<a class="rim-doc-card-link" href="./tutorials/">
+		<Card title="Interactive Tutorials" icon="seti:mdx">
+			Follow step-by-step walkthroughs for mode entry, key hints, command palette, picker, and notifications.
+		</Card>
+	</a>
+	<a class="rim-doc-card-link" href="./reference/architecture/">
+		<Card title="Architecture" icon="document">
+			See current boundaries and maintenance units in the architecture reference.
+		</Card>
+	</a>
+	<a class="rim-doc-card-link" href="./reference/commands/">
+		<Card title="Command Reference" icon="pencil">
+			Find implemented ex commands and runtime behavior in the command reference.
+		</Card>
+	</a>
+</CardGrid>
+
+## Current focus
+
+- Workspace session persistence is aligned with runtime state, including tabs, windows, buffers, per-window view state, and scratch-buffer history.
+- `:qa` is blocked when any buffer is dirty; `:qa!`, `:wqa`, and `:wqa!` are implemented.
+- `:wq` now persists workspace session consistently.
+- `:yazi` picker integration is stabilized for cursor and window restore behavior.
+- Config file changes are hot-reloaded through `FileWatcher` events, with explicit full-table replacement semantics for command and keymap overrides.

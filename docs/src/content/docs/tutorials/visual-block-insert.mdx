@@ -1,0 +1,79 @@
+---
+title: Visual Block Insert
+description: Use rectangular selections and mirrored insert operations across multiple rows.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+## What makes this module special
+
+Visual block mode lets you select a rectangle and then mirror one insert operation across all selected rows. It is the closest thing to column editing in the current editor.
+
+<Aside type="caution" title="Current limitation">
+	Block insert currently supports text input, `Tab`, `Backspace`, and `Esc` only. `Enter` and arrow keys are intentionally rejected and show a status message instead.
+</Aside>
+
+<Aside type="caution" title="Windows terminal note">
+	If you are on Windows, prefer Git Bash over the built-in terminal. The host terminal commonly captures `Ctrl+v`, which prevents entering `VISUAL BLOCK` with the default keymap.
+</Aside>
+
+## Part 1: create a block selection
+
+<Steps>
+	1. Start in normal mode on a line that has neighboring lines below it.
+	2. Press `Ctrl+v` to enter `VISUAL BLOCK`.
+	3. Press `j` to extend the rectangle downward.
+	4. Press `l` or `h` to change the rectangle width.
+	5. Confirm that the status area remains in a visual-block state.
+</Steps>
+
+## Part 2: insert before the block
+
+<Steps>
+	1. With the block selection active, press `I`.
+	2. Type a short prefix such as `// ` or `- `.
+	3. Press `Esc`.
+	4. Confirm that the prefix was inserted on every selected row at the same display column.
+</Steps>
+
+## Part 3: append after the block
+
+<Steps>
+	1. Re-enter `VISUAL BLOCK` on a rectangular area.
+	2. Press `A`.
+	3. Type a suffix such as `;`.
+	4. Press `Esc`.
+	5. Confirm that every selected row received the same appended text.
+</Steps>
+
+## Supported keys during block insert
+
+<Tabs syncKey="visual-block-insert-keys">
+	<TabItem label="Supported">
+		Printable text, `Tab`, `Backspace`, and `Esc` are supported during block insert.
+	</TabItem>
+	<TabItem label="Rejected">
+		`Enter`, `Left`, `Right`, `Up`, and `Down` are rejected and surface a status message explaining the limitation.
+	</TabItem>
+	<TabItem label="Exit">
+		Use `Esc` to finish the mirrored edit and return to normal mode.
+	</TabItem>
+</Tabs>
+
+## Practical drill
+
+<Steps>
+	1. Choose three adjacent lines.
+	2. Enter `VISUAL BLOCK`.
+	3. Select the first column of all three lines.
+	4. Press `I`.
+	5. Type `> `.
+	6. Press `Esc`.
+	7. Undo with `u` if you were only practicing.
+</Steps>
+
+## Important behaviors
+
+- The rectangle is kept stable so repeated typed characters stay aligned across rows.
+- If tab indentation is present, `rim` materializes padding as needed to preserve display-column alignment.
+- This feature is best used for repeated prefixes or suffixes, not freeform multiline editing.

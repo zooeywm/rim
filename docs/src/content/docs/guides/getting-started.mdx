@@ -1,0 +1,152 @@
+---
+title: Getting Started
+description: Install, build, and launch rim locally.
+---
+
+import { Aside, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
+
+## What `rim` is
+
+`rim` is a terminal-first editor prototype built around a state-driven architecture:
+
+- The primary text buffer uses `ropey::Rope`
+- The kernel is separated from infrastructure, and the runtime still follows a single `App` container model
+- File watching, swap recovery, and persistent undo/redo all flow through the same event pipeline
+
+## Requirements
+
+- Rust stable toolchain with Cargo
+- A terminal environment supported by `crossterm`
+- Node.js only if you want to run this documentation site locally
+
+## Install paths
+
+<CardGrid>
+	<LinkCard
+		href="#build-from-source"
+		title="Build from source"
+		description="Use Cargo when you want local development, tests, or source-level customization."
+	/>
+	<LinkCard
+		href="#download-a-prebuilt-release"
+		title="Download a prebuilt release"
+		description="Fetch the published binary directly from GitHub Releases and run it immediately."
+	/>
+</CardGrid>
+
+## Install
+
+### Build from source
+
+Install the editor binary from the checked-out repository:
+
+```bash
+cargo install --path rim-app --locked
+```
+
+If you only want a local build without installing into Cargo's binary directory:
+
+```bash
+cargo build
+```
+
+### Download a prebuilt release
+
+<Aside type="tip" title="Current documented release">
+	The examples below use the published `v0.0.3` release assets: `rim` for Linux and macOS, and `rim.exe` for Windows.
+</Aside>
+
+<Tabs syncKey="release-platform">
+	<TabItem label="Linux / macOS">
+
+```bash
+curl -L https://github.com/zooeywm/rim/releases/download/v0.0.3/rim -o rim
+chmod +x ./rim
+./rim
+```
+
+To open one or more files directly:
+
+```bash
+./rim path/to/a.rs path/to/b.rs
+```
+
+	</TabItem>
+	<TabItem label="Windows">
+
+<Aside type="caution" title="Terminal recommendation">
+	On Windows, avoid the built-in terminal when you want to use `rim`'s control-key workflows. Shortcuts such as `Ctrl+v`, `Ctrl+e`, and `Ctrl+y` are commonly intercepted by the host terminal, which breaks visual block entry and preview scrolling. Prefer running `rim` from Git Bash.
+</Aside>
+
+```powershell
+Invoke-WebRequest https://github.com/zooeywm/rim/releases/download/v0.0.3/rim.exe -OutFile rim.exe
+.\rim.exe
+```
+
+To open one or more files directly:
+
+```powershell
+.\rim.exe path\to\a.rs path\to\b.rs
+```
+
+	</TabItem>
+</Tabs>
+
+## Run
+
+If you are working from source, start `rim` with Cargo:
+
+```bash
+# Start rim
+cargo run -p rim-app --
+
+# Start with one or more files opened
+cargo run -p rim-app -- path/to/a.rs path/to/b.rs
+```
+
+## Development checks
+
+```bash
+cargo check
+cargo test
+cargo clippy
+
+# Windows MSVC target clippy
+cargo win-clippy
+
+# Build a Windows MSVC release binary from Linux/macOS
+cargo win-release
+```
+
+Windows release artifact:
+
+```text
+target/x86_64-pc-windows-msvc/release/rim.exe
+```
+
+## First things to try
+
+- Press `i` to enter insert mode
+- Press `Esc` to return to normal mode
+- Press `:` to open the command line
+- Press `F1` to view current-mode key hints
+- Use `:yazi` to open a file through the picker
+
+## Continue with tutorials
+
+<Aside type="tip" title="Recommended next step">
+	Once `rim` is running, continue with the [Interactive Tutorials](../../tutorials/) section for guided walkthroughs of modes, key hints, command palette, workspace file picker, notification center, windows, tabs, and visual editing.
+</Aside>
+
+<CardGrid>
+	<LinkCard
+		href="../../tutorials/"
+		title="Interactive Tutorials"
+		description="Follow progressive, task-oriented walkthroughs after your first launch."
+	/>
+	<LinkCard
+		href="../../tutorials/mode-transitions/"
+		title="Start with Mode Transitions"
+		description="Learn the default edit loop first, then branch into the other interactive modules."
+	/>
+</CardGrid>

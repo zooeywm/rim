@@ -1,0 +1,155 @@
+/* Warm terminal-inspired palette for the documentation site. */
+:root {
+	--sl-color-accent-low: #fff1cd;
+	--sl-color-accent: #965700;
+	--sl-color-accent-high: #4f2d00;
+	--rim-inline-code-bg: rgba(128, 77, 11, 0.09);
+	--rim-inline-code-border: rgba(128, 77, 11, 0.16);
+	--rim-inline-code-text: #6e4100;
+	--rim-code-block-bg: #f8f1e5;
+	--rim-code-block-header: #ecdfca;
+	--rim-code-block-border: rgba(92, 56, 12, 0.18);
+	--rim-code-block-shadow: rgba(92, 56, 12, 0.08);
+	--rim-page-background:
+		radial-gradient(circle at top right, rgba(255, 184, 77, 0.16), transparent 30%),
+		linear-gradient(180deg, #fffaf3 0%, #f5e7d0 100%);
+}
+
+:root[data-theme='dark'] {
+	--sl-color-accent-low: #3a2608;
+	--sl-color-accent: #ffba57;
+	--sl-color-accent-high: #ffe4bb;
+	--rim-inline-code-bg: rgba(255, 186, 87, 0.12);
+	--rim-inline-code-border: rgba(255, 186, 87, 0.18);
+	--rim-inline-code-text: #ffd898;
+	--rim-code-block-bg: #1d1610;
+	--rim-code-block-header: #2a2118;
+	--rim-code-block-border: rgba(255, 186, 87, 0.16);
+	--rim-code-block-shadow: rgba(0, 0, 0, 0.28);
+	--rim-page-background:
+		radial-gradient(circle at top right, rgba(255, 184, 77, 0.16), transparent 28%),
+		linear-gradient(180deg, #120d09 0%, #1c140d 100%);
+}
+
+body {
+	background: var(--rim-page-background);
+}
+
+/* Give documentation articles more breathing room on wide screens. */
+@media (min-width: 72rem) {
+	html[data-has-toc] {
+		--sl-content-width: 65rem;
+	}
+}
+
+/* Tighten the landing page presentation without fighting the Starlight layout. */
+.hero {
+	border-radius: 1.5rem;
+	backdrop-filter: blur(10px);
+}
+
+.card {
+	border-radius: 1rem;
+}
+
+.rim-doc-card-link {
+	display: block;
+	color: inherit;
+	text-decoration: none;
+}
+
+.rim-doc-card-link .card {
+	height: 100%;
+	transition:
+		transform 180ms ease,
+		box-shadow 180ms ease,
+		border-color 180ms ease;
+}
+
+.rim-doc-card-link:hover .card,
+.rim-doc-card-link:focus-visible .card {
+	transform: translateY(-3px);
+	box-shadow: 0 16px 28px rgba(92, 56, 12, 0.12);
+	border-color: rgba(92, 56, 12, 0.28);
+}
+
+.sl-link-card {
+	background: color-mix(in srgb, var(--rim-code-block-bg) 82%, white 18%);
+	border-color: var(--rim-code-block-border) !important;
+	border-radius: 1rem !important;
+	box-shadow: 0 12px 26px rgba(92, 56, 12, 0.08);
+}
+
+.sl-link-card:hover {
+	background: color-mix(in srgb, var(--rim-code-block-bg) 90%, white 10%) !important;
+	border-color: rgba(92, 56, 12, 0.28) !important;
+}
+
+.starlight-aside {
+	border-radius: 1rem;
+	background: color-mix(in srgb, var(--rim-code-block-bg) 84%, white 16%);
+	border-color: var(--rim-code-block-border) !important;
+}
+
+.tablist-wrapper {
+	border-radius: 0.85rem;
+	background: color-mix(in srgb, var(--rim-code-block-bg) 78%, white 22%);
+	padding: 0.35rem 0.35rem 0;
+}
+
+[role='tablist'] {
+	border-bottom-color: var(--rim-code-block-border) !important;
+}
+
+.tab > [role='tab'] {
+	border-radius: 0.7rem 0.7rem 0 0;
+}
+
+.tab [role='tab'][aria-selected='true'] {
+	background: color-mix(in srgb, var(--rim-inline-code-bg) 70%, transparent 30%);
+}
+
+.sl-steps > li::before {
+	background: var(--sl-color-accent) !important;
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18) !important;
+}
+
+.sl-steps > li::after {
+	background: color-mix(in srgb, var(--sl-color-accent) 28%, white 72%) !important;
+}
+
+/* Keep inline code readable against the warm documentation background. */
+.sl-markdown-content :not(pre) > code {
+	background: var(--rim-inline-code-bg);
+	border: 1px solid var(--rim-inline-code-border);
+	border-radius: 0.4rem;
+	color: var(--rim-inline-code-text);
+	padding: 0.18rem 0.38rem;
+}
+
+/* Blend Expressive Code blocks into the page instead of using a cold gray slab. */
+.expressive-code .frame {
+	background: var(--rim-code-block-bg) !important;
+	border: 1px solid var(--rim-code-block-border) !important;
+	border-radius: 1rem !important;
+	box-shadow: 0 12px 30px var(--rim-code-block-shadow);
+}
+
+.expressive-code .frame .header {
+	background: var(--rim-code-block-header) !important;
+	border-bottom: 1px solid var(--rim-code-block-border) !important;
+}
+
+.expressive-code .frame pre,
+.expressive-code .frame code {
+	background: transparent !important;
+}
+
+.expressive-code .copy button {
+	background: color-mix(in srgb, var(--rim-code-block-header) 78%, white 22%) !important;
+	border-color: var(--rim-code-block-border) !important;
+}
+
+:root[data-theme='dark'] .expressive-code .copy button {
+	background: color-mix(in srgb, var(--rim-code-block-header) 86%, black 14%) !important;
+}

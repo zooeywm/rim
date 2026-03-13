@@ -1,0 +1,81 @@
+---
+title: Workspace File Picker
+description: Search the workspace, inspect previews, and open a file directly inside rim.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+## What this module is for
+
+The workspace file picker is the dedicated file-selection overlay for the current workspace root. It is distinct from `:yazi`:
+
+- `:files` stays inside `rim`
+- results are filtered from the workspace root already detected by the editor
+- the selected item can show an inline preview before you open it
+
+<Aside type="tip" title="When to use it">
+	Prefer the workspace file picker when you already know the file is inside the current repository and you want preview, keyboard filtering, and zero shell context switches.
+</Aside>
+
+<Aside type="caution" title="Windows terminal note">
+	If you are on Windows, prefer Git Bash over the built-in terminal. The host terminal often captures `Ctrl+e` and `Ctrl+y`, which makes picker preview scrolling unavailable.
+</Aside>
+
+## Open the picker
+
+<Steps>
+	1. Press `:`.
+	2. Type `files`.
+	3. Press `Enter`.
+	4. Wait for the picker to load workspace files.
+	5. Confirm that the first entry is selected.
+</Steps>
+
+## Filter and open a file
+
+<Steps>
+	1. With the picker open, type part of a file name such as `readme` or `main`.
+	2. Watch the entry list narrow immediately.
+	3. Use `Down` or `Ctrl+n` to move to the desired file.
+	4. Use `Up` or `Ctrl+p` to move back if you overshoot.
+	5. Press `Enter` to open the selected file.
+	6. Confirm that the picker closes and the selected file becomes the active buffer.
+</Steps>
+
+## Work with the preview panel
+
+<Tabs syncKey="workspace-picker-preview">
+	<TabItem label="Selection updates preview">
+		Whenever you move to another entry, `rim` requests a preview for that file and updates the right-side preview area.
+	</TabItem>
+	<TabItem label="Scroll preview">
+		Use `Ctrl+e` to scroll the preview down and `Ctrl+y` to scroll it up.
+	</TabItem>
+	<TabItem label="Wrap long lines">
+		Use `Ctrl+w` to toggle preview word wrap when long lines are hard to inspect.
+	</TabItem>
+	<TabItem label="Exit picker">
+		Use `Esc` to close the picker without opening anything.
+	</TabItem>
+</Tabs>
+
+## Practical drill
+
+<Steps>
+	1. Open `:files`.
+	2. Type `src`.
+	3. Move down through at least two entries.
+	4. Pause on one file long enough to inspect the preview title and body.
+	5. Toggle wrap with `Ctrl+w`.
+	6. Open the file with `Enter`.
+</Steps>
+
+## What can block the flow
+
+- If the workspace scan fails, the picker closes and the status bar reports the failure.
+- If no file is selected, `Enter` cannot open anything.
+- If you want an external file manager instead of the built-in picker, use `:yazi`; that is a separate flow and not the same module.
+
+## Related next step
+
+Continue with [Notification Center](../notification-center/) to learn how runtime feedback is stored and reviewed.

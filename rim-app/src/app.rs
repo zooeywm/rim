@@ -8,7 +8,7 @@ use rim_infra_ui::{Renderer, TerminalSession};
 use rim_kernel::{action::{AppAction, FileAction, SystemAction}, command::CommandRegistry, ports::{FilePicker, FilePickerError, StorageIo}, state::{NotificationLevel, RimState}};
 use tracing::trace;
 
-use crate::config::{app_config_path, commands_config_path, format_command_config_error, initialize_config_files, keymaps_config_path, load_app_config, load_command_alias_config, load_keymap_config};
+use crate::config::{commands_config_path, editor_config_path, format_command_config_error, initialize_config_files, keymaps_config_path, load_command_alias_config, load_editor_config, load_keymap_config};
 
 #[derive(derive_more::AsRef, derive_more::AsMut)]
 pub struct App {
@@ -70,7 +70,7 @@ impl App {
 		// bus.
 		self.storage_io.start();
 		self.file_watcher.start();
-		for config_path in [keymaps_config_path(), commands_config_path(), app_config_path()] {
+		for config_path in [keymaps_config_path(), commands_config_path(), editor_config_path()] {
 			if let Err(err) = self.file_watcher.enqueue_watch_config(config_path.clone()) {
 				tracing::error!("watch config failed: path={} error={}", config_path.display(), err);
 			}
@@ -199,7 +199,7 @@ impl App {
 	fn apply_all_configs(state: &mut RimState) -> Vec<String> {
 		let mut errors = Vec::new();
 		Self::reset_config_state_to_defaults(state);
-		match load_app_config() {
+		match load_editor_config() {
 			Ok(Some(config)) => {
 				state.leader_key = config.editor.leader_key;
 				state.cursor_scroll_threshold = config.editor.cursor_scroll_threshold;
@@ -208,7 +208,7 @@ impl App {
 			}
 			Ok(None) => {}
 			Err(err) => {
-				tracing::error!("app config load failed: {}", err);
+				tracing::error!("editor config load failed: {}", err);
 				errors.push(err.to_string());
 			}
 		}
