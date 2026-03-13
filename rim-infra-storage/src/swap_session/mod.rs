@@ -1,24 +1,20 @@
 mod compaction;
-mod lease;
 mod protocol;
 use std::{path::{Path, PathBuf}, time::Instant};
 
 use anyhow::{Context, Result};
 use compaction::{TailCompaction, compact_delete_against_insert_tail, compact_insert_against_delete_tail};
 #[cfg(test)]
-pub(crate) use lease::touch_swap_lease_file;
-use lease::{has_other_swap_leases, remove_swap_lease_file};
-#[cfg(test)]
 pub(crate) use protocol::append_swap_ops;
 use protocol::apply_swap_op;
 pub(crate) use protocol::{parse_swap_file, write_swap_snapshot};
-use rim_kernel::{ports::SwapEditOp, state::BufferId};
+use rim_kernel::{action::{SwapConflictCheckResult, SwapConflictInfo}, ports::SwapEditOp, state::BufferId};
 use ropey::Rope;
 use tracing::{error, info};
 
 #[cfg(test)]
 use crate::FLUSH_DEBOUNCE_WINDOW;
-use crate::{INSERT_MERGE_WINDOW, path_codec::{normalize_source_path_for_persistence, swap_lease_path_for_source, swap_path_for_source}};
+use crate::{INSERT_MERGE_WINDOW, path_codec::{normalize_source_path_for_persistence, swap_path_for_source}};
 
 #[derive(Debug)]
 pub(super) struct SwapSession {
@@ -26,7 +22,6 @@ pub(super) struct SwapSession {
 	swap_dir:                      PathBuf,
 	pub(super) source_path:        PathBuf,
 	pub(super) swap_path:          PathBuf,
-	lease_path:                    PathBuf,
 	pid:                           u32,
 	username:                      String,
 	pub(super) rope:               Rope,
@@ -69,13 +64,11 @@ impl SwapSession {
 	) -> Self {
 		let source_path = normalize_source_path_for_persistence(source_path);
 		let swap_path = swap_path_for_source(swap_dir, source_path.as_path());
-		let lease_path = swap_lease_path_for_source(swap_dir, source_path.as_path(), pid);
 		Self {
 			buffer_id,
 			swap_dir: swap_dir.to_path_buf(),
 			source_path,
 			swap_path,
-			lease_path,
 			pid,
 			username,
 			rope: Rope::new(),
@@ -93,10 +86,6 @@ impl SwapSession {
 		}
 	}
 
-	pub(super) async fn bind_lease(&mut self) -> Result<()> {
-		lease::touch_swap_lease_file(self.lease_path.as_path()).await
-	}
-
 	pub(super) async fn rebind_if_needed(&mut self, source_path: &Path) -> Result<()> {
 		let source_path = normalize_source_path_for_persistence(source_path);
 		if self.source_path == source_path {
@@ -106,11 +95,6 @@ impl SwapSession {
 		let old_swap = self.swap_path.clone();
 		self.source_path = source_path;
 		self.swap_path = swap_path_for_source(self.swap_dir.as_path(), self.source_path.as_path());
-		let old_lease = self.lease_path.clone();
-		self.lease_path =
-			swap_lease_path_for_source(self.swap_dir.as_path(), self.source_path.as_path(), self.pid);
-		remove_swap_lease_file(old_lease.as_path()).await;
-		self.bind_lease().await?;
 		self.snapshot_ready = false;
 		self.clean_rope = None;
 		self.snapshot_rope = None;
@@ -128,15 +112,21 @@ impl SwapSession {
 		Ok(())
 	}
 
-	pub(super) async fn detect_conflict(&self) -> Result<Option<(u32, String)>> {
+	pub(super) async fn detect_conflict(&self) -> Result<SwapConflictCheckResult> {
 		if compio::fs::metadata(&self.swap_path).await.is_err() {
-			return Ok(None);
+			return Ok(SwapConflictCheckResult::NoSwapActionNeeded);
 		}
 		let parsed = parse_swap_file(self.swap_path.as_path()).await?;
 		if parsed.source_path != self.source_path {
-			return Ok(None);
+			return Ok(SwapConflictCheckResult::NoSwapActionNeeded);
 		}
-		Ok(Some((parsed.pid, parsed.username)))
+		if parsed.pid == self.pid {
+			return Ok(SwapConflictCheckResult::NoSwapActionNeeded);
+		}
+		Ok(SwapConflictCheckResult::Conflict(SwapConflictInfo {
+			pid:      parsed.pid,
+			username: parsed.username,
+		}))
 	}
 
 	pub(super) async fn initialize_base(&mut self, base_text: String, delete_existing: bool) -> Result<()> {
@@ -358,11 +348,22 @@ impl SwapSession {
 	}
 
 	pub(super) async fn close(self) -> Result<()> {
-		remove_swap_lease_file(self.lease_path.as_path()).await;
 		if compio::fs::metadata(&self.swap_path).await.is_err() {
 			return Ok(());
 		}
-		if has_other_swap_leases(self.lease_path.as_path(), self.source_path.as_path()).await {
+		let parsed = match parse_swap_file(self.swap_path.as_path()).await {
+			Ok(parsed) => parsed,
+			Err(err) => {
+				error!(
+					"close swap session parse failed: buffer={:?} swap={} error={:#}",
+					self.buffer_id,
+					self.swap_path.display(),
+					err
+				);
+				return Ok(());
+			}
+		};
+		if parsed.source_path != self.source_path || parsed.pid != self.pid {
 			return Ok(());
 		}
 		if let Err(err) = compio::fs::remove_file(&self.swap_path).await

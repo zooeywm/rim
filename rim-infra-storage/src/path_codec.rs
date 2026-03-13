@@ -19,10 +19,6 @@ pub(super) fn undo_legacy_path_for_source(undo_dir: &Path, source_path: &Path) -
 	undo_dir.join(format!("{}.undo", encode_source_path_for_file_name(source_path)))
 }
 
-pub(super) fn swap_lease_path_for_source(swap_dir: &Path, source_path: &Path, pid: u32) -> PathBuf {
-	swap_dir.join(format!("{}.{}.lease", encode_source_path_for_file_name(source_path), pid))
-}
-
 pub(super) fn encode_source_path_for_file_name(source_path: &Path) -> String {
 	let normalized = normalize_source_path_for_persistence(source_path);
 	let raw = normalized.to_string_lossy();
@@ -67,10 +63,6 @@ pub(super) fn normalize_source_path_text(raw: &str) -> Cow<'_, str> {
 	}
 
 	Cow::Borrowed(raw)
-}
-
-pub(super) fn swap_lease_file_prefix(source_path: &Path) -> String {
-	format!("{}.", encode_source_path_for_file_name(source_path))
 }
 
 pub(super) fn source_path_from_swap_storage_path(storage_path: &Path) -> Result<PathBuf> {

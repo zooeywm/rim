@@ -3,7 +3,7 @@ use std::{ops::ControlFlow, path::{Path, PathBuf}};
 use tracing::error;
 
 use super::{ActionHandlerError, RimState};
-use crate::{action::{FileAction, KeyCode, KeyEvent, KeyModifiers, SwapConflictInfo}, ports::{FilePicker, FileWatcher, StorageIo}, state::{BufferId, PendingSwapDecision, PersistedBufferHistory}};
+use crate::{action::{FileAction, KeyCode, KeyEvent, KeyModifiers, SwapConflictCheckResult, SwapConflictInfo}, ports::{FilePicker, FileWatcher, StorageIo}, state::{BufferId, PendingSwapDecision, PersistedBufferHistory}};
 
 pub(super) fn enqueue_swap_recover<P>(
 	ports: &P,
@@ -93,10 +93,9 @@ where P: StorageIo + FileWatcher {
 			let err = ActionHandlerError::OpenFileWatch { source };
 			error!("session restore enqueue_watch failed: {}", err);
 		}
-		if let Err(source) = ports.enqueue_initialize_base(buffer_id, source_path, buffer.text.to_string(), true)
-		{
-			let err = ActionHandlerError::PersistenceSwapInitializeBase { source };
-			error!("session restore enqueue_initialize_base failed: {}", err);
+		if let Err(source) = ports.enqueue_detect_conflict(buffer_id, source_path) {
+			let err = ActionHandlerError::PersistenceSwapDetectConflict { source };
+			error!("session restore enqueue_detect_conflict failed: {}", err);
 		}
 		enqueue_history_load_for_buffer(ports, state, buffer_id, false);
 	}
@@ -201,7 +200,7 @@ pub(super) fn handle_file_action<P>(ports: &P, state: &mut RimState, action: Fil
 where P: StorageIo + FileWatcher + FilePicker {
 	match action {
 		FileAction::SwapConflictDetected { buffer_id, result } => match result {
-			Ok(Some(conflict)) => {
+			Ok(SwapConflictCheckResult::Conflict(conflict)) => {
 				let Some((source_path, base_text)) = state
 					.buffers
 					.get(buffer_id)
@@ -221,7 +220,7 @@ where P: StorageIo + FileWatcher + FilePicker {
 				state.status_bar.key_sequence.clear();
 				state.status_bar.message = swap_conflict_prompt_message(&conflict);
 			}
-			Ok(None) => {
+			Ok(SwapConflictCheckResult::NoSwapActionNeeded) => {
 				let Some((source_path, base_text)) = state
 					.buffers
 					.get(buffer_id)
@@ -230,7 +229,10 @@ where P: StorageIo + FileWatcher + FilePicker {
 					error!("swap conflict check returned for unknown buffer path: buffer_id={:?}", buffer_id);
 					return ControlFlow::Continue(());
 				};
-				enqueue_swap_recover(ports, buffer_id, source_path, base_text);
+				if let Err(source) = ports.enqueue_initialize_base(buffer_id, source_path, base_text, false) {
+					let err = ActionHandlerError::PersistenceSwapInitializeBase { source };
+					error!("persistence worker unavailable while enqueueing base init: {}", err);
+				}
 			}
 			Err(err) => {
 				error!("swap conflict check failed: buffer_id={:?}, error={}", buffer_id, err);
@@ -248,7 +250,7 @@ where P: StorageIo + FileWatcher + FilePicker {
 			}
 			Ok(None) => {
 				state.set_buffer_externally_modified(buffer_id, false);
-				state.status_bar.message = "swap clean: no recovery needed".to_string();
+				state.status_bar.message = "file reloaded".to_string();
 			}
 			Err(err) => {
 				error!("swap recover failed: buffer_id={:?}, error={}", buffer_id, err);
@@ -310,16 +312,16 @@ where P: StorageIo + FileWatcher + FilePicker {
 					})
 					.collect::<Vec<_>>();
 				state.set_workspace_file_cache(entries.clone());
-					if state.command_palette_showing_files()
-						&& let Some(path) = state.selected_command_palette_file_path().map(PathBuf::from)
-					{
-						state.set_command_palette_preview_loading(path.as_path());
-						if let Err(source) = ports.enqueue_load_workspace_file_preview(path.clone()) {
-							let err = ActionHandlerError::Reload { source };
-							error!("command palette preview enqueue failed: path={} error={}", path.display(), err);
-							state.set_command_palette_preview(path.as_path(), format!("<preview error: {}>", err));
-						}
+				if state.command_palette_showing_files()
+					&& let Some(path) = state.selected_command_palette_file_path().map(PathBuf::from)
+				{
+					state.set_command_palette_preview_loading(path.as_path());
+					if let Err(source) = ports.enqueue_load_workspace_file_preview(path.clone()) {
+						let err = ActionHandlerError::Reload { source };
+						error!("command palette preview enqueue failed: path={} error={}", path.display(), err);
+						state.set_command_palette_preview(path.as_path(), format!("<preview error: {}>", err));
 					}
+				}
 				if !state.workspace_file_picker_open() {
 					return ControlFlow::Continue(());
 				}
@@ -444,6 +446,19 @@ where P: StorageIo + FileWatcher + FilePicker {
 					state.bind_buffer_to_active_window(buffer_id);
 				}
 				state.status_bar.message = format!("switched {}", path.display());
+				return ControlFlow::Continue(());
+			}
+			if !normalized_path.exists() {
+				let buffer_id = if let Some(untitled_buffer_id) = replaceable_untitled {
+					state.prepare_buffer_for_open(untitled_buffer_id, normalized_path.clone());
+					untitled_buffer_id
+				} else {
+					let buffer_id = state.create_buffer(Some(normalized_path.clone()), String::new());
+					state.bind_buffer_to_active_window(buffer_id);
+					buffer_id
+				};
+				state.bind_buffer_to_active_window(buffer_id);
+				state.status_bar.message = format!("new {}", path.display());
 				return ControlFlow::Continue(());
 			}
 			let buffer_id = if let Some(untitled_buffer_id) = replaceable_untitled {

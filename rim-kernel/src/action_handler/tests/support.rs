@@ -20,12 +20,7 @@ impl StorageIo for TestPorts {
 
 	fn enqueue_list_workspace_files(&self, _workspace_root: PathBuf) -> Result<(), StorageIoError> { Ok(()) }
 
-	fn enqueue_load_workspace_file_preview(
-		&self,
-		_path: PathBuf,
-	) -> Result<(), StorageIoError> {
-		Ok(())
-	}
+	fn enqueue_load_workspace_file_preview(&self, _path: PathBuf) -> Result<(), StorageIoError> { Ok(()) }
 
 	fn enqueue_save(&self, _buffer_id: BufferId, _path: PathBuf, _text: String) -> Result<(), StorageIoError> {
 		Ok(())
@@ -106,17 +101,19 @@ pub(super) fn dispatch_test_action(state: &mut RimState, action: AppAction) -> C
 
 #[derive(Default)]
 pub(super) struct RecordingPorts {
-	pub(super) file_loads:       RefCell<Vec<(BufferId, PathBuf)>>,
-	pub(super) external_loads:   RefCell<Vec<(BufferId, PathBuf)>>,
-	pub(super) swap_edits:       RefCell<Vec<(BufferId, PathBuf, SwapEditOp)>>,
-	pub(super) history_loads:    RefCell<Vec<(BufferId, PathBuf, String, bool)>>,
-	pub(super) history_saves:    RefCell<Vec<(BufferId, PathBuf, PersistedBufferHistory)>>,
-	pub(super) unwatches:        RefCell<Vec<BufferId>>,
-	pub(super) closes:           RefCell<Vec<BufferId>>,
-	pub(super) open_requests:    RefCell<Vec<(BufferId, PathBuf)>>,
-	pub(super) watch_requests:   RefCell<Vec<(BufferId, PathBuf)>>,
-	pub(super) initialize_bases: RefCell<Vec<(BufferId, PathBuf, String, bool)>>,
-	pub(super) session_saves:    RefCell<Vec<WorkspaceSessionSnapshot>>,
+	pub(super) file_loads:            RefCell<Vec<(BufferId, PathBuf)>>,
+	pub(super) external_loads:        RefCell<Vec<(BufferId, PathBuf)>>,
+	pub(super) swap_conflict_detects: RefCell<Vec<(BufferId, PathBuf)>>,
+	pub(super) swap_edits:            RefCell<Vec<(BufferId, PathBuf, SwapEditOp)>>,
+	pub(super) swap_recovers:         RefCell<Vec<(BufferId, PathBuf, String)>>,
+	pub(super) history_loads:         RefCell<Vec<(BufferId, PathBuf, String, bool)>>,
+	pub(super) history_saves:         RefCell<Vec<(BufferId, PathBuf, PersistedBufferHistory)>>,
+	pub(super) unwatches:             RefCell<Vec<BufferId>>,
+	pub(super) closes:                RefCell<Vec<BufferId>>,
+	pub(super) open_requests:         RefCell<Vec<(BufferId, PathBuf)>>,
+	pub(super) watch_requests:        RefCell<Vec<(BufferId, PathBuf)>>,
+	pub(super) initialize_bases:      RefCell<Vec<(BufferId, PathBuf, String, bool)>>,
+	pub(super) session_saves:         RefCell<Vec<WorkspaceSessionSnapshot>>,
 }
 
 impl FileWatcher for RecordingPorts {
@@ -148,12 +145,7 @@ impl StorageIo for RecordingPorts {
 
 	fn enqueue_list_workspace_files(&self, _workspace_root: PathBuf) -> Result<(), StorageIoError> { Ok(()) }
 
-	fn enqueue_load_workspace_file_preview(
-		&self,
-		_path: PathBuf,
-	) -> Result<(), StorageIoError> {
-		Ok(())
-	}
+	fn enqueue_load_workspace_file_preview(&self, _path: PathBuf) -> Result<(), StorageIoError> { Ok(()) }
 
 	fn enqueue_save(&self, _buffer_id: BufferId, _path: PathBuf, _text: String) -> Result<(), StorageIoError> {
 		Ok(())
@@ -169,11 +161,8 @@ impl StorageIo for RecordingPorts {
 		Ok(())
 	}
 
-	fn enqueue_detect_conflict(
-		&self,
-		_buffer_id: BufferId,
-		_source_path: PathBuf,
-	) -> Result<(), StorageIoError> {
+	fn enqueue_detect_conflict(&self, buffer_id: BufferId, source_path: PathBuf) -> Result<(), StorageIoError> {
+		self.swap_conflict_detects.borrow_mut().push((buffer_id, source_path));
 		Ok(())
 	}
 
@@ -204,10 +193,11 @@ impl StorageIo for RecordingPorts {
 
 	fn enqueue_recover(
 		&self,
-		_buffer_id: BufferId,
-		_source_path: PathBuf,
-		_base_text: String,
+		buffer_id: BufferId,
+		source_path: PathBuf,
+		base_text: String,
 	) -> Result<(), StorageIoError> {
+		self.swap_recovers.borrow_mut().push((buffer_id, source_path, base_text));
 		Ok(())
 	}
 
@@ -294,10 +284,7 @@ impl StorageIo for FilePickerPorts {
 		Ok(())
 	}
 
-	fn enqueue_load_workspace_file_preview(
-		&self,
-		path: PathBuf,
-	) -> Result<(), StorageIoError> {
+	fn enqueue_load_workspace_file_preview(&self, path: PathBuf) -> Result<(), StorageIoError> {
 		self.preview_requests.borrow_mut().push(path);
 		Ok(())
 	}

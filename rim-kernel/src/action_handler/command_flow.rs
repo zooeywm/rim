@@ -3,7 +3,7 @@ use std::{ops::ControlFlow, path::PathBuf};
 use tracing::error;
 
 use super::ActionHandlerError;
-use crate::{action::{AppAction, FileAction, KeyCode, KeyEvent, WindowAction}, command::{BindingMatch, BuiltinCommand, CommandCommand, CommandPaletteCommand, CommandTarget, InsertCommand, ModeCommand, OverlayCommand, PickerCommand, ResolvedCommand}, ports::{FilePicker, FileWatcher, StorageIo}, state::{KeymapScope, RimState}};
+use crate::{action::{AppAction, FileAction, KeyCode, KeyEvent, WindowAction}, command::{BindingMatch, BuiltinCommand, CommandCommand, CommandPaletteCommand, CommandTarget, InsertCommand, ModeCommand, OverlayCommand, PickerCommand, ResolvedCommand}, ports::{FilePicker, FileWatcher, StorageIo}, state::{KeymapScope, NotificationLevel, RimState}};
 
 pub(super) fn handle_command_mode_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
 where P: StorageIo + FileWatcher + FilePicker {
@@ -89,30 +89,9 @@ where P: StorageIo + FileWatcher + FilePicker {
 		state.exit_command_mode();
 		return ControlFlow::Continue(());
 	}
-	let argument = command.split_once(' ').map(|(_, tail)| tail.trim().to_string());
-	let resolved = if let Some(path_item) = state.selected_command_palette_file_match()
-		&& let Some((command_name, _)) = raw_command.split_once(' ')
-		&& let Some(resolved_command) = state.command_registry.resolve_command_input(command_name)
-	{
-		state
-			.command_registry
-			.resolve_command_id_with_argument(&resolved_command.spec.id, Some(path_item.relative_path.clone()))
-	} else {
-		state.command_registry.resolve_command_input(command.as_str())
-	}
-	.or_else(|| {
-		state.selected_command_palette_match().and_then(|palette_item| {
-			state.command_registry.resolve_command_id_with_argument(&palette_item.command_id, argument)
-		})
-	});
+	let resolved = state.command_registry.resolve_command_input(command.as_str());
 	let Some(resolved) = resolved else {
-		if let Some(palette_item) = state.selected_command_palette_match()
-			&& palette_item.is_error
-		{
-			state.status_bar.message = format!("invalid command config: {}", palette_item.name);
-			return ControlFlow::Continue(());
-		}
-		state.status_bar.message = format!("unknown command: {}", command);
+		state.push_notification(NotificationLevel::Error, format!("unknown command: {}", command));
 		return ControlFlow::Continue(());
 	};
 	state.exit_command_mode();
@@ -131,7 +110,7 @@ where
 	match target {
 		CommandTarget::Builtin(builtin) => execute_builtin_command(ports, state, builtin, argument),
 		CommandTarget::Plugin { command_id, .. } => {
-			state.status_bar.message = format!("plugin command unavailable: {}", command_id);
+			state.push_notification(NotificationLevel::Warn, format!("plugin command unavailable: {}", command_id));
 			ControlFlow::Continue(())
 		}
 	}
@@ -237,6 +216,8 @@ where
 				state.close_key_hints();
 			} else if state.workspace_file_picker_open() {
 				state.close_workspace_file_picker();
+			} else if state.notification_center_open() {
+				state.close_notification_center();
 			}
 			ControlFlow::Continue(())
 		}
@@ -245,6 +226,10 @@ where
 			state.pop_command_char();
 			ensure_command_palette_workspace_files(ports, state);
 			enqueue_command_palette_preview(ports, state, true);
+			ControlFlow::Continue(())
+		}
+		BuiltinCommand::Command(CommandCommand::Notifications) => {
+			state.open_notification_center();
 			ControlFlow::Continue(())
 		}
 		BuiltinCommand::CommandPalette(CommandPaletteCommand::PageUp) => {
@@ -307,7 +292,7 @@ where
 		}
 		BuiltinCommand::Picker(PickerCommand::Confirm) => {
 			let Some(path) = state.selected_workspace_file_picker_path().map(PathBuf::from) else {
-				state.status_bar.message = "open failed: no file selected".to_string();
+				state.push_notification(NotificationLevel::Warn, "open failed: no file selected");
 				return ControlFlow::Continue(());
 			};
 			state.close_workspace_file_picker();
@@ -436,6 +421,7 @@ where P: StorageIo + FileWatcher + FilePicker {
 		state.status_bar.message = "quit all blocked: unsaved changes".to_string();
 		return ControlFlow::Continue(());
 	}
+	state.force_quit_trim_file_dirty_in_session = force;
 	RimState::dispatch_internal(ports, state, AppAction::System(crate::action::SystemAction::Quit))
 }
 
@@ -451,6 +437,7 @@ where P: StorageIo + FileWatcher + FilePicker {
 	if state.tabs.len() > 1 {
 		return RimState::dispatch_internal(ports, state, AppAction::Tab(crate::action::TabAction::CloseCurrent));
 	}
+	state.force_quit_trim_file_dirty_in_session = force;
 	RimState::dispatch_internal(ports, state, AppAction::System(crate::action::SystemAction::Quit))
 }
 

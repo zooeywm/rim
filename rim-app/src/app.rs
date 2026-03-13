@@ -5,10 +5,10 @@ use rim_infra_file_watcher::FileWatcherState;
 use rim_infra_input::InputPumpService;
 use rim_infra_storage::StorageIoState;
 use rim_infra_ui::{Renderer, TerminalSession};
-use rim_kernel::{action::{AppAction, FileAction, SystemAction}, command::CommandRegistry, ports::{FilePicker, FilePickerError, StorageIo}, state::RimState};
+use rim_kernel::{action::{AppAction, FileAction, SystemAction}, command::CommandRegistry, ports::{FilePicker, FilePickerError, StorageIo}, state::{NotificationLevel, RimState}};
 use tracing::trace;
 
-use crate::config::{app_config_path, commands_config_path, initialize_config_files, keymaps_config_path, load_app_config, load_command_alias_config, load_keymap_config};
+use crate::config::{app_config_path, commands_config_path, format_command_config_error, initialize_config_files, keymaps_config_path, load_app_config, load_command_alias_config, load_keymap_config};
 
 #[derive(derive_more::AsRef, derive_more::AsMut)]
 pub struct App {
@@ -22,6 +22,7 @@ pub struct App {
 	file_watcher:       FileWatcherState,
 	terminal_session:   RefCell<Option<TerminalSession>>,
 	input_pump_service: RefCell<InputPumpService>,
+	event_tx:           flume::Sender<AppAction>,
 	// Event bus is the glue between runtime producers and kernel consumers.
 	event_rx:           flume::Receiver<AppAction>,
 }
@@ -51,13 +52,15 @@ impl App {
 		initialize_config_files()?;
 		let mut state = RimState::new();
 		state.set_workspace_root(workspace_root);
-		Self::apply_all_configs(&mut state)?;
+		let config_errors = Self::apply_all_configs(&mut state);
+		Self::apply_config_errors_to_status(&mut state, config_errors);
 		Ok(Self {
 			state,
 			storage_io: StorageIoState::new(event_tx.clone()),
 			file_watcher: FileWatcherState::new(event_tx.clone()),
 			terminal_session: RefCell::new(None),
 			input_pump_service: RefCell::new(InputPumpService::new(event_tx.clone())),
+			event_tx,
 			event_rx,
 		})
 	}
@@ -81,6 +84,15 @@ impl App {
 				err
 			);
 		}
+		let tick_tx = self.event_tx.clone();
+		std::thread::spawn(move || {
+			loop {
+				std::thread::sleep(std::time::Duration::from_millis(200));
+				if tick_tx.send(AppAction::System(SystemAction::Tick)).is_err() {
+					break;
+				}
+			}
+		});
 	}
 
 	pub fn open_startup_files(&mut self, file_paths: Vec<PathBuf>) {
@@ -173,39 +185,68 @@ impl App {
 	}
 
 	fn reload_all_configs(&mut self) -> ControlFlow<()> {
-		match Self::apply_all_configs(&mut self.state) {
-			Ok(()) => {
-				self.state.refresh_key_hints_overlay_after_config_reload();
-				self.state.refresh_command_palette();
-				self.state.status_bar.message = "config reloaded".to_string();
-			}
-			Err(err) => {
-				tracing::error!("config reload failed: {}", err);
-				self.state.status_bar.message = format!("config reload failed: {}", err);
-			}
+		let config_errors = Self::apply_all_configs(&mut self.state);
+		self.state.refresh_key_hints_overlay_after_config_reload();
+		self.state.refresh_command_palette();
+		if config_errors.is_empty() {
+			self.state.status_bar.message = "config reloaded".to_string();
+		} else {
+			Self::apply_config_errors_to_status(&mut self.state, config_errors);
 		}
 		ControlFlow::Continue(())
 	}
 
-	fn apply_all_configs(state: &mut RimState) -> Result<()> {
+	fn apply_all_configs(state: &mut RimState) -> Vec<String> {
+		let mut errors = Vec::new();
 		Self::reset_config_state_to_defaults(state);
-		if let Some(config) = load_app_config()? {
-			state.leader_key = config.editor.leader_key;
-			state.cursor_scroll_threshold = config.editor.cursor_scroll_threshold;
-			state.key_hints_width = config.editor.key_hints_width;
-			state.key_hints_max_height = config.editor.key_hints_max_height;
-		}
-		if let Some(config) = load_keymap_config()? {
-			for error in state.apply_command_config(&config) {
-				tracing::error!("keymaps config ignored entry: {}", error);
+		match load_app_config() {
+			Ok(Some(config)) => {
+				state.leader_key = config.editor.leader_key;
+				state.cursor_scroll_threshold = config.editor.cursor_scroll_threshold;
+				state.key_hints_width = config.editor.key_hints_width;
+				state.key_hints_max_height = config.editor.key_hints_max_height;
+			}
+			Ok(None) => {}
+			Err(err) => {
+				tracing::error!("app config load failed: {}", err);
+				errors.push(err.to_string());
 			}
 		}
-		if let Some(config) = load_command_alias_config()? {
-			for error in state.apply_command_config(&config) {
-				tracing::error!("commands config ignored entry: {}", error);
+		match load_keymap_config() {
+			Ok(Some(loaded)) => {
+				for error in state.apply_command_config(&loaded.config) {
+					tracing::error!("keymaps config ignored entry: {}", error);
+					errors.push(format_command_config_error(&loaded, &error).to_string());
+				}
+			}
+			Ok(None) => {}
+			Err(err) => {
+				tracing::error!("keymaps config load failed: {}", err);
+				errors.push(err.to_string());
 			}
 		}
-		Ok(())
+		match load_command_alias_config() {
+			Ok(Some(loaded)) => {
+				for error in state.apply_command_config(&loaded.config) {
+					tracing::error!("commands config ignored entry: {}", error);
+					errors.push(format_command_config_error(&loaded, &error).to_string());
+				}
+			}
+			Ok(None) => {}
+			Err(err) => {
+				tracing::error!("commands config load failed: {}", err);
+				errors.push(err.to_string());
+			}
+		}
+		errors
+	}
+
+	fn apply_config_errors_to_status(state: &mut RimState, errors: Vec<String>) {
+		let Some(first) = errors.first() else {
+			return;
+		};
+		let suffix = if errors.len() > 1 { format!(" (+{} more)", errors.len() - 1) } else { String::new() };
+		state.push_notification(NotificationLevel::Error, format!("config error: {}{}", first, suffix));
 	}
 
 	fn reset_config_state_to_defaults(state: &mut RimState) {

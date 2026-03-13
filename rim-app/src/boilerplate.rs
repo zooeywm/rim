@@ -23,10 +23,7 @@ impl StorageIo for AppPorts<'_> {
 		StorageIoImpl::inj_ref(self.storage_io).enqueue_list_workspace_files(workspace_root)
 	}
 
-	fn enqueue_load_workspace_file_preview(
-		&self,
-		path: PathBuf,
-	) -> Result<(), StorageIoError> {
+	fn enqueue_load_workspace_file_preview(&self, path: PathBuf) -> Result<(), StorageIoError> {
 		StorageIoImpl::inj_ref(self.storage_io).enqueue_load_workspace_file_preview(path)
 	}
 

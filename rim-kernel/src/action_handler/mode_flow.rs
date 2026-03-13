@@ -1,7 +1,7 @@
 use std::ops::ControlFlow;
 
 use super::{command_flow, enqueue_history_save_for_buffer, handle_pending_swap_decision_key, post_edit_flow};
-use crate::{action::{AppAction, EditorAction, KeyCode, KeyEvent, KeyModifiers}, command::{BindingMatch, CommandRegistry, CommandTarget, HelpCommand, InsertCommand, ModeCommand}, ports::{FilePicker, FileWatcher, StorageIo}, state::{EditorMode, NormalSequenceKey, RimState}};
+use crate::{action::{AppAction, EditorAction, KeyCode, KeyEvent, KeyModifiers}, command::{BindingMatch, BuiltinCommand, CommandRegistry, CommandTarget, HelpCommand, InsertCommand, ModeCommand, NotificationCommand, OverlayCommand}, ports::{FilePicker, FileWatcher, StorageIo}, state::{EditorMode, KeymapScope, NormalSequenceKey, RimState}};
 
 #[derive(Debug)]
 pub(super) enum SequenceMatch {
@@ -23,6 +23,9 @@ where P: StorageIo + FileWatcher + FilePicker {
 
 	if state.workspace_file_picker_open() {
 		return command_flow::handle_workspace_file_picker_key(ports, state, key);
+	}
+	if state.notification_center_open() {
+		return handle_notification_center_key(state, key);
 	}
 
 	if !state.is_visual_mode() {
@@ -390,43 +393,71 @@ fn handle_insert_scope_key(state: &mut RimState, key: KeyEvent) -> Option<Contro
 		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(
 			InsertCommand::Newline,
 		))) => {
+			if state.is_block_insert_mode() {
+				state.status_bar.message = "block insert supports text, tab, backspace, esc only".to_string();
+				return Some(ControlFlow::Continue(()));
+			}
 			state.insert_newline_at_cursor();
 			Some(ControlFlow::Continue(()))
 		}
 		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(
 			InsertCommand::Backspace,
 		))) => {
-			state.backspace_at_cursor();
+			if state.is_block_insert_mode() {
+				state.backspace_at_block_cursor();
+			} else {
+				state.backspace_at_cursor();
+			}
 			Some(ControlFlow::Continue(()))
 		}
 		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(
 			InsertCommand::Left,
 		))) => {
+			if state.is_block_insert_mode() {
+				state.status_bar.message = "block insert supports text, tab, backspace, esc only".to_string();
+				return Some(ControlFlow::Continue(()));
+			}
 			state.move_cursor_left();
 			Some(ControlFlow::Continue(()))
 		}
 		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(
 			InsertCommand::Down,
 		))) => {
+			if state.is_block_insert_mode() {
+				state.status_bar.message = "block insert supports text, tab, backspace, esc only".to_string();
+				return Some(ControlFlow::Continue(()));
+			}
 			state.move_cursor_down();
 			Some(ControlFlow::Continue(()))
 		}
 		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(
 			InsertCommand::Up,
 		))) => {
+			if state.is_block_insert_mode() {
+				state.status_bar.message = "block insert supports text, tab, backspace, esc only".to_string();
+				return Some(ControlFlow::Continue(()));
+			}
 			state.move_cursor_up();
 			Some(ControlFlow::Continue(()))
 		}
 		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(
 			InsertCommand::Right,
 		))) => {
+			if state.is_block_insert_mode() {
+				state.status_bar.message = "block insert supports text, tab, backspace, esc only".to_string();
+				return Some(ControlFlow::Continue(()));
+			}
 			state.move_cursor_right_for_insert();
 			Some(ControlFlow::Continue(()))
 		}
 		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(
 			InsertCommand::Tab,
 		))) => {
-			state.insert_char_at_cursor('\t');
+			if state.is_block_insert_mode() {
+				state.insert_char_at_block_cursor('\t');
+			} else {
+				state.insert_char_at_cursor('\t');
+			}
 			Some(ControlFlow::Continue(()))
 		}
 		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Help(
@@ -436,5 +467,88 @@ fn handle_insert_scope_key(state: &mut RimState, key: KeyEvent) -> Option<Contro
 			Some(ControlFlow::Continue(()))
 		}
 		BindingMatch::Exact(_) | BindingMatch::Pending | BindingMatch::NoMatch => None,
+	}
+}
+
+fn handle_notification_center_key(state: &mut RimState, key: KeyEvent) -> ControlFlow<()> {
+	if key.modifiers.contains(KeyModifiers::ALT) {
+		state.normal_sequence.clear();
+		state.status_bar.key_sequence.clear();
+		state.close_key_hints();
+		return ControlFlow::Continue(());
+	}
+
+	let Some(notification_key) = to_normal_key(state, key) else {
+		state.normal_sequence.clear();
+		state.status_bar.key_sequence.clear();
+		state.close_key_hints();
+		return ControlFlow::Continue(());
+	};
+	state.normal_sequence.push(notification_key);
+
+	loop {
+		match state
+			.command_registry
+			.resolve_scope_sequence(KeymapScope::OverlayNotificationCenter, &state.normal_sequence)
+		{
+			BindingMatch::Exact(target) => {
+				state.normal_sequence.clear();
+				state.status_bar.key_sequence.clear();
+				handle_notification_center_target(state, target);
+				return ControlFlow::Continue(());
+			}
+			BindingMatch::Pending => {
+				state.status_bar.key_sequence = render_normal_sequence(&state.normal_sequence);
+				state.refresh_pending_key_hints();
+				return ControlFlow::Continue(());
+			}
+			BindingMatch::NoMatch => {
+				if state.normal_sequence.len() <= 1 {
+					state.normal_sequence.clear();
+					state.status_bar.key_sequence.clear();
+					state.close_key_hints();
+					return ControlFlow::Continue(());
+				}
+				let last = *state.normal_sequence.last().expect("notification center sequence has at least one key");
+				state.normal_sequence.clear();
+				state.normal_sequence.push(last);
+				state.status_bar.key_sequence = render_normal_sequence(&state.normal_sequence);
+				state.refresh_pending_key_hints();
+			}
+		}
+	}
+}
+
+fn handle_notification_center_target(state: &mut RimState, target: CommandTarget) {
+	match target {
+		CommandTarget::Builtin(BuiltinCommand::Overlay(OverlayCommand::Close))
+		| CommandTarget::Builtin(BuiltinCommand::Mode(ModeCommand::Normal)) => {
+			state.close_notification_center();
+		}
+		CommandTarget::Builtin(BuiltinCommand::Notification(NotificationCommand::Prev)) => {
+			let _ = state.move_notification_center_selection(-1);
+		}
+		CommandTarget::Builtin(BuiltinCommand::Notification(NotificationCommand::Next)) => {
+			let _ = state.move_notification_center_selection(1);
+		}
+		CommandTarget::Builtin(BuiltinCommand::Notification(NotificationCommand::Delete)) => {
+			let _ = state.delete_selected_notification();
+		}
+		CommandTarget::Builtin(BuiltinCommand::Help(HelpCommand::Keymap)) => {
+			state.open_key_hints_overview();
+		}
+		CommandTarget::Builtin(BuiltinCommand::Help(HelpCommand::KeymapScrollUp)) => {
+			let _ = state.scroll_key_hints_up();
+		}
+		CommandTarget::Builtin(BuiltinCommand::Help(HelpCommand::KeymapScrollDown)) => {
+			let _ = state.scroll_key_hints_down();
+		}
+		CommandTarget::Builtin(BuiltinCommand::Help(HelpCommand::KeymapHalfPageUp)) => {
+			let _ = state.scroll_key_hints_half_page_up();
+		}
+		CommandTarget::Builtin(BuiltinCommand::Help(HelpCommand::KeymapHalfPageDown)) => {
+			let _ = state.scroll_key_hints_half_page_down();
+		}
+		CommandTarget::Builtin(_) | CommandTarget::Plugin { .. } => {}
 	}
 }

@@ -260,6 +260,21 @@ fn workspace_file_picker_body_layout_should_not_exceed_tiny_content_width() {
 	assert!(!layout.horizontal_split);
 }
 
+#[test]
+fn layout_reconcile_should_keep_insert_cursor_slot_at_line_end() {
+	let mut state = test_state();
+	super::common::set_active_buffer_text(&mut state, "abc");
+	state.update_active_tab_layout(80, 20);
+	state.move_cursor_line_end();
+	state.move_cursor_right_for_insert();
+	assert_eq!(state.active_cursor().col, 4);
+
+	state.enter_insert_mode();
+	state.update_active_tab_layout(80, 20);
+
+	assert_eq!(state.active_cursor().col, 4);
+}
+
 fn sorted_window_rects(state: &crate::state::RimState) -> Vec<(u16, u16, u16, u16)> {
 	let mut rects = state
 		.active_tab_window_ids()

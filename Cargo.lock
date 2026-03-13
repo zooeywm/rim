@@ -1629,6 +1629,7 @@ dependencies = [
  "serde",
  "slotmap",
  "thiserror 2.0.18",
+ "time",
  "tracing",
  "unicode-width",
 ]

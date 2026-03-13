@@ -1,17 +1,14 @@
 use std::collections::HashSet;
 
 use ratatui::{buffer::Buffer, layout::{Constraint, Layout, Rect}, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap}};
-use rim_kernel::{
-	preview::preview_rows,
-	state::{RimState, WorkspaceFileMatch, WorkspaceFilePickerState, compute_workspace_file_picker_body_layout},
-};
+use rim_kernel::{preview::preview_rows, state::{RimState, WorkspaceFileMatch, WorkspaceFilePickerState, compute_workspace_file_picker_body_layout}};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub(super) struct WorkspaceFilePickerWidget {
-	picker:   WorkspaceFilePickerState,
-	area:     Rect,
-	cursor_x: u16,
-	cursor_y: u16,
+	picker:    WorkspaceFilePickerState,
+	area:      Rect,
+	cursor_x:  u16,
+	cursor_y:  u16,
 	word_wrap: bool,
 }
 
@@ -35,13 +32,7 @@ impl WorkspaceFilePickerWidget {
 			.saturating_add(UnicodeWidthStr::width(query_line.as_str()) as u16)
 			.min(area.x.saturating_add(area.width.saturating_sub(1)));
 		let cursor_y = area.y.saturating_add(1).min(area.y.saturating_add(area.height.saturating_sub(1)));
-		Some(Self {
-			picker,
-			area,
-			cursor_x,
-			cursor_y,
-			word_wrap: state.picker_preview_word_wrap_enabled(),
-		})
+		Some(Self { picker, area, cursor_x, cursor_y, word_wrap: state.picker_preview_word_wrap_enabled() })
 	}
 
 	pub(super) fn cursor_position(&self) -> (u16, u16) { (self.cursor_x, self.cursor_y) }
@@ -170,11 +161,8 @@ fn render_preview(picker: &WorkspaceFilePickerState, area: Rect, buf: &mut Buffe
 			.map(|line| Line::styled(line, Style::default().fg(Color::Gray)))
 			.collect::<Vec<_>>()
 	};
-	let paragraph = if word_wrap {
-		Paragraph::new(lines).wrap(Wrap { trim: false })
-	} else {
-		Paragraph::new(lines)
-	};
+	let paragraph =
+		if word_wrap { Paragraph::new(lines).wrap(Wrap { trim: false }) } else { Paragraph::new(lines) };
 	paragraph.render(area, buf);
 }
 

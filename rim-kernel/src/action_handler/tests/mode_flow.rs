@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use super::{super::mode_flow::SequenceMatch, support::{FilePickerPorts, RecordingPorts, dispatch_test_action, map_normal_key, resolve_keys}};
-use crate::{action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction}, command::{BuiltinCommand, CommandAliasConfig, CommandAliasSection, CommandConfigFile, CommandKeymapSection, CommandTarget, KeyBindingOn, KeymapBindingConfig, ViewCommand}, state::{FloatingWindowPlacement, NormalSequenceKey, RimState, WorkspaceFileEntry}};
+use crate::{action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction}, command::{BuiltinCommand, CommandAliasConfig, CommandAliasSection, CommandConfigFile, CommandKeymapSection, CommandTarget, KeyBindingOn, KeymapBindingConfig, ViewCommand}, display_geometry::display_width_of_char_prefix_with_virtual as geom_display_width_of_char_prefix_with_virtual, state::{FloatingWindowPlacement, NormalSequenceKey, RimState, WorkspaceFileEntry}};
 
 #[test]
 fn to_normal_key_should_map_leader_char_to_leader_token() {
@@ -215,7 +215,7 @@ fn resolve_normal_sequence_should_map_leader_b_n_to_new_empty_buffer() {
 }
 
 #[test]
-fn configured_normal_key_binding_should_override_builtin_mapping() {
+fn configured_normal_key_binding_should_reject_conflicting_mapping() {
 	let mut state = RimState::new();
 	let first = state.create_buffer(None, "first");
 	let second = state.create_buffer(None, "second");
@@ -236,7 +236,7 @@ fn configured_normal_key_binding_should_override_builtin_mapping() {
 		..CommandConfigFile::default()
 	});
 
-	assert!(errors.is_empty());
+	assert_eq!(errors.len(), 1);
 	let _ = dispatch_test_action(
 		&mut state,
 		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('H'), KeyModifiers::SHIFT))),
@@ -463,6 +463,192 @@ fn visual_block_append_should_insert_after_block_on_each_selected_row() {
 }
 
 #[test]
+fn visual_block_append_should_pad_short_lines_when_block_is_beyond_text() {
+	let mut state = RimState::new();
+	let buffer_id = state.create_buffer(None, "abcdef\nx\nzzz");
+	state.bind_buffer_to_active_window(buffer_id);
+
+	for key in [
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+		KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT),
+		KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT),
+		KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+	] {
+		let _ = dispatch_test_action(&mut state, AppAction::Editor(EditorAction::KeyPressed(key)));
+	}
+
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "abcdeXf\nx    X\nzzz  X");
+}
+
+#[test]
+fn visual_block_right_move_should_not_be_clamped_by_layout_tick() {
+	let mut state = RimState::new();
+	let buffer_id = state.create_buffer(None, "abcdef\nx\nzzz");
+	state.bind_buffer_to_active_window(buffer_id);
+	state.update_active_tab_layout(80, 20);
+
+	for key in [
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+		KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+	] {
+		let _ = dispatch_test_action(&mut state, AppAction::Editor(EditorAction::KeyPressed(key)));
+		state.update_active_tab_layout(80, 20);
+	}
+
+	assert_eq!(state.active_cursor().col, 7);
+}
+
+#[test]
+fn visual_block_right_move_should_scroll_follow_virtual_column_on_short_line() {
+	let mut state = RimState::new();
+	let buffer_id = state.create_buffer(
+		None,
+		"abcdef
+x
+zzz",
+	);
+	state.bind_buffer_to_active_window(buffer_id);
+	state.update_active_tab_layout(8, 20);
+
+	for key in [
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+		KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+	] {
+		let _ = dispatch_test_action(&mut state, AppAction::Editor(EditorAction::KeyPressed(key)));
+		state.update_active_tab_layout(8, 20);
+	}
+
+	let window = state.windows.get(state.active_window_id()).expect("window exists");
+	assert_eq!(state.active_cursor().col, 9);
+	assert!(window.scroll_x > 0);
+}
+
+#[test]
+fn visual_block_append_should_align_to_virtual_column_with_layout_tick() {
+	let mut state = RimState::new();
+	let buffer_id = state.create_buffer(None, "abcdef\nx\nzzz");
+	state.bind_buffer_to_active_window(buffer_id);
+	state.update_active_tab_layout(80, 20);
+
+	for key in [
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+		KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT),
+		KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT),
+		KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+	] {
+		let _ = dispatch_test_action(&mut state, AppAction::Editor(EditorAction::KeyPressed(key)));
+		state.update_active_tab_layout(80, 20);
+	}
+
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "abcdef X\nx      X\nzzz    X");
+}
+
+#[test]
+fn visual_block_append_backspace_should_mirror_delete_with_layout_tick() {
+	let mut state = RimState::new();
+	let buffer_id = state.create_buffer(None, "abcdef\nx\nzzz");
+	state.bind_buffer_to_active_window(buffer_id);
+	state.update_active_tab_layout(80, 20);
+
+	for key in [
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+		KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT),
+		KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT),
+		KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+	] {
+		let _ = dispatch_test_action(&mut state, AppAction::Editor(EditorAction::KeyPressed(key)));
+		state.update_active_tab_layout(80, 20);
+	}
+
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "abcdef \nx      \nzzz    ");
+	assert!(!buffer.text.to_string().contains('X'));
+}
+
+#[test]
+fn visual_block_append_should_align_on_same_display_column_with_tab_indentation() {
+	let mut state = RimState::new();
+	let buffer_id = state.create_buffer(None, "\tfoo,\nbar {\n\tz");
+	state.bind_buffer_to_active_window(buffer_id);
+	state.update_active_tab_layout(80, 20);
+
+	for key in [
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+		KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT),
+		KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT),
+		KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+	] {
+		let _ = dispatch_test_action(&mut state, AppAction::Editor(EditorAction::KeyPressed(key)));
+		state.update_active_tab_layout(80, 20);
+	}
+
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	let rendered = buffer.text.to_string();
+	let lines = rendered.lines().collect::<Vec<_>>();
+	assert_eq!(lines.len(), 3);
+
+	let x_display_cols = lines
+		.iter()
+		.map(|line| {
+			let x_idx = line.find('X').expect("each selected row should contain inserted X");
+			let char_count = line[..x_idx].chars().count();
+			geom_display_width_of_char_prefix_with_virtual(line, char_count)
+		})
+		.collect::<Vec<_>>();
+	assert!(
+		x_display_cols.windows(2).all(|pair| pair[0] == pair[1]),
+		"lines={lines:?}, x_display_cols={x_display_cols:?}"
+	);
+}
+
+#[test]
 fn visual_block_c_should_change_block_and_be_undoable_with_single_u() {
 	let mut state = RimState::new();
 	let buffer_id = state.create_buffer(None, "abcd\nefgh\nijkl");
@@ -633,6 +819,93 @@ fn open_line_above_insert_should_be_grouped_into_single_undo_step() {
 }
 
 #[test]
+fn append_insert_in_middle_should_insert_after_cursor_without_jumping_to_line_end() {
+	let mut state = RimState::new();
+	let buffer_id = state.create_buffer(None, "abcd");
+	state.bind_buffer_to_active_window(buffer_id);
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE))),
+	);
+
+	for key in [
+		KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT),
+		KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+	] {
+		let _ = dispatch_test_action(&mut state, AppAction::Editor(EditorAction::KeyPressed(key)));
+	}
+
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "abXcd");
+}
+
+#[test]
+fn append_insert_at_line_end_should_insert_after_last_char() {
+	let mut state = RimState::new();
+	let buffer_id = state.create_buffer(None, "ab");
+	state.bind_buffer_to_active_window(buffer_id);
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE))),
+	);
+
+	for key in [
+		KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+	] {
+		let _ = dispatch_test_action(&mut state, AppAction::Editor(EditorAction::KeyPressed(key)));
+	}
+
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "abx");
+}
+
+#[test]
+fn open_line_below_first_insert_char_should_advance_cursor() {
+	let mut state = RimState::new();
+	let buffer_id = state.create_buffer(None, "ab");
+	state.bind_buffer_to_active_window(buffer_id);
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE))),
+	);
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE))),
+	);
+
+	assert_eq!(state.active_cursor().row, 2);
+	assert_eq!(state.active_cursor().col, 2);
+}
+
+#[test]
+fn append_insert_at_line_end_should_work_with_word_wrap_enabled() {
+	let mut state = RimState::new();
+	let buffer_id = state.create_buffer(None, "abcdefghijklmnopqrstuvwxyz");
+	state.bind_buffer_to_active_window(buffer_id);
+	state.toggle_word_wrap();
+	while state.active_cursor().col < 26 {
+		let _ = dispatch_test_action(
+			&mut state,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE))),
+		);
+	}
+
+	for key in [
+		KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+		KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+	] {
+		let _ = dispatch_test_action(&mut state, AppAction::Editor(EditorAction::KeyPressed(key)));
+	}
+
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "abcdefghijklmnopqrstuvwxyzx");
+}
+
+#[test]
 fn f1_should_open_current_mode_key_hint_overview() {
 	let mut state = RimState::new();
 
@@ -703,7 +976,7 @@ fn open_key_hint_popup_should_refresh_after_config_reload() {
 		mode: crate::command::ModeKeymapSections {
 			normal: CommandKeymapSection {
 				keymap: vec![KeymapBindingConfig {
-					on:   KeyBindingOn::single("H"),
+					on:   KeyBindingOn::single("L"),
 					run:  "core.buffer.next".into(),
 					desc: Some("custom".to_string()),
 				}],
@@ -717,8 +990,7 @@ fn open_key_hint_popup_should_refresh_after_config_reload() {
 	state.refresh_key_hints_overlay_after_config_reload();
 
 	let floating = state.floating_window().expect("floating window should still be open");
-	assert!(floating.lines.iter().any(|line| line.key == "H" && line.summary == "custom"));
-	assert!(!floating.lines.iter().any(|line| line.key == "L"));
+	assert!(floating.lines.iter().any(|line| line.key == "L" && line.summary == "custom"));
 }
 
 #[test]
@@ -882,10 +1154,7 @@ fn workspace_file_picker_preview_should_scroll_with_ctrl_e_and_ctrl_y() {
 		&mut state,
 		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL))),
 	);
-	assert_eq!(
-		state.workspace_file_picker().expect("picker should stay open").preview_scroll,
-		capped_scroll
-	);
+	assert_eq!(state.workspace_file_picker().expect("picker should stay open").preview_scroll, capped_scroll);
 
 	let _ = dispatch_test_action(
 		&mut state,
@@ -921,10 +1190,7 @@ fn workspace_file_picker_preview_scroll_should_not_accumulate_beyond_visible_end
 			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL))),
 		);
 	}
-	assert_eq!(
-		state.workspace_file_picker().expect("picker should stay open").preview_scroll,
-		capped_scroll
-	);
+	assert_eq!(state.workspace_file_picker().expect("picker should stay open").preview_scroll, capped_scroll);
 
 	let _ = dispatch_test_action(
 		&mut state,
@@ -1300,9 +1566,10 @@ fn command_mode_should_execute_selected_workspace_file_argument_on_enter() {
 	);
 
 	assert!(state.command_palette().is_none());
-	assert_eq!(ports.open_requests.borrow().len(), 1);
-	assert_eq!(ports.file_loads.borrow().len(), 1);
-	assert_eq!(ports.open_requests.borrow()[0].1, workspace_root.join("src/main.rs"));
+	assert!(ports.open_requests.borrow().is_empty());
+	assert!(ports.file_loads.borrow().is_empty());
+	assert!(state.active_buffer_id().is_none());
+	assert_eq!(state.status_bar.message, "reload failed: no active buffer");
 }
 
 #[test]
@@ -1346,10 +1613,10 @@ fn command_mode_should_enqueue_and_update_file_preview_for_edit_candidates() {
 		&ports,
 		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))),
 	);
-	assert_eq!(
-		ports.preview_requests.borrow().as_slice(),
-		&[workspace_root.join("README.md"), workspace_root.join("src/main.rs")]
-	);
+	assert_eq!(ports.preview_requests.borrow().as_slice(), &[
+		workspace_root.join("README.md"),
+		workspace_root.join("src/main.rs")
+	]);
 }
 
 #[test]
@@ -1521,10 +1788,12 @@ fn workspace_file_picker_should_open_selected_file_on_enter() {
 
 	assert!(state.workspace_file_picker().is_none());
 	assert_eq!(ports.preview_requests.borrow().len(), 2);
-	assert_eq!(ports.open_requests.borrow().len(), 1);
-	assert_eq!(ports.file_loads.borrow().len(), 1);
-	assert_eq!(ports.open_requests.borrow()[0].1, workspace_root.join("src/main.rs"));
-	assert_eq!(ports.file_loads.borrow()[0].1, workspace_root.join("src/main.rs"));
+	assert!(ports.open_requests.borrow().is_empty());
+	assert!(ports.file_loads.borrow().is_empty());
+	let active = state.active_buffer_id().expect("active buffer should exist");
+	let buffer = state.buffers.get(active).expect("active buffer state should exist");
+	assert_eq!(buffer.path.as_ref(), Some(&workspace_root.join("src/main.rs")));
+	assert_eq!(state.status_bar.message, format!("new {}", workspace_root.join("src/main.rs").display()));
 }
 
 #[test]

@@ -3,12 +3,7 @@ use std::{path::PathBuf, time::Instant};
 use ropey::Rope;
 use slotmap::Key;
 
-use super::{
-	BufferEditSnapshot, BufferHistoryEntry, BufferId, BufferState, BufferSwitchDirection, CursorState,
-	EditorMode, PersistedBufferHistory, RimState, apply_text_delta_redo, apply_text_delta_undo,
-	buffer_name_from_path, clamp_cursor_for_rope, compute_rope_text_diff, merge_adjacent_insert_history_edits,
-	rope_line_count,
-};
+use super::{BufferEditSnapshot, BufferHistoryEntry, BufferId, BufferState, BufferSwitchDirection, CursorState, EditorMode, PersistedBufferHistory, RimState, apply_text_delta_redo, apply_text_delta_undo, buffer_name_from_path, clamp_cursor_for_rope, compute_rope_text_diff, merge_adjacent_insert_history_edits, rope_line_count};
 
 impl RimState {
 	pub(crate) fn tab_id_for_window(&self, window_id: super::WindowId) -> Option<super::TabId> {
@@ -539,8 +534,8 @@ impl RimState {
 			return;
 		};
 		let edit = BufferEditSnapshot {
-			start_byte: diff.start_byte,
-			deleted_text: diff.deleted_text,
+			start_byte:    diff.start_byte,
+			deleted_text:  diff.deleted_text,
 			inserted_text: diff.inserted_text,
 		};
 		let after_cursor =
@@ -576,9 +571,9 @@ impl RimState {
 			&& !group.edits.is_empty()
 		{
 			undo_stack.push(BufferHistoryEntry {
-				edits: group.edits.clone(),
+				edits:         group.edits.clone(),
 				before_cursor: group.before_cursor,
-				after_cursor: self.cursor_for_buffer(buffer_id).unwrap_or(group.before_cursor),
+				after_cursor:  self.cursor_for_buffer(buffer_id).unwrap_or(group.before_cursor),
 			});
 			let overflow = undo_stack.len().saturating_sub(Self::MAX_HISTORY_ENTRIES);
 			if overflow > 0 {
@@ -714,9 +709,7 @@ impl RimState {
 		self.status_bar.message = "redo".to_string();
 	}
 
-	pub fn has_dirty_buffers(&self) -> bool {
-		self.buffers.values().any(|buffer| buffer.dirty)
-	}
+	pub fn has_dirty_buffers(&self) -> bool { self.buffers.values().any(|buffer| buffer.dirty) }
 
 	pub fn active_buffer_rope(&self) -> Option<&Rope> {
 		let buffer_id = self.active_buffer_id()?;

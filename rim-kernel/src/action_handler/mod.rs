@@ -11,7 +11,7 @@ use errors::ActionHandlerError;
 use file_flow::{enqueue_history_save, enqueue_history_save_for_buffer, handle_file_action, handle_pending_swap_decision_key};
 use mode_flow::SequenceMatch;
 
-use crate::{action::{AppAction, BufferAction, EditorAction, KeyEvent, LayoutAction, SystemAction, TabAction, WindowAction}, ports::{FilePicker, FileWatcher, StorageIo}, state::{BufferSwitchDirection, FocusDirection, NormalSequenceKey, RimState, SplitAxis}};
+use crate::{action::{AppAction, BufferAction, EditorAction, KeyEvent, LayoutAction, SystemAction, TabAction, WindowAction}, ports::{FilePicker, FileWatcher, StorageIo}, state::{BufferSwitchDirection, FocusDirection, NormalSequenceKey, NotificationLevel, RimState, SplitAxis}};
 
 impl RimState {
 	pub fn apply_action<P>(&mut self, ports: &P, action: AppAction) -> ControlFlow<()>
@@ -33,6 +33,7 @@ impl RimState {
 
 	fn dispatch_internal<P>(ports: &P, state: &mut RimState, action: AppAction) -> ControlFlow<()>
 	where P: StorageIo + FileWatcher + FilePicker {
+		let status_before = state.status_bar.message.clone();
 		match action {
 			AppAction::Editor(EditorAction::KeyPressed(key)) => {
 				return Self::handle_key(ports, state, key);
@@ -84,7 +85,16 @@ impl RimState {
 					return ControlFlow::Break(());
 				}
 				SystemAction::ReloadConfig => {}
+				SystemAction::Tick => {
+					let _ = state.tick_notifications(std::time::Instant::now());
+				}
 			},
+		}
+		if state.status_bar.message != status_before && is_error_status_message(state.status_bar.message.as_str())
+		{
+			let error_message = state.status_bar.message.clone();
+			state.push_notification(NotificationLevel::Error, error_message);
+			state.status_bar.message = status_before;
 		}
 		ControlFlow::Continue(())
 	}
@@ -97,6 +107,16 @@ impl RimState {
 	fn to_normal_key(state: &RimState, key: KeyEvent) -> Option<NormalSequenceKey> {
 		mode_flow::to_normal_key(state, key)
 	}
+}
+
+fn is_error_status_message(message: &str) -> bool {
+	let lower = message.to_ascii_lowercase();
+	lower.contains("failed")
+		|| lower.contains("error")
+		|| lower.contains("blocked")
+		|| lower.contains("invalid")
+		|| lower.contains("unknown")
+		|| lower.contains("unavailable")
 }
 
 #[cfg(test)]

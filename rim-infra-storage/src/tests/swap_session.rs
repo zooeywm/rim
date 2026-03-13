@@ -289,6 +289,74 @@ fn recover_should_replay_existing_swap_edit_log() {
 }
 
 #[test]
+fn detect_conflict_should_ignore_swap_owned_by_current_process() {
+	let swap_dir = make_tmp_dir("conflict-self");
+	let source_path = swap_dir.join("sample.txt");
+	let mut session = SwapSession::new(
+		BufferId::default(),
+		source_path.as_path(),
+		swap_dir.as_path(),
+		123,
+		"tester".to_string(),
+	);
+	run_async(write_swap_snapshot(session.swap_path.as_path(), 123, "tester", true, "abc"))
+		.expect("write test snapshot failed");
+
+	let conflict = run_async(session.detect_conflict()).expect("detect conflict failed");
+	assert_eq!(conflict, SwapConflictCheckResult::NoSwapActionNeeded);
+}
+
+#[test]
+fn detect_conflict_should_report_swap_owned_by_other_process() {
+	let swap_dir = make_tmp_dir("conflict-peer");
+	let source_path = swap_dir.join("sample.txt");
+	let mut session = SwapSession::new(
+		BufferId::default(),
+		source_path.as_path(),
+		swap_dir.as_path(),
+		123,
+		"tester".to_string(),
+	);
+	let stale_peer_pid = 999_999;
+	run_async(write_swap_snapshot(session.swap_path.as_path(), stale_peer_pid, "peer", true, "abc"))
+		.expect("write test snapshot failed");
+
+	let conflict = run_async(session.detect_conflict()).expect("detect conflict failed");
+	assert_eq!(
+		conflict,
+		SwapConflictCheckResult::Conflict(SwapConflictInfo {
+			pid:      stale_peer_pid,
+			username: "peer".to_string(),
+		})
+	);
+}
+
+#[test]
+fn detect_conflict_should_ignore_swap_owned_by_alive_other_process() {
+	let swap_dir = make_tmp_dir("conflict-peer-alive");
+	let source_path = swap_dir.join("sample.txt");
+	let mut session = SwapSession::new(
+		BufferId::default(),
+		source_path.as_path(),
+		swap_dir.as_path(),
+		123,
+		"tester".to_string(),
+	);
+	let alive_peer_pid = std::process::id();
+	run_async(write_swap_snapshot(session.swap_path.as_path(), alive_peer_pid, "peer", true, "abc"))
+		.expect("write test snapshot failed");
+
+	let conflict = run_async(session.detect_conflict()).expect("detect conflict failed");
+	assert_eq!(
+		conflict,
+		SwapConflictCheckResult::Conflict(SwapConflictInfo {
+			pid:      alive_peer_pid,
+			username: "peer".to_string(),
+		})
+	);
+}
+
+#[test]
 fn close_should_remove_swap_file() {
 	let swap_dir = make_tmp_dir("drop");
 	let source_path = swap_dir.join("sample.txt");
@@ -299,7 +367,6 @@ fn close_should_remove_swap_file() {
 		123,
 		"tester".to_string(),
 	);
-	run_async(session.bind_lease()).expect("bind lease failed");
 	run_async(session.recover("hello".to_string())).expect("recover init failed");
 	let swap_path = session.swap_path.clone();
 	assert!(path_exists(&swap_path));
@@ -366,13 +433,9 @@ fn recover_without_existing_swap_should_not_emit_recover_completed_event() {
 }
 
 #[test]
-fn close_should_keep_swap_file_when_other_process_lease_exists() {
-	let swap_dir = make_tmp_dir("drop-lease");
+fn close_should_keep_swap_file_when_owned_by_other_process() {
+	let swap_dir = make_tmp_dir("drop-foreign-owner");
 	let source_path = swap_dir.join("sample.txt");
-	let peer_pid = std::process::id();
-	let peer_lease = swap_lease_path_for_source(swap_dir.as_path(), source_path.as_path(), peer_pid);
-	run_async(touch_swap_lease_file(peer_lease.as_path())).expect("touch peer lease failed");
-
 	let mut session = SwapSession::new(
 		BufferId::default(),
 		source_path.as_path(),
@@ -380,37 +443,12 @@ fn close_should_keep_swap_file_when_other_process_lease_exists() {
 		123,
 		"tester".to_string(),
 	);
-	run_async(session.bind_lease()).expect("bind lease failed");
-	run_async(session.recover("hello".to_string())).expect("recover init failed");
+	run_async(write_swap_snapshot(session.swap_path.as_path(), 456, "peer", true, "hello"))
+		.expect("write swap snapshot failed");
 	let swap_path = session.swap_path.clone();
 	assert!(path_exists(&swap_path));
 
 	run_async(session.close()).expect("close session failed");
 	assert!(path_exists(&swap_path));
 	remove_file(&swap_path);
-	remove_file(&peer_lease);
-}
-
-#[test]
-fn close_should_remove_swap_file_when_only_stale_peer_lease_exists() {
-	let swap_dir = make_tmp_dir("drop-stale-lease");
-	let source_path = swap_dir.join("sample.txt");
-	let stale_pid = 999_999;
-	let stale_lease = swap_lease_path_for_source(swap_dir.as_path(), source_path.as_path(), stale_pid);
-	run_async(touch_swap_lease_file(stale_lease.as_path())).expect("touch stale lease failed");
-	let mut session = SwapSession::new(
-		BufferId::default(),
-		source_path.as_path(),
-		swap_dir.as_path(),
-		123,
-		"tester".to_string(),
-	);
-	run_async(session.bind_lease()).expect("bind lease failed");
-	run_async(session.recover("hello".to_string())).expect("recover init failed");
-	let swap_path = session.swap_path.clone();
-	assert!(path_exists(&swap_path));
-
-	run_async(session.close()).expect("close session failed");
-	assert!(!path_exists(&swap_path));
-	assert!(!path_exists(&stale_lease));
 }

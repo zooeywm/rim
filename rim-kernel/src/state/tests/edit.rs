@@ -313,7 +313,8 @@ fn word_wrap_layout_reconcile_should_not_rollback_scroll_after_move_down() {
 	let scroll_after_layout = state.windows.get(active_window_id).expect("window exists").scroll_y;
 	assert!(
 		scroll_after_layout >= scroll_after_move,
-		"wrapped scroll should not rollback after layout reconcile, move={scroll_after_move}, layout={scroll_after_layout}"
+		"wrapped scroll should not rollback after layout reconcile, move={scroll_after_move}, \
+		 layout={scroll_after_layout}"
 	);
 }
 
@@ -504,8 +505,11 @@ fn visual_block_backspace_should_remove_mirrored_inserted_chars() {
 #[test]
 fn visual_block_insert_should_keep_cursor_on_block_start_row() {
 	let mut insert_before = test_state();
-	set_active_buffer_text(&mut insert_before, "abcdef
-        StorageIoImpl::inj_ref");
+	set_active_buffer_text(
+		&mut insert_before,
+		"abcdef
+        StorageIoImpl::inj_ref",
+	);
 	for _ in 0..8 {
 		insert_before.move_cursor_right();
 	}
@@ -515,8 +519,11 @@ fn visual_block_insert_should_keep_cursor_on_block_start_row() {
 	assert_eq!(insert_before.active_cursor().row, 1);
 
 	let mut append = test_state();
-	set_active_buffer_text(&mut append, "abcdef
-        StorageIoImpl::inj_ref");
+	set_active_buffer_text(
+		&mut append,
+		"abcdef
+        StorageIoImpl::inj_ref",
+	);
 	for _ in 0..8 {
 		append.move_cursor_right();
 	}
@@ -552,9 +559,9 @@ fn visual_block_insert_should_expand_tab_padding_before_first_input() {
 	let active_window_id = state.active_window_id();
 	state.windows.get_mut(active_window_id).expect("window exists").cursor = CursorState { row: 1, col: 1 };
 	state.enter_block_insert_mode(PendingBlockInsert {
-		start_row: 1,
-		end_row: 2,
-		base_display_col: 2,
+		start_row:          1,
+		end_row:            2,
+		base_display_col:   2,
 		cursor_display_col: 2,
 	});
 
@@ -982,18 +989,15 @@ fn undo_active_buffer_edit_should_restore_previous_text_and_cursor() {
 	state.move_cursor_right();
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	state.insert_char_at_cursor('x');
-	state.push_buffer_history_entry(
-		buffer_id,
-		BufferHistoryEntry {
-			edits: vec![BufferEditSnapshot {
-				start_byte: 1,
-				deleted_text: String::new(),
-				inserted_text: "x".to_string(),
-			}],
-			before_cursor: CursorState { row: 1, col: 2 },
-			after_cursor: CursorState { row: 1, col: 3 },
-		},
-	);
+	state.push_buffer_history_entry(buffer_id, BufferHistoryEntry {
+		edits:         vec![BufferEditSnapshot {
+			start_byte:    1,
+			deleted_text:  String::new(),
+			inserted_text: "x".to_string(),
+		}],
+		before_cursor: CursorState { row: 1, col: 2 },
+		after_cursor:  CursorState { row: 1, col: 3 },
+	});
 
 	state.undo_active_buffer_edit();
 
@@ -1010,18 +1014,15 @@ fn redo_active_buffer_edit_should_reapply_last_undone_change() {
 	state.move_cursor_right();
 	let buffer_id = state.active_buffer_id().expect("buffer id exists");
 	state.insert_char_at_cursor('x');
-	state.push_buffer_history_entry(
-		buffer_id,
-		BufferHistoryEntry {
-			edits: vec![BufferEditSnapshot {
-				start_byte: 1,
-				deleted_text: String::new(),
-				inserted_text: "x".to_string(),
-			}],
-			before_cursor: CursorState { row: 1, col: 2 },
-			after_cursor: CursorState { row: 1, col: 3 },
-		},
-	);
+	state.push_buffer_history_entry(buffer_id, BufferHistoryEntry {
+		edits:         vec![BufferEditSnapshot {
+			start_byte:    1,
+			deleted_text:  String::new(),
+			inserted_text: "x".to_string(),
+		}],
+		before_cursor: CursorState { row: 1, col: 2 },
+		after_cursor:  CursorState { row: 1, col: 3 },
+	});
 	state.undo_active_buffer_edit();
 
 	state.redo_active_buffer_edit();

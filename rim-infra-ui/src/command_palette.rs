@@ -1,11 +1,7 @@
 use std::collections::HashSet;
 
 use ratatui::{buffer::Buffer, layout::{Alignment, Constraint, Layout, Rect}, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap}};
-use rim_kernel::{
-	command::{CommandPaletteItem, CommandPaletteMatch},
-	preview::preview_rows,
-	state::{CommandPaletteState, RimState},
-};
+use rim_kernel::{command::{CommandPaletteItem, CommandPaletteMatch}, preview::preview_rows, state::{CommandPaletteState, RimState}};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const COMMAND_INPUT_MAX_ROWS: usize = 4;
@@ -30,12 +26,7 @@ impl CommandPaletteWidgets {
 		let wrapped_input = wrap_command_input(palette.query.as_str(), input_inner_width);
 		let visible_input_rows = wrapped_input.len().clamp(1, COMMAND_INPUT_MAX_ROWS);
 		let input_area = clamp_rect_to_content_area(
-			Rect {
-				x,
-				y: content_area.y.saturating_add(1),
-				width,
-				height: visible_input_rows as u16 + 2,
-			},
+			Rect { x, y: content_area.y.saturating_add(1), width, height: visible_input_rows as u16 + 2 },
 			content_area,
 		);
 		let result_rows = if palette.showing_files {
@@ -47,9 +38,7 @@ impl CommandPaletteWidgets {
 			content_area.height.saturating_sub(input_area.height).saturating_sub(4).max(3);
 		let max_inner_rows = available_result_rows.saturating_sub(2).max(1);
 		let min_inner_rows = if palette.showing_files { 8 } else { 3 };
-		let inner_rows = result_rows
-			.min(max_inner_rows)
-			.max(min_inner_rows.min(max_inner_rows));
+		let inner_rows = result_rows.min(max_inner_rows).max(min_inner_rows.min(max_inner_rows));
 		let results_area = clamp_rect_to_content_area(
 			Rect {
 				x,
@@ -137,8 +126,8 @@ impl Widget for CommandPaletteInputWidget {
 }
 
 struct CommandPaletteResultsWidget {
-	palette: CommandPaletteState,
-	area:    Rect,
+	palette:   CommandPaletteState,
+	area:      Rect,
 	word_wrap: bool,
 }
 
@@ -207,10 +196,8 @@ fn render_result_lines(palette: &CommandPaletteState, width: usize, height: usiz
 	}
 
 	let visible_rows = height.max(1);
-	let start = palette
-		.selected
-		.saturating_sub(visible_rows / 2)
-		.min(palette.items.len().saturating_sub(visible_rows));
+	let start =
+		palette.selected.saturating_sub(visible_rows / 2).min(palette.items.len().saturating_sub(visible_rows));
 	palette
 		.items
 		.iter()
@@ -254,7 +241,8 @@ fn clamp_rect_to_content_area(rect: Rect, content_area: Rect) -> Rect {
 		return Rect::default();
 	}
 	let x = rect.x.max(content_area.x).min(content_area.x.saturating_add(content_area.width.saturating_sub(1)));
-	let y = rect.y.max(content_area.y).min(content_area.y.saturating_add(content_area.height.saturating_sub(1)));
+	let y =
+		rect.y.max(content_area.y).min(content_area.y.saturating_add(content_area.height.saturating_sub(1)));
 	let max_width = content_area.x.saturating_add(content_area.width).saturating_sub(x);
 	let max_height = content_area.y.saturating_add(content_area.height).saturating_sub(y);
 	Rect { x, y, width: rect.width.min(max_width), height: rect.height.min(max_height) }

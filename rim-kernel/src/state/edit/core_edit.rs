@@ -1,8 +1,4 @@
-use super::{
-	RimState, rope_cursor_char, rope_editable_line_count, rope_editable_line_len_chars,
-	rope_line_char_end_without_newline, rope_line_char_range_without_newline, rope_line_start_char,
-	split_lines_owned,
-};
+use super::{RimState, rope_cursor_char, rope_editable_line_count, rope_editable_line_len_chars, rope_line_char_end_without_newline, rope_line_char_range_without_newline, rope_line_start_char, split_lines_owned};
 use crate::state::{rope_ends_with_newline, rope_line_count, rope_line_len_chars};
 
 impl RimState {

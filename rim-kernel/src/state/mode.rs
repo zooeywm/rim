@@ -1,7 +1,4 @@
-use super::{
-	BufferHistoryEntry, CursorState, EditorMode, PendingBlockInsert, PendingInsertUndoGroup,
-	PendingSwapDecision, RimState, StatusBarMode, rope_line_count,
-};
+use super::{BufferHistoryEntry, CursorState, EditorMode, PendingBlockInsert, PendingInsertUndoGroup, PendingSwapDecision, RimState, StatusBarMode, rope_line_count};
 
 impl RimState {
 	pub fn status_line(&self) -> String {
@@ -31,25 +28,17 @@ impl RimState {
 		format!("{} | keys {} | {}", self.status_bar.message, self.status_bar.key_sequence, cursor_pos)
 	}
 
-	pub fn is_insert_mode(&self) -> bool {
-		self.mode == EditorMode::Insert
-	}
+	pub fn is_insert_mode(&self) -> bool { self.mode == EditorMode::Insert }
 
-	pub fn is_command_mode(&self) -> bool {
-		self.mode == EditorMode::Command
-	}
+	pub fn is_command_mode(&self) -> bool { self.mode == EditorMode::Command }
 
 	pub fn is_visual_mode(&self) -> bool {
 		matches!(self.mode, EditorMode::VisualChar | EditorMode::VisualLine | EditorMode::VisualBlock)
 	}
 
-	pub fn is_visual_line_mode(&self) -> bool {
-		self.mode == EditorMode::VisualLine
-	}
+	pub fn is_visual_line_mode(&self) -> bool { self.mode == EditorMode::VisualLine }
 
-	pub fn is_visual_block_mode(&self) -> bool {
-		self.mode == EditorMode::VisualBlock
-	}
+	pub fn is_visual_block_mode(&self) -> bool { self.mode == EditorMode::VisualBlock }
 
 	pub fn is_block_insert_mode(&self) -> bool {
 		self.mode == EditorMode::Insert && self.pending_block_insert.is_some()
@@ -58,28 +47,37 @@ impl RimState {
 	pub fn enter_insert_mode(&mut self) {
 		self.mode = EditorMode::Insert;
 		self.visual_anchor = None;
+		self.visual_block_anchor_display_col = None;
+		self.visual_block_cursor_display_col = None;
 		self.pending_block_insert = None;
 		self.status_bar.mode = StatusBarMode::Insert;
 		self.close_key_hints();
 		self.close_workspace_file_picker();
+		self.close_notification_center();
 	}
 
 	pub fn enter_block_insert_mode(&mut self, pending: PendingBlockInsert) {
 		self.mode = EditorMode::Insert;
 		self.visual_anchor = None;
+		self.visual_block_anchor_display_col = None;
+		self.visual_block_cursor_display_col = None;
 		self.pending_block_insert = Some(pending);
 		self.status_bar.mode = StatusBarMode::InsertBlock;
 		self.close_key_hints();
 		self.close_workspace_file_picker();
+		self.close_notification_center();
 	}
 
 	pub fn exit_insert_mode(&mut self) {
 		self.mode = EditorMode::Normal;
 		self.visual_anchor = None;
+		self.visual_block_anchor_display_col = None;
+		self.visual_block_cursor_display_col = None;
 		self.pending_block_insert = None;
 		self.status_bar.mode = StatusBarMode::Normal;
 		self.close_key_hints();
 		self.close_workspace_file_picker();
+		self.close_notification_center();
 		self.clamp_cursor_to_navigable_col();
 	}
 
@@ -90,6 +88,7 @@ impl RimState {
 		self.status_bar.mode = StatusBarMode::Command;
 		self.close_key_hints();
 		self.close_workspace_file_picker();
+		self.close_notification_center();
 		self.refresh_command_palette();
 	}
 
@@ -101,6 +100,7 @@ impl RimState {
 		self.close_key_hints();
 		self.close_command_palette();
 		self.close_workspace_file_picker();
+		self.close_notification_center();
 	}
 
 	pub fn enter_visual_mode(&mut self) {
@@ -108,18 +108,24 @@ impl RimState {
 		if self.visual_anchor.is_none() {
 			self.visual_anchor = Some(self.active_cursor());
 		}
+		self.visual_block_anchor_display_col = None;
+		self.visual_block_cursor_display_col = None;
 		self.status_bar.mode = StatusBarMode::Visual;
 		self.close_key_hints();
 		self.close_workspace_file_picker();
+		self.close_notification_center();
 	}
 
 	pub fn enter_visual_line_mode(&mut self) {
 		let anchor_row = self.visual_anchor.map(|cursor| cursor.row).unwrap_or_else(|| self.active_cursor().row);
 		self.mode = EditorMode::VisualLine;
 		self.visual_anchor = Some(CursorState { row: anchor_row, col: 1 });
+		self.visual_block_anchor_display_col = None;
+		self.visual_block_cursor_display_col = None;
 		self.status_bar.mode = StatusBarMode::VisualLine;
 		self.close_key_hints();
 		self.close_workspace_file_picker();
+		self.close_notification_center();
 	}
 
 	pub fn enter_visual_block_mode(&mut self) {
@@ -127,17 +133,24 @@ impl RimState {
 		if self.visual_anchor.is_none() {
 			self.visual_anchor = Some(self.active_cursor());
 		}
+		let display_col = self.active_cursor_display_col();
+		self.visual_block_anchor_display_col = Some(display_col);
+		self.visual_block_cursor_display_col = Some(display_col);
 		self.status_bar.mode = StatusBarMode::VisualBlock;
 		self.close_key_hints();
 		self.close_workspace_file_picker();
+		self.close_notification_center();
 	}
 
 	pub fn exit_visual_mode(&mut self) {
 		self.mode = EditorMode::Normal;
 		self.visual_anchor = None;
+		self.visual_block_anchor_display_col = None;
+		self.visual_block_cursor_display_col = None;
 		self.status_bar.mode = StatusBarMode::Normal;
 		self.close_key_hints();
 		self.close_workspace_file_picker();
+		self.close_notification_center();
 	}
 
 	pub fn push_command_char(&mut self, ch: char) {
@@ -175,9 +188,7 @@ impl RimState {
 			Some(PendingInsertUndoGroup { buffer_id, before_cursor: self.active_cursor(), edits: Vec::new() });
 	}
 
-	pub fn cancel_insert_history_group(&mut self) {
-		self.pending_insert_group = None;
-	}
+	pub fn cancel_insert_history_group(&mut self) { self.pending_insert_group = None; }
 
 	pub fn commit_insert_history_group(&mut self) {
 		let Some(group) = self.pending_insert_group.take() else {
@@ -187,9 +198,10 @@ impl RimState {
 			return;
 		}
 		let after_cursor = self.cursor_for_buffer(group.buffer_id).unwrap_or(group.before_cursor);
-		self.push_buffer_history_entry(
-			group.buffer_id,
-			BufferHistoryEntry { edits: group.edits, before_cursor: group.before_cursor, after_cursor },
-		);
+		self.push_buffer_history_entry(group.buffer_id, BufferHistoryEntry {
+			edits: group.edits,
+			before_cursor: group.before_cursor,
+			after_cursor,
+		});
 	}
 }

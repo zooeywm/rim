@@ -58,12 +58,7 @@ pub trait StorageIo {
 	}
 	fn enqueue_load(&self, buffer_id: BufferId, path: PathBuf) -> Result<(), StorageIoError>;
 	fn enqueue_list_workspace_files(&self, _workspace_root: PathBuf) -> Result<(), StorageIoError> { Ok(()) }
-	fn enqueue_load_workspace_file_preview(
-		&self,
-		_path: PathBuf,
-	) -> Result<(), StorageIoError> {
-		Ok(())
-	}
+	fn enqueue_load_workspace_file_preview(&self, _path: PathBuf) -> Result<(), StorageIoError> { Ok(()) }
 	fn enqueue_save(&self, buffer_id: BufferId, path: PathBuf, text: String) -> Result<(), StorageIoError>;
 	fn enqueue_external_load(&self, buffer_id: BufferId, path: PathBuf) -> Result<(), StorageIoError>;
 	fn enqueue_open(&self, buffer_id: BufferId, source_path: PathBuf) -> Result<(), StorageIoError>;

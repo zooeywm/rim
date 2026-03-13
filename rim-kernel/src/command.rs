@@ -36,6 +36,7 @@ pub enum BuiltinCommandCategory {
 	CommandPalette,
 	Picker,
 	Overlay,
+	Notification,
 	Insert,
 	Visual,
 }
@@ -55,6 +56,7 @@ impl BuiltinCommandCategory {
 			Self::CommandPalette => "command_palette",
 			Self::Picker => "picker",
 			Self::Overlay => "overlay",
+			Self::Notification => "notification",
 			Self::Insert => "insert",
 			Self::Visual => "visual",
 		}
@@ -232,6 +234,16 @@ pub enum OverlayCommand {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandGroup)]
+pub enum NotificationCommand {
+	/// Select previous notification item
+	Prev,
+	/// Select next notification item
+	Next,
+	/// Delete selected notification item
+	Delete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandGroup)]
 pub enum InsertCommand {
 	/// Insert newline
 	Newline,
@@ -309,6 +321,8 @@ pub enum CommandCommand {
 	Submit,
 	/// Delete previous command character
 	Backspace,
+	/// Open notification center
+	Notifications,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandRoot)]
@@ -326,6 +340,7 @@ pub enum BuiltinCommand {
 	CommandPalette(CommandPaletteCommand),
 	Picker(PickerCommand),
 	Overlay(OverlayCommand),
+	Notification(NotificationCommand),
 	Insert(InsertCommand),
 	Visual(VisualCommand),
 }
@@ -674,15 +689,16 @@ struct CommandAlias {
 
 #[derive(Debug, Clone, Default)]
 pub struct CommandRegistry {
-	commands:                         HashMap<CommandId, CommandSpec>,
-	normal_bindings:                  Vec<ScopedKeyBinding>,
-	visual_bindings:                  Vec<ScopedKeyBinding>,
-	command_mode_bindings:            Vec<ScopedKeyBinding>,
-	insert_mode_bindings:             Vec<ScopedKeyBinding>,
-	overlay_whichkey_bindings:        Vec<ScopedKeyBinding>,
-	overlay_command_palette_bindings: Vec<ScopedKeyBinding>,
-	overlay_picker_bindings:          Vec<ScopedKeyBinding>,
-	command_aliases:                  Vec<CommandAlias>,
+	commands:                             HashMap<CommandId, CommandSpec>,
+	normal_bindings:                      Vec<ScopedKeyBinding>,
+	visual_bindings:                      Vec<ScopedKeyBinding>,
+	command_mode_bindings:                Vec<ScopedKeyBinding>,
+	insert_mode_bindings:                 Vec<ScopedKeyBinding>,
+	overlay_whichkey_bindings:            Vec<ScopedKeyBinding>,
+	overlay_command_palette_bindings:     Vec<ScopedKeyBinding>,
+	overlay_picker_bindings:              Vec<ScopedKeyBinding>,
+	overlay_notification_center_bindings: Vec<ScopedKeyBinding>,
+	command_aliases:                      Vec<CommandAlias>,
 }
 
 impl CommandRegistry {
@@ -693,7 +709,7 @@ impl CommandRegistry {
 		registry
 	}
 
-	pub fn apply_config(&mut self, config: &CommandConfigFile) -> Vec<String> {
+	pub fn apply_config(&mut self, config: &CommandConfigFile) -> Vec<CommandConfigError> {
 		let mut errors = Vec::new();
 		self.apply_scope_keymap(KeymapScope::ModeNormal, "mode.normal", &config.mode.normal.keymap, &mut errors);
 		self.apply_scope_keymap(KeymapScope::ModeVisual, "mode.visual", &config.mode.visual.keymap, &mut errors);
@@ -722,15 +738,24 @@ impl CommandRegistry {
 			&config.overlay.picker.keymap,
 			&mut errors,
 		);
+		self.apply_scope_keymap(
+			KeymapScope::OverlayNotificationCenter,
+			"overlay.notification_center",
+			&config.overlay.notification_center.keymap,
+			&mut errors,
+		);
 
 		if !config.command.commands.is_empty() {
 			self.command_aliases.clear();
 		}
-		for alias in &config.command.commands {
+		for (alias_index, alias) in config.command.commands.iter().enumerate() {
 			let Some(resolved) = self.resolve_or_register_run_directive(&alias.run) else {
 				let raw_run = alias.run.render();
 				let error = format!("invalid run directive: {}", raw_run);
-				errors.push(format!("unknown run directive in command alias: {}", raw_run));
+				errors.push(CommandConfigError::CommandAlias {
+					alias_index,
+					reason: format!("unknown run directive: {}", raw_run),
+				});
 				self.command_aliases.push(CommandAlias {
 					name:                alias.name.clone(),
 					resolved_command_id: None,
@@ -757,39 +782,94 @@ impl CommandRegistry {
 		scope: KeymapScope,
 		scope_label: &str,
 		configured_bindings: &[KeymapBindingConfig],
-		errors: &mut Vec<String>,
+		errors: &mut Vec<CommandConfigError>,
 	) {
 		let mut overridden_commands = Vec::new();
-		for binding in configured_bindings {
+		for (binding_index, binding) in configured_bindings.iter().enumerate() {
 			let key_sets = match binding.on.parse_bindings() {
 				Ok(key_sets) => key_sets,
 				Err(err) => {
-					errors.push(format!(
-						"invalid {} key binding '{}': {}",
-						scope_label,
-						binding.on.display_for_error(),
-						err
-					));
+					errors.push(CommandConfigError::Keymap {
+						scope: scope_label.to_string(),
+						binding_index,
+						reason: format!("invalid key binding '{}': {}", binding.on.display_for_error(), err),
+					});
 					continue;
 				}
 			};
 			let Some(resolved) = self.resolve_or_register_run_directive(&binding.run) else {
-				errors.push(format!("unknown run directive in {}: {}", scope_label, binding.run.render()));
+				errors.push(CommandConfigError::Keymap {
+					scope: scope_label.to_string(),
+					binding_index,
+					reason: format!("unknown run directive: {}", binding.run.render()),
+				});
 				continue;
 			};
 			let bindings = self.bindings_mut(scope);
-			if !overridden_commands.iter().any(|command_id| command_id == &resolved.spec.id) {
-				bindings.retain(|candidate| candidate.command_id != resolved.spec.id);
-				overridden_commands.push(resolved.spec.id.clone());
-			}
+			let should_override = !overridden_commands.iter().any(|command_id| command_id == &resolved.spec.id);
+			let mut staged = if should_override {
+				bindings
+					.iter()
+					.filter(|candidate| candidate.command_id != resolved.spec.id)
+					.cloned()
+					.collect::<Vec<_>>()
+			} else {
+				bindings.clone()
+			};
+			let mut conflicted = false;
 			for keys in key_sets {
-				bindings.retain(|candidate| candidate.keys != keys);
-				bindings.push(ScopedKeyBinding {
+				if let Some(existing) = staged.iter_mut().find(|candidate| candidate.keys == keys) {
+					if existing.command_id != resolved.spec.id {
+						errors.push(CommandConfigError::Keymap {
+							scope: scope_label.to_string(),
+							binding_index,
+							reason: format!(
+								"conflicting key binding '{}' already mapped to '{}'",
+								render_normal_sequence(&keys),
+								format!("{:?}", existing.command_id)
+							),
+						});
+						conflicted = true;
+						break;
+					}
+					existing.desc = binding.desc.clone();
+					continue;
+				}
+				let mut has_prefix_conflict = false;
+				for candidate in staged.iter() {
+					if is_prefix_sequence(candidate.keys.as_slice(), &keys)
+						|| is_prefix_sequence(&keys, candidate.keys.as_slice())
+					{
+						errors.push(CommandConfigError::Keymap {
+							scope: scope_label.to_string(),
+							binding_index,
+							reason: format!(
+								"prefix conflict between '{}' and existing '{}'",
+								render_normal_sequence(&keys),
+								render_normal_sequence(candidate.keys.as_slice())
+							),
+						});
+						has_prefix_conflict = true;
+						break;
+					}
+				}
+				if has_prefix_conflict {
+					conflicted = true;
+					break;
+				}
+				staged.push(ScopedKeyBinding {
 					keys,
 					command_id: resolved.spec.id.clone(),
 					desc: binding.desc.clone(),
 				});
 			}
+			if conflicted {
+				continue;
+			}
+			if should_override {
+				overridden_commands.push(resolved.spec.id.clone());
+			}
+			*bindings = staged;
 		}
 	}
 
@@ -815,6 +895,16 @@ impl CommandRegistry {
 
 	pub fn key_hints(&self, scope: KeymapScope, prefix: &[NormalSequenceKey]) -> Vec<FloatingWindowLine> {
 		collect_key_hints(&self.commands, self.bindings(scope), prefix)
+	}
+
+	pub fn binding_sequences_for_builtin(&self, scope: KeymapScope, command: BuiltinCommand) -> Vec<String> {
+		let command_id = CommandId::Builtin(command);
+		self
+			.bindings(scope)
+			.iter()
+			.filter(|binding| binding.command_id == command_id)
+			.map(|binding| render_normal_sequence(binding.keys.as_slice()))
+			.collect()
 	}
 
 	pub fn resolve_command_input(&self, input: &str) -> Option<ResolvedCommand> {
@@ -1012,6 +1102,7 @@ impl CommandRegistry {
 			KeymapScope::OverlayWhichKey => self.overlay_whichkey_bindings.as_slice(),
 			KeymapScope::OverlayCommandPalette => self.overlay_command_palette_bindings.as_slice(),
 			KeymapScope::OverlayPicker => self.overlay_picker_bindings.as_slice(),
+			KeymapScope::OverlayNotificationCenter => self.overlay_notification_center_bindings.as_slice(),
 		}
 	}
 
@@ -1024,6 +1115,7 @@ impl CommandRegistry {
 			KeymapScope::OverlayWhichKey => &mut self.overlay_whichkey_bindings,
 			KeymapScope::OverlayCommandPalette => &mut self.overlay_command_palette_bindings,
 			KeymapScope::OverlayPicker => &mut self.overlay_picker_bindings,
+			KeymapScope::OverlayNotificationCenter => &mut self.overlay_notification_center_bindings,
 		}
 	}
 
@@ -1037,6 +1129,8 @@ impl CommandRegistry {
 		let overlay_command_palette =
 			export_keymap_bindings(&self.commands, self.bindings(KeymapScope::OverlayCommandPalette));
 		let overlay_picker = export_keymap_bindings(&self.commands, self.bindings(KeymapScope::OverlayPicker));
+		let overlay_notification_center =
+			export_keymap_bindings(&self.commands, self.bindings(KeymapScope::OverlayNotificationCenter));
 
 		let mut command = Vec::with_capacity(self.command_aliases.len());
 		for alias in &self.command_aliases {
@@ -1061,9 +1155,10 @@ impl CommandRegistry {
 				insert:  CommandKeymapSection { keymap: insert_mode },
 			},
 			overlay: OverlayKeymapSections {
-				whichkey:        CommandKeymapSection { keymap: overlay_whichkey },
-				command_palette: CommandKeymapSection { keymap: overlay_command_palette },
-				picker:          CommandKeymapSection { keymap: overlay_picker },
+				whichkey:            CommandKeymapSection { keymap: overlay_whichkey },
+				command_palette:     CommandKeymapSection { keymap: overlay_command_palette },
+				picker:              CommandKeymapSection { keymap: overlay_picker },
+				notification_center: CommandKeymapSection { keymap: overlay_notification_center },
 			},
 			command: CommandAliasSection { commands: command },
 		}
@@ -1110,6 +1205,7 @@ impl CommandRegistry {
 		self.bind_default_normal("<C-d>", BuiltinCommand::View(ViewCommand::ScrollHalfPageDown));
 		self.bind_default_normal("<C-u>", BuiltinCommand::View(ViewCommand::ScrollHalfPageUp));
 		self.bind_default_normal("<leader>vw", BuiltinCommand::View(ViewCommand::ToggleWordWrap));
+		self.bind_default_normal("<leader>n", BuiltinCommand::Command(CommandCommand::Notifications));
 		self.bind_default_normal("<C-r>", BuiltinCommand::Edit(EditCommand::Redo));
 		self.bind_default_normal("<F1>", BuiltinCommand::Help(HelpCommand::Keymap));
 		self.bind_default_normal("<leader>wv", BuiltinCommand::Window(WindowCommand::SplitVertical));
@@ -1212,6 +1308,24 @@ impl CommandRegistry {
 		self.bind_default_overlay_picker("<C-e>", BuiltinCommand::Picker(PickerCommand::PreviewScrollDown));
 		self.bind_default_overlay_picker("<C-y>", BuiltinCommand::Picker(PickerCommand::PreviewScrollUp));
 		self.bind_default_overlay_picker("<C-w>", BuiltinCommand::Picker(PickerCommand::TogglePreviewWordWrap));
+		self.bind_default_overlay_notification_center("<F1>", BuiltinCommand::Help(HelpCommand::Keymap));
+		self.bind_default_overlay_notification_center("<Esc>", BuiltinCommand::Overlay(OverlayCommand::Close));
+		self.bind_default_overlay_notification_center(
+			"<Up>",
+			BuiltinCommand::Notification(NotificationCommand::Prev),
+		);
+		self.bind_default_overlay_notification_center(
+			"<Down>",
+			BuiltinCommand::Notification(NotificationCommand::Next),
+		);
+		self
+			.bind_default_overlay_notification_center("k", BuiltinCommand::Notification(NotificationCommand::Prev));
+		self
+			.bind_default_overlay_notification_center("j", BuiltinCommand::Notification(NotificationCommand::Next));
+		self.bind_default_overlay_notification_center(
+			"d",
+			BuiltinCommand::Notification(NotificationCommand::Delete),
+		);
 		self.bind_default_command("q", BuiltinCommand::Command(CommandCommand::Quit));
 		self.bind_default_command("quit", BuiltinCommand::Command(CommandCommand::Quit));
 		self.bind_default_command("q!", BuiltinCommand::Command(CommandCommand::QuitForce));
@@ -1230,6 +1344,8 @@ impl CommandRegistry {
 		self.bind_default_command("files", BuiltinCommand::Picker(PickerCommand::Files));
 		self.bind_default_command("find", BuiltinCommand::Picker(PickerCommand::Files));
 		self.bind_default_command("yazi", BuiltinCommand::Picker(PickerCommand::Yazi));
+		self.bind_default_command("notifications", BuiltinCommand::Command(CommandCommand::Notifications));
+		self.bind_default_command("noti", BuiltinCommand::Command(CommandCommand::Notifications));
 	}
 
 	fn bind_default_normal(&mut self, on: &str, command: BuiltinCommand) {
@@ -1258,6 +1374,10 @@ impl CommandRegistry {
 
 	fn bind_default_overlay_picker(&mut self, on: &str, command: BuiltinCommand) {
 		self.bind_default(KeymapScope::OverlayPicker, on, command);
+	}
+
+	fn bind_default_overlay_notification_center(&mut self, on: &str, command: BuiltinCommand) {
+		self.bind_default(KeymapScope::OverlayNotificationCenter, on, command);
 	}
 
 	fn bind_default(&mut self, scope: KeymapScope, on: &str, command: BuiltinCommand) {
@@ -1289,6 +1409,7 @@ fn frizbee_match(query: &str, haystack: &str) -> Option<(u16, Vec<usize>)> {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct CommandConfigFile {
 	#[serde(default)]
 	pub mode:    ModeKeymapSections,
@@ -1302,13 +1423,34 @@ impl CommandConfigFile {
 	pub fn with_defaults() -> Self { CommandRegistry::with_defaults().export_config() }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandConfigError {
+	Keymap { scope: String, binding_index: usize, reason: String },
+	CommandAlias { alias_index: usize, reason: String },
+}
+
+impl std::fmt::Display for CommandConfigError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::Keymap { scope, binding_index, reason } => {
+				write!(f, "{}.keymap[{}]: {}", scope, binding_index, reason)
+			}
+			Self::CommandAlias { alias_index, reason } => {
+				write!(f, "command.commands[{}]: {}", alias_index, reason)
+			}
+		}
+	}
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct CommandKeymapSection {
 	#[serde(default)]
 	pub keymap: Vec<KeymapBindingConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ModeKeymapSections {
 	#[serde(default, alias = "mgr")]
 	pub normal:  CommandKeymapSection,
@@ -1321,22 +1463,27 @@ pub struct ModeKeymapSections {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct OverlayKeymapSections {
 	#[serde(default)]
-	pub whichkey:        CommandKeymapSection,
+	pub whichkey:            CommandKeymapSection,
 	#[serde(default)]
-	pub command_palette: CommandKeymapSection,
+	pub command_palette:     CommandKeymapSection,
 	#[serde(default)]
-	pub picker:          CommandKeymapSection,
+	pub picker:              CommandKeymapSection,
+	#[serde(default)]
+	pub notification_center: CommandKeymapSection,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct CommandAliasSection {
 	#[serde(default)]
 	pub commands: Vec<CommandAliasConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct KeymapBindingConfig {
 	pub on:   KeyBindingOn,
 	pub run:  RunDirective,
@@ -1386,6 +1533,7 @@ impl<'de> Deserialize<'de> for KeyBindingOn {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CommandAliasConfig {
 	pub name: String,
 	pub run:  RunDirective,
@@ -1615,6 +1763,10 @@ fn render_normal_sequence(keys: &[NormalSequenceKey]) -> String {
 		.join("")
 }
 
+fn is_prefix_sequence(prefix: &[NormalSequenceKey], sequence: &[NormalSequenceKey]) -> bool {
+	prefix.len() < sequence.len() && sequence.starts_with(prefix)
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -1627,7 +1779,7 @@ mod tests {
 	}
 
 	#[test]
-	fn config_should_override_existing_normal_binding() {
+	fn config_should_reject_conflicting_normal_binding() {
 		let mut registry = CommandRegistry::with_defaults();
 		let config = CommandConfigFile {
 			mode: ModeKeymapSections {
@@ -1645,14 +1797,14 @@ mod tests {
 
 		let errors = registry.apply_config(&config);
 
-		assert!(errors.is_empty());
+		assert_eq!(errors.len(), 1);
 		assert_eq!(
 			registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('H')]),
-			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::Buffer(BufferCommand::Next)))
+			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::Buffer(BufferCommand::Prev)))
 		);
 		assert_eq!(
 			registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('L')]),
-			BindingMatch::NoMatch
+			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::Buffer(BufferCommand::Next)))
 		);
 		assert_eq!(
 			registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('j')]),
@@ -1706,7 +1858,7 @@ mod tests {
 	}
 
 	#[test]
-	fn manager_keymap_should_accept_array_form() {
+	fn manager_keymap_should_report_conflict_for_array_form() {
 		let mut registry = CommandRegistry::with_defaults();
 		let config = CommandConfigFile {
 			mode: ModeKeymapSections {
@@ -1724,13 +1876,13 @@ mod tests {
 
 		let errors = registry.apply_config(&config);
 
-		assert!(errors.is_empty());
+		assert_eq!(errors.len(), 1);
 		assert_eq!(
 			registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[
 				NormalSequenceKey::Char('g'),
 				NormalSequenceKey::Char('g')
 			]),
-			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::Cursor(CursorCommand::FileEnd)))
+			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::Cursor(CursorCommand::FileStart)))
 		);
 		assert_eq!(
 			registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('G')]),
@@ -1841,6 +1993,10 @@ mod tests {
 			matches!(binding.on.entries(), [token] if token == "<F1>")
 				&& binding.run == RunDirective::Builtin(BuiltinCommand::Help(HelpCommand::Keymap))
 		}));
+		assert!(config.overlay.notification_center.keymap.iter().any(|binding| {
+			matches!(binding.on.entries(), [token] if token == "<F1>")
+				&& binding.run == RunDirective::Builtin(BuiltinCommand::Help(HelpCommand::Keymap))
+		}));
 	}
 
 	#[test]
@@ -1932,5 +2088,57 @@ mod tests {
 		let item = matches.iter().find(|item| item.name == "bad").expect("invalid alias should be visible");
 		assert!(item.is_error);
 		assert_eq!(item.description, "invalid command");
+	}
+
+	#[test]
+	fn config_should_report_prefix_conflict_for_keymap_binding() {
+		let mut registry = CommandRegistry::with_defaults();
+		let config = CommandConfigFile {
+			mode: ModeKeymapSections {
+				normal: CommandKeymapSection {
+					keymap: vec![KeymapBindingConfig {
+						on:   KeyBindingOn::single("g"),
+						run:  "core.cursor.down".into(),
+						desc: Some("conflict".to_string()),
+					}],
+				},
+				..ModeKeymapSections::default()
+			},
+			..CommandConfigFile::default()
+		};
+
+		let errors = registry.apply_config(&config);
+
+		assert_eq!(errors.len(), 1);
+		assert!(matches!(
+			&errors[0],
+			CommandConfigError::Keymap { reason, .. } if reason.contains("prefix conflict")
+		));
+	}
+
+	#[test]
+	fn config_should_report_exact_key_conflict_for_different_command() {
+		let mut registry = CommandRegistry::with_defaults();
+		let config = CommandConfigFile {
+			mode: ModeKeymapSections {
+				normal: CommandKeymapSection {
+					keymap: vec![KeymapBindingConfig {
+						on:   KeyBindingOn::single("p"),
+						run:  "core.cursor.down".into(),
+						desc: Some("conflict".to_string()),
+					}],
+				},
+				..ModeKeymapSections::default()
+			},
+			..CommandConfigFile::default()
+		};
+
+		let errors = registry.apply_config(&config);
+
+		assert_eq!(errors.len(), 1);
+		assert!(matches!(
+			&errors[0],
+			CommandConfigError::Keymap { reason, .. } if reason.contains("conflicting key binding")
+		));
 	}
 }

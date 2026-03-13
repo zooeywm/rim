@@ -52,10 +52,7 @@ pub fn preview_max_scroll_with_mode(lines: &[String], width: usize, word_wrap: b
 
 pub fn preview_rows(lines: &[String], width: usize, word_wrap: bool) -> Vec<String> {
 	if word_wrap {
-		return lines
-			.iter()
-			.flat_map(|line| wrap_preview_line(line.as_str(), width))
-			.collect::<Vec<_>>();
+		return lines.iter().flat_map(|line| wrap_preview_line(line.as_str(), width)).collect::<Vec<_>>();
 	}
 	lines
 		.iter()

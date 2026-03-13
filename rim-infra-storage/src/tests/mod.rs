@@ -1,13 +1,13 @@
 use std::{collections::HashMap, future::Future, path::{Path, PathBuf}, time::{Instant, SystemTime, UNIX_EPOCH}};
 
 use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
-use rim_kernel::state::{BufferEditSnapshot, BufferHistoryEntry, CursorState};
+use rim_kernel::{action::{SwapConflictCheckResult, SwapConflictInfo}, state::{BufferEditSnapshot, BufferHistoryEntry, CursorState}};
 use ropey::Rope;
 
 use super::*;
 #[cfg(target_os = "windows")]
 use crate::path_codec::source_path_from_swap_storage_path;
-use crate::{path_codec::{encode_source_path_for_file_name, normalize_source_path_text, swap_lease_path_for_source, swap_path_for_source, undo_log_path_for_source, undo_meta_path_for_source}, swap_session::{BufferedSwapOp, SwapSession, append_swap_ops, parse_swap_file, touch_swap_lease_file, write_swap_snapshot}, undo_history::{load_undo_history, save_undo_history}};
+use crate::{path_codec::{encode_source_path_for_file_name, normalize_source_path_text, swap_path_for_source, undo_log_path_for_source, undo_meta_path_for_source}, swap_session::{BufferedSwapOp, SwapSession, append_swap_ops, parse_swap_file, write_swap_snapshot}, undo_history::{load_undo_history, save_undo_history}};
 
 mod path_codec;
 mod session;

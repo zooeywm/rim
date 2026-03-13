@@ -1,7 +1,7 @@
 use rim_paths::user_log_dir;
 use thiserror::Error;
 use time::macros::format_description;
-use tracing_subscriber::fmt::time::UtcTime;
+use tracing_subscriber::fmt::time::LocalTime;
 
 #[derive(Debug, Error)]
 pub enum LoggingError {
@@ -22,7 +22,7 @@ pub fn init_logging() -> Result<(), LoggingError> {
 	std::fs::create_dir_all(&log_dir).map_err(|source| LoggingError::CreateLogDir { source })?;
 
 	let timer =
-		UtcTime::new(format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"));
+		LocalTime::new(format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"));
 	let file_appender = tracing_appender::rolling::never(&log_dir, "rim.log");
 	tracing_subscriber::fmt()
 		.with_timer(timer)

@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, path::{Path, PathBuf}, thread};
+use std::{collections::{HashMap, HashSet, hash_map::DefaultHasher}, fs, hash::{Hash, Hasher}, path::{Path, PathBuf}, thread, time::{Duration, Instant, SystemTime}};
 
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher, event::{EventKind, ModifyKind}};
 use rim_kernel::{action::{AppAction, FileAction, SystemAction}, ports::{FileWatcher, FileWatcherError}, state::BufferId};
@@ -44,6 +44,8 @@ where Deps: AsRef<FileWatcherState>
 }
 
 impl FileWatcherState {
+	const EVENT_COALESCE_WINDOW: Duration = Duration::from_millis(10);
+
 	pub fn new(event_tx: flume::Sender<AppAction>) -> Self {
 		let (worker_tx, worker_rx) = flume::unbounded();
 		Self { worker_tx, worker_rx, event_tx }
@@ -93,8 +95,33 @@ impl FileWatcherState {
 		let mut config_paths: HashSet<PathBuf> = HashSet::new();
 		let mut workspace_roots: HashSet<PathBuf> = HashSet::new();
 		let mut watch_target_ref_counts: HashMap<PathBuf, usize> = HashMap::new();
+		let mut semantic_tracker = SemanticTracker::default();
+		let mut pending_changes = PendingChanges::default();
 
-		while let Ok(event) = worker_rx.recv() {
+		loop {
+			if pending_changes.is_due(Instant::now())
+				&& !Self::flush_pending_changes(
+					&mut pending_changes,
+					&mut semantic_tracker,
+					&file_to_buffer,
+					&config_paths,
+					&event_tx,
+				) {
+				return;
+			}
+
+			let event = match pending_changes.next_timeout(Instant::now()) {
+				Some(timeout) => match worker_rx.recv_timeout(timeout) {
+					Ok(event) => event,
+					Err(flume::RecvTimeoutError::Timeout) => continue,
+					Err(flume::RecvTimeoutError::Disconnected) => return,
+				},
+				None => match worker_rx.recv() {
+					Ok(event) => event,
+					Err(_) => return,
+				},
+			};
+
 			match event {
 				WatchWorkerEvent::Command(request) => {
 					Self::apply_watch_request(
@@ -106,82 +133,122 @@ impl FileWatcherState {
 						&mut workspace_roots,
 						&mut watch_target_ref_counts,
 					);
+					semantic_tracker.sync_tracked_paths(file_to_buffer.keys(), config_paths.iter());
 				}
 				WatchWorkerEvent::Notify(result) => {
-					if !Self::handle_notify_event(
-						result,
-						&file_to_buffer,
-						&buffer_to_file,
-						&config_paths,
-						&workspace_roots,
-						&event_tx,
-					) {
+					let outcome = Self::handle_notify_event(result, &file_to_buffer, &config_paths, &workspace_roots);
+					if !outcome.should_continue {
 						return;
+					}
+					if outcome.has_changes() {
+						pending_changes.merge(outcome, Instant::now(), Self::EVENT_COALESCE_WINDOW);
 					}
 				}
 			}
 		}
 	}
 
-	fn handle_notify_event(
-		result: notify::Result<notify::Event>,
+	fn flush_pending_changes(
+		pending_changes: &mut PendingChanges,
+		semantic_tracker: &mut SemanticTracker,
 		file_to_buffer: &HashMap<PathBuf, BufferId>,
-		buffer_to_file: &HashMap<BufferId, PathBuf>,
 		config_paths: &HashSet<PathBuf>,
-		workspace_roots: &HashSet<PathBuf>,
 		event_tx: &flume::Sender<AppAction>,
 	) -> bool {
-		let event = match result {
-			Ok(event) => event,
-			Err(err) => {
-				error!("file watcher event error: {}", err);
-				return true;
-			}
-		};
-		if matches!(event.kind, EventKind::Access(_)) {
+		let due = pending_changes.take_due();
+		if due.is_empty() {
 			return true;
 		}
-		let workspace_listing_changed = matches!(
-			event.kind,
-			EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_))
-		);
 
-		let mut affected_buffers = HashSet::new();
-		let mut config_changed = false;
-		let mut changed_workspace_roots = HashSet::new();
-		for path in event.paths {
-			let normalized_path = Self::normalize_watch_path(&path);
-			if let Some(buffer_id) = file_to_buffer.get(&normalized_path) {
-				affected_buffers.insert(*buffer_id);
+		let changed_files = semantic_tracker.collect_changed_files(&due.file_paths);
+		let mut should_reload_config = false;
+		for changed_path in changed_files {
+			if config_paths.contains(&changed_path) {
+				should_reload_config = true;
 			}
-			if config_paths.contains(&normalized_path) {
-				config_changed = true;
-			}
-			for workspace_root in workspace_roots {
-				if workspace_listing_changed && normalized_path.starts_with(workspace_root) {
-					changed_workspace_roots.insert(workspace_root.clone());
-				}
-			}
-		}
-
-		for buffer_id in affected_buffers {
-			let Some(path) = buffer_to_file.get(&buffer_id).cloned() else {
-				continue;
-			};
-			if event_tx.send(AppAction::File(FileAction::ExternalChangeDetected { buffer_id, path })).is_err() {
+			if let Some(buffer_id) = file_to_buffer.get(&changed_path).copied()
+				&& event_tx
+					.send(AppAction::File(FileAction::ExternalChangeDetected { buffer_id, path: changed_path.clone() }))
+					.is_err()
+			{
 				return false;
 			}
 		}
-		if config_changed && event_tx.send(AppAction::System(SystemAction::ReloadConfig)).is_err() {
+
+		if should_reload_config && event_tx.send(AppAction::System(SystemAction::ReloadConfig)).is_err() {
 			return false;
 		}
-		for workspace_root in changed_workspace_roots {
+
+		for workspace_root in due.workspace_roots {
 			if event_tx.send(AppAction::File(FileAction::WorkspaceFilesChanged { workspace_root })).is_err() {
 				return false;
 			}
 		}
 
 		true
+	}
+
+	fn handle_notify_event(
+		result: notify::Result<notify::Event>,
+		file_to_buffer: &HashMap<PathBuf, BufferId>,
+		config_paths: &HashSet<PathBuf>,
+		workspace_roots: &HashSet<PathBuf>,
+	) -> NotifyEventOutcome {
+		let event = match result {
+			Ok(event) => event,
+			Err(err) => {
+				error!("file watcher event error: {}", err);
+				return NotifyEventOutcome::cont();
+			}
+		};
+		if matches!(event.kind, EventKind::Access(_)) {
+			return NotifyEventOutcome::cont();
+		}
+
+		let workspace_listing_changed = matches!(
+			event.kind,
+			EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_))
+		);
+		let directory_level_change = matches!(
+			event.kind,
+			EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_))
+		);
+
+		let mut dirty_files = HashSet::new();
+		let mut dirty_workspace_roots = HashSet::new();
+		let mut touched_parent_dirs = HashSet::new();
+		for path in event.paths {
+			let normalized_path = Self::normalize_event_path(&path);
+			if file_to_buffer.contains_key(&normalized_path) || config_paths.contains(&normalized_path) {
+				dirty_files.insert(normalized_path.clone());
+			}
+			if directory_level_change && let Some(parent) = normalized_path.parent() {
+				touched_parent_dirs.insert(parent.to_path_buf());
+			}
+			if workspace_listing_changed {
+				for workspace_root in workspace_roots {
+					if normalized_path.starts_with(workspace_root) {
+						dirty_workspace_roots.insert(workspace_root.clone());
+					}
+				}
+			}
+		}
+		if directory_level_change {
+			for parent in touched_parent_dirs {
+				for tracked_path in file_to_buffer.keys() {
+					if tracked_path.parent() == Some(parent.as_path()) {
+						dirty_files.insert(tracked_path.clone());
+					}
+				}
+				for tracked_path in config_paths {
+					if tracked_path.parent() == Some(parent.as_path()) {
+						dirty_files.insert(tracked_path.clone());
+					}
+				}
+			}
+		}
+
+		NotifyEventOutcome::with_changes(dirty_files, dirty_workspace_roots)
 	}
 
 	fn apply_watch_request(
@@ -318,6 +385,15 @@ impl FileWatcherState {
 		std::fs::canonicalize(&absolute).unwrap_or(absolute)
 	}
 
+	fn normalize_event_path(path: &Path) -> PathBuf {
+		let absolute = if path.is_absolute() {
+			path.to_path_buf()
+		} else {
+			std::env::current_dir().map(|cwd| cwd.join(path)).unwrap_or_else(|_| path.to_path_buf())
+		};
+		std::fs::canonicalize(&absolute).unwrap_or(absolute)
+	}
+
 	fn watch_target_for_file(path: &Path) -> PathBuf {
 		path
 			.parent()
@@ -341,16 +417,222 @@ enum WatchRequest {
 	WatchWorkspaceRoot { path: PathBuf },
 }
 
+#[derive(Debug, Default)]
+struct PendingChanges {
+	file_paths:      HashSet<PathBuf>,
+	workspace_roots: HashSet<PathBuf>,
+	deadline:        Option<Instant>,
+}
+
+impl PendingChanges {
+	fn is_due(&self, now: Instant) -> bool { self.deadline.is_some_and(|deadline| now >= deadline) }
+
+	fn next_timeout(&self, now: Instant) -> Option<Duration> {
+		self.deadline.map(|deadline| deadline.saturating_duration_since(now))
+	}
+
+	fn merge(&mut self, outcome: NotifyEventOutcome, now: Instant, window: Duration) {
+		self.file_paths.extend(outcome.dirty_files);
+		self.workspace_roots.extend(outcome.dirty_workspace_roots);
+		self.deadline = Some(now.checked_add(window).unwrap_or(now));
+	}
+
+	fn take_due(&mut self) -> DueChanges {
+		self.deadline = None;
+		DueChanges {
+			file_paths:      std::mem::take(&mut self.file_paths),
+			workspace_roots: std::mem::take(&mut self.workspace_roots),
+		}
+	}
+}
+
+#[derive(Debug, Default)]
+struct DueChanges {
+	file_paths:      HashSet<PathBuf>,
+	workspace_roots: HashSet<PathBuf>,
+}
+
+impl DueChanges {
+	fn is_empty(&self) -> bool { self.file_paths.is_empty() && self.workspace_roots.is_empty() }
+}
+
+#[derive(Debug, Clone)]
+struct NotifyEventOutcome {
+	should_continue:       bool,
+	dirty_files:           HashSet<PathBuf>,
+	dirty_workspace_roots: HashSet<PathBuf>,
+}
+
+impl NotifyEventOutcome {
+	fn cont() -> Self {
+		Self {
+			should_continue:       true,
+			dirty_files:           HashSet::new(),
+			dirty_workspace_roots: HashSet::new(),
+		}
+	}
+
+	fn with_changes(dirty_files: HashSet<PathBuf>, dirty_workspace_roots: HashSet<PathBuf>) -> Self {
+		Self { should_continue: true, dirty_files, dirty_workspace_roots }
+	}
+
+	fn has_changes(&self) -> bool { !self.dirty_files.is_empty() || !self.dirty_workspace_roots.is_empty() }
+}
+
+#[derive(Debug, Default)]
+struct SemanticTracker {
+	snapshots: HashMap<PathBuf, FileSnapshot>,
+}
+
+impl SemanticTracker {
+	fn sync_tracked_paths<'a, I1, I2>(&mut self, buffer_paths: I1, config_paths: I2)
+	where
+		I1: Iterator<Item = &'a PathBuf>,
+		I2: Iterator<Item = &'a PathBuf>,
+	{
+		let mut tracked = HashSet::new();
+		tracked.extend(buffer_paths.cloned());
+		tracked.extend(config_paths.cloned());
+
+		self.snapshots.retain(|path, _| tracked.contains(path));
+		for path in tracked {
+			self.snapshots.entry(path.clone()).or_insert_with(|| FileSnapshot::from_path(&path));
+		}
+	}
+
+	fn collect_changed_files(&mut self, candidate_paths: &HashSet<PathBuf>) -> Vec<PathBuf> {
+		let mut changed_paths = Vec::new();
+		for path in candidate_paths {
+			let next = FileSnapshot::from_path(path);
+			let prev = self.snapshots.get(path).cloned().unwrap_or_else(|| FileSnapshot::from_path(path));
+			if prev != next {
+				changed_paths.push(path.clone());
+			}
+			self.snapshots.insert(path.clone(), next);
+		}
+		changed_paths
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FileSnapshot {
+	Missing,
+	File { content_hash: u64 },
+	Other { len: u64, modified: Option<SystemTime> },
+}
+
+impl FileSnapshot {
+	fn from_path(path: &Path) -> Self {
+		let Ok(metadata) = fs::metadata(path) else {
+			return Self::Missing;
+		};
+		if metadata.is_file() {
+			let Ok(bytes) = fs::read(path) else {
+				return Self::Other { len: metadata.len(), modified: metadata.modified().ok() };
+			};
+			return Self::File { content_hash: hash_bytes(&bytes) };
+		}
+		Self::Other { len: metadata.len(), modified: metadata.modified().ok() }
+	}
+}
+
+fn hash_bytes(bytes: &[u8]) -> u64 {
+	let mut hasher = DefaultHasher::new();
+	bytes.hash(&mut hasher);
+	hasher.finish()
+}
+
 #[cfg(test)]
 mod tests {
-	use std::path::Path;
+	use std::{collections::{HashMap, HashSet}, fs, path::{Path, PathBuf}, time::Instant};
 
-	use super::FileWatcherState;
+	use rim_kernel::action::{AppAction, SystemAction};
+
+	use super::{FileWatcherState, PendingChanges, SemanticTracker};
 
 	#[test]
 	fn watch_target_for_file_should_use_parent_directory() {
 		let path = Path::new("/tmp/demo/sample.txt");
 		let target = FileWatcherState::watch_target_for_file(path);
 		assert_eq!(target, Path::new("/tmp/demo"));
+	}
+
+	#[test]
+	fn pending_changes_should_extend_deadline_on_burst_events() {
+		let mut pending = PendingChanges::default();
+		let start = Instant::now();
+		let first_deadline = start.checked_add(FileWatcherState::EVENT_COALESCE_WINDOW).unwrap_or(start);
+		pending.deadline = Some(first_deadline);
+
+		pending.merge(super::NotifyEventOutcome::cont(), start, FileWatcherState::EVENT_COALESCE_WINDOW);
+		assert!(pending.deadline.is_some());
+	}
+
+	#[test]
+	fn semantic_tracker_should_only_report_real_file_content_changes() {
+		let file_path = temp_test_file("watcher-semantic-tracker", "alpha");
+		let mut tracker = SemanticTracker::default();
+		tracker.sync_tracked_paths([&file_path].into_iter(), std::iter::empty());
+
+		let mut candidates = std::collections::HashSet::new();
+		candidates.insert(file_path.clone());
+
+		assert!(tracker.collect_changed_files(&candidates).is_empty());
+
+		fs::write(&file_path, "alpha").expect("rewrite same content");
+		assert!(tracker.collect_changed_files(&candidates).is_empty());
+
+		fs::write(&file_path, "beta").expect("write changed content");
+		assert_eq!(tracker.collect_changed_files(&candidates), vec![file_path.clone()]);
+
+		let _ = fs::remove_file(file_path);
+	}
+
+	#[test]
+	fn flush_pending_changes_should_emit_single_reload_for_burst_events() {
+		let config_path = temp_test_file("watcher-config-burst", "v1");
+		let mut semantic_tracker = SemanticTracker::default();
+		semantic_tracker.sync_tracked_paths(std::iter::empty(), [&config_path].into_iter());
+
+		fs::write(&config_path, "v2").expect("update config content");
+
+		let mut pending_changes = PendingChanges::default();
+		let burst = super::NotifyEventOutcome::with_changes(HashSet::from([config_path.clone()]), HashSet::new());
+		let now = Instant::now();
+		pending_changes.merge(burst.clone(), now, FileWatcherState::EVENT_COALESCE_WINDOW);
+		pending_changes.merge(
+			burst,
+			now.checked_add(FileWatcherState::EVENT_COALESCE_WINDOW).unwrap_or(now),
+			FileWatcherState::EVENT_COALESCE_WINDOW,
+		);
+
+		let file_to_buffer = HashMap::new();
+		let config_paths = HashSet::from([config_path.clone()]);
+		let (tx, rx) = flume::unbounded();
+
+		assert!(FileWatcherState::flush_pending_changes(
+			&mut pending_changes,
+			&mut semantic_tracker,
+			&file_to_buffer,
+			&config_paths,
+			&tx
+		));
+
+		let reload_count =
+			rx.try_iter().filter(|action| matches!(action, AppAction::System(SystemAction::ReloadConfig))).count();
+		assert_eq!(reload_count, 1);
+
+		let _ = fs::remove_file(config_path);
+	}
+
+	fn temp_test_file(prefix: &str, content: &str) -> PathBuf {
+		let nanos = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map(|duration| duration.as_nanos())
+			.unwrap_or(0);
+		let unique = format!("{}-{}-{}", prefix, std::process::id(), nanos);
+		let file_path = std::env::temp_dir().join(unique);
+		fs::write(&file_path, content).expect("create temp test file");
+		file_path
 	}
 }

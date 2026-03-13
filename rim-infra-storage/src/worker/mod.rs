@@ -313,11 +313,8 @@ async fn create_swap_session(
 	username: &str,
 	operation: &'static str,
 ) -> SwapSession {
-	let mut session = SwapSession::new(buffer_id, source_path, swap_dir, pid, username.to_string());
-	if let Err(err) = session.bind_lease().await {
-		error!("swap session {} lease bind failed: {:#}", operation, err);
-	}
-	session
+	let _ = operation;
+	SwapSession::new(buffer_id, source_path, swap_dir, pid, username.to_string())
 }
 
 async fn load_file(path: PathBuf) -> Result<String> {

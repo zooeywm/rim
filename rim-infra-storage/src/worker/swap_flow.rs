@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::Path, time::Instant};
 
-use rim_kernel::{action::{AppAction, FileAction, SwapConflictInfo}, state::BufferId};
+use rim_kernel::{action::{AppAction, FileAction}, state::BufferId};
 use tracing::error;
 
 use super::{FlushSchedule, StorageIoRequest, create_swap_session, get_or_create_swap_session, send_file_action};
@@ -33,12 +33,7 @@ pub(super) async fn handle_swap_request(
 			)
 			.await;
 			let result = match session.rebind_if_needed(source_path.as_path()).await {
-				Ok(()) => session.detect_conflict().await.map(|conflict| {
-					conflict.map(|(owner_pid, owner_username)| SwapConflictInfo {
-						pid:      owner_pid,
-						username: owner_username,
-					})
-				}),
+				Ok(()) => session.detect_conflict().await,
 				Err(err) => Err(err),
 			};
 			if !send_file_action(

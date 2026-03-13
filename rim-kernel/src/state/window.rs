@@ -1,13 +1,8 @@
 use ropey::Rope;
 use tracing::{error, trace};
 
-use super::{FocusDirection, RimState, SplitAxis, WindowId, WindowState};
-use crate::display_geometry::{
-	char_display_width as geom_char_display_width,
-	display_width_of_char_prefix as geom_display_width_of_char_prefix,
-	wrapped_row_index_for_cursor as geom_wrapped_row_index_for_cursor,
-	wrapped_total_rows_for_rope as geom_wrapped_total_rows_for_rope,
-};
+use super::{CursorState, FocusDirection, RimState, SplitAxis, WindowId, WindowState, rope_line_count, rope_line_len_chars};
+use crate::display_geometry::{char_display_width as geom_char_display_width, display_width_of_char_prefix_with_virtual as geom_display_width_of_char_prefix_with_virtual, wrapped_row_index_for_cursor as geom_wrapped_row_index_for_cursor, wrapped_total_rows_for_rope as geom_wrapped_total_rows_for_rope};
 
 impl RimState {
 	pub fn focus_window(&mut self, direction: FocusDirection) {
@@ -386,6 +381,23 @@ impl RimState {
 }
 
 impl RimState {
+	fn clamp_cursor_for_layout_mode(&self, text: &Rope, cursor: CursorState) -> CursorState {
+		let max_row = rope_line_count(text) as u16;
+		let row = cursor.row.min(max_row).max(1);
+		let row_index = row.saturating_sub(1) as usize;
+		let line_len = rope_line_len_chars(text, row_index) as u16;
+		let max_col = if self.is_visual_block_mode() || self.is_block_insert_mode() {
+			// Visual-block workflows need a virtual column that may extend past line end.
+			cursor.col.max(line_len.saturating_add(1)).max(1)
+		} else if self.is_insert_mode() {
+			line_len.saturating_add(1).max(1)
+		} else {
+			line_len.max(1)
+		};
+		let col = cursor.col.min(max_col).max(1);
+		CursorState { row, col }
+	}
+
 	fn reconcile_window_view_to_layout(&mut self, window_id: WindowId, previous_window: Option<WindowState>) {
 		let Some(window_snapshot) = self.windows.get(window_id).copied() else {
 			return;
@@ -397,11 +409,18 @@ impl RimState {
 			return;
 		};
 
-		let cursor = crate::state::clamp_cursor_for_rope(&buffer.text, window_snapshot.cursor);
+		let cursor = self.clamp_cursor_for_layout_mode(&buffer.text, window_snapshot.cursor);
 		let visible_rows = window_visible_rows(&window_snapshot);
 		let visible_cols = window_visible_text_cols(&window_snapshot, &buffer.text);
 		let cursor_line = cursor.row.saturating_sub(1);
-		let cursor_display_col = cursor_display_col_for_window(&buffer.text, cursor);
+		let cursor_display_col = if self.is_block_insert_mode() && window_id == self.active_window_id() {
+			self
+				.pending_block_insert
+				.map(|pending| pending.cursor_display_col)
+				.unwrap_or_else(|| cursor_display_col_for_window(&buffer.text, cursor))
+		} else {
+			cursor_display_col_for_window(&buffer.text, cursor)
+		};
 		if self.word_wrap_enabled() {
 			let wrap_width = visible_cols.max(1) as usize;
 			let cursor_wrapped_row = geom_wrapped_row_index_for_cursor(&buffer.text, cursor, wrap_width);
@@ -425,7 +444,7 @@ impl RimState {
 		let max_scroll_y = (crate::state::rope_line_count(&buffer.text) as u16).saturating_sub(visible_rows);
 		let visible_row_tail = visible_rows.saturating_sub(1);
 		let max_visible_col_tail = visible_cols.saturating_sub(1);
-		let line_display_width = line_display_width_for_window(&buffer.text, cursor);
+		let line_display_width = line_display_width_for_window(&buffer.text, cursor).max(cursor_display_col);
 		let max_scroll_x = line_display_width.saturating_sub(max_visible_col_tail);
 
 		let mut next_scroll_y = window_snapshot.scroll_y.min(max_scroll_y);
@@ -575,13 +594,14 @@ fn cursor_display_col_for_window(text: &Rope, cursor: crate::state::CursorState)
 	let row_index = cursor.row.saturating_sub(1) as usize;
 	let char_index = cursor.col.saturating_sub(1) as usize;
 	crate::state::rope_line_without_newline(text, row_index)
-		.map(|line| geom_display_width_of_char_prefix(line.as_str(), char_index) as u16)
+		.map(|line| geom_display_width_of_char_prefix_with_virtual(line.as_str(), char_index) as u16)
 		.unwrap_or(0)
 }
 
 fn line_display_width_for_window(text: &Rope, cursor: crate::state::CursorState) -> u16 {
 	let row_index = cursor.row.saturating_sub(1) as usize;
-	crate::state::rope_line_without_newline(text, row_index)
+	let base_width = crate::state::rope_line_without_newline(text, row_index)
 		.map(|line| line.chars().map(|ch| geom_char_display_width(ch) as u16).sum())
-		.unwrap_or(0)
+		.unwrap_or(0);
+	base_width.max(cursor_display_col_for_window(text, cursor))
 }

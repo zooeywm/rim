@@ -157,7 +157,7 @@ pub enum FileAction {
 	},
 	SwapConflictDetected {
 		buffer_id: BufferId,
-		result:    anyhow::Result<Option<SwapConflictInfo>>,
+		result:    anyhow::Result<SwapConflictCheckResult>,
 	},
 	SwapRecoverCompleted {
 		buffer_id: BufferId,
@@ -201,6 +201,12 @@ pub struct SwapConflictInfo {
 	pub username: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SwapConflictCheckResult {
+	Conflict(SwapConflictInfo),
+	NoSwapActionNeeded,
+}
+
 /// Marks whether a load comes from explicit open or external reload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileLoadSource {
@@ -213,4 +219,5 @@ pub enum FileLoadSource {
 pub enum SystemAction {
 	Quit,
 	ReloadConfig,
+	Tick,
 }

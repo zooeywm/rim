@@ -1,15 +1,5 @@
-use super::{
-	CursorState, PendingBlockInsert, RimState, clamp_cursor_col_for_line, pad_rope_line_to_char_len,
-	rope_block_char_range, rope_cursor_char, rope_editable_line_count, rope_editable_line_len_chars,
-	rope_join_rows_without_newline, rope_line_len_chars, rope_line_without_newline, rope_linewise_char_range,
-	rope_linewise_insertion_text, split_lines_owned,
-};
-use crate::display_geometry::{
-	cursor_col_for_display_slot as geom_cursor_col_for_display_slot,
-	display_col_of_cursor_slot as geom_display_col_of_cursor_slot,
-	previous_char_display_width_at_cursor as geom_previous_char_display_width_at_cursor,
-	char_display_width as geom_char_display_width,
-};
+use super::{CursorState, PendingBlockInsert, RimState, clamp_cursor_col_for_line, pad_rope_line_to_char_len, rope_block_char_range, rope_cursor_char, rope_editable_line_count, rope_editable_line_len_chars, rope_join_rows_without_newline, rope_line_len_chars, rope_line_without_newline, rope_linewise_char_range, rope_linewise_insertion_text, split_lines_owned};
+use crate::display_geometry::{char_display_width as geom_char_display_width, cursor_col_for_display_slot as geom_cursor_col_for_display_slot, display_col_of_cursor_slot as geom_display_col_of_cursor_slot, previous_char_display_width_at_cursor as geom_previous_char_display_width_at_cursor};
 
 impl RimState {
 	pub fn begin_visual_block_insert(&mut self, append: bool) {
@@ -41,9 +31,9 @@ impl RimState {
 
 		// Keep a stable rectangle so every insert-mode edit can be mirrored across it.
 		self.enter_block_insert_mode(PendingBlockInsert {
-			start_row: start.row,
-			end_row: end.row,
-			base_display_col: target_display,
+			start_row:          start.row,
+			end_row:            end.row,
+			base_display_col:   target_display,
 			cursor_display_col: target_display,
 		});
 		self.preferred_col = None;
@@ -101,7 +91,8 @@ impl RimState {
 		block_insert.cursor_display_col =
 			block_insert.cursor_display_col.saturating_add(geom_char_display_width(ch).max(1) as u16);
 		window.cursor.row = block_insert.start_row;
-		window.cursor.col = block_col_for_display_target(&buffer.text, block_insert.start_row, block_insert.cursor_display_col);
+		window.cursor.col =
+			block_col_for_display_target(&buffer.text, block_insert.start_row, block_insert.cursor_display_col);
 		self.pending_block_insert = Some(block_insert);
 		self.mark_active_buffer_dirty();
 		self.align_active_window_scroll_to_cursor();
@@ -139,14 +130,15 @@ impl RimState {
 			}
 			let delete_start =
 				rope_cursor_char(&buffer.text, row_idx, delete_col).expect("block backspace start must exist");
-			let delete_end = rope_cursor_char(&buffer.text, row_idx, delete_end_col_idx)
-				.expect("block backspace end must exist");
+			let delete_end =
+				rope_cursor_char(&buffer.text, row_idx, delete_end_col_idx).expect("block backspace end must exist");
 			buffer.text.remove(delete_start..delete_end);
 		}
 
 		block_insert.cursor_display_col = delete_start_display_col;
 		window.cursor.row = block_insert.start_row;
-		window.cursor.col = block_col_for_display_target(&buffer.text, block_insert.start_row, delete_start_display_col);
+		window.cursor.col =
+			block_col_for_display_target(&buffer.text, block_insert.start_row, delete_start_display_col);
 		self.pending_block_insert = Some(block_insert);
 		self.mark_active_buffer_dirty();
 		self.align_active_window_scroll_to_cursor();
@@ -517,11 +509,11 @@ impl RimState {
 		let anchor_display = self
 			.visual_block_anchor_display_col
 			.unwrap_or_else(|| cursor_slot_display_col(text, start.row, start.col));
-		let cursor_display = self
-			.visual_block_cursor_display_col
-			.unwrap_or_else(|| cursor_slot_display_col(text, end.row, end.col));
+		let cursor_display =
+			self.visual_block_cursor_display_col.unwrap_or_else(|| cursor_slot_display_col(text, end.row, end.col));
 		let left = anchor_display.min(cursor_display);
-		let right = anchor_display.saturating_add(1).max(cursor_display.saturating_add(1)).max(left.saturating_add(1));
+		let right =
+			anchor_display.saturating_add(1).max(cursor_display.saturating_add(1)).max(left.saturating_add(1));
 		(left, right)
 	}
 
@@ -529,10 +521,10 @@ impl RimState {
 		let anchor = self.visual_anchor?;
 		let cursor = self.active_cursor();
 		let (mut start, mut end) = if self.is_visual_block_mode() {
-			(
-				CursorState { row: anchor.row.min(cursor.row), col: anchor.col.min(cursor.col) },
-				CursorState { row: anchor.row.max(cursor.row), col: anchor.col.max(cursor.col) },
-			)
+			(CursorState { row: anchor.row.min(cursor.row), col: anchor.col.min(cursor.col) }, CursorState {
+				row: anchor.row.max(cursor.row),
+				col: anchor.col.max(cursor.col),
+			})
 		} else if (anchor.row, anchor.col) <= (cursor.row, cursor.col) {
 			(anchor, cursor)
 		} else {
@@ -547,10 +539,12 @@ impl RimState {
 	}
 }
 
-
-// Preserve the visual slot by materializing tab padding into spaces before the first mirrored insert.
+// Preserve the visual slot by materializing tab padding into spaces before the
+// first mirrored insert.
 fn expand_tab_padding_at_display_target(text: &mut ropey::Rope, row: u16, target_display_col: u16) {
-	let Some((row_idx, tab_char_idx, tab_width)) = tab_padding_span_at_display_target(text, row, target_display_col) else {
+	let Some((row_idx, tab_char_idx, tab_width)) =
+		tab_padding_span_at_display_target(text, row, target_display_col)
+	else {
 		return;
 	};
 	let tab_start = rope_cursor_char(text, row_idx, tab_char_idx).expect("tab start must exist");
@@ -559,7 +553,11 @@ fn expand_tab_padding_at_display_target(text: &mut ropey::Rope, row: u16, target
 	text.insert(tab_start, &" ".repeat(tab_width as usize));
 }
 
-fn tab_padding_span_at_display_target(text: &ropey::Rope, row: u16, target_display_col: u16) -> Option<(usize, usize, u16)> {
+fn tab_padding_span_at_display_target(
+	text: &ropey::Rope,
+	row: u16,
+	target_display_col: u16,
+) -> Option<(usize, usize, u16)> {
 	let row_idx = row.saturating_sub(1) as usize;
 	let line = rope_line_without_newline(text, row_idx)?;
 	let mut consumed = 0u16;
@@ -574,7 +572,6 @@ fn tab_padding_span_at_display_target(text: &ropey::Rope, row: u16, target_displ
 
 	None
 }
-
 
 fn block_col_for_display_target(text: &ropey::Rope, row: u16, target_display_col: u16) -> u16 {
 	let row_index = row.saturating_sub(1) as usize;

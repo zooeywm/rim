@@ -1,5 +1,7 @@
 mod command_palette;
 mod floating_window;
+mod notification_center;
+mod notification_preview;
 mod status_bar;
 mod terminal_session;
 mod top_bar;
@@ -8,6 +10,8 @@ mod workspace_file_picker;
 
 use command_palette::CommandPaletteWidgets;
 use floating_window::FloatingWindowWidget;
+use notification_center::NotificationCenterWidget;
+use notification_preview::NotificationPreviewWidget;
 use ratatui::layout::{Constraint, Layout, Rect};
 use rim_kernel::state::RimState;
 use status_bar::StatusBarWidget;
@@ -43,6 +47,8 @@ impl Renderer {
 		let command_palette = CommandPaletteWidgets::from_state(state, chunks[1]);
 		let workspace_file_picker = WorkspaceFilePickerWidget::from_state(state, chunks[1]);
 		let floating_window = FloatingWindowWidget::from_state(state, chunks[1]);
+		let notification_center = NotificationCenterWidget::from_state(state, chunks[1]);
+		let notification_preview = NotificationPreviewWidget::from_state(state, chunks[1]);
 
 		frame.render_widget(top_bar, chunks[0]);
 		frame.render_widget(window_area, chunks[1]);
@@ -51,6 +57,9 @@ impl Renderer {
 			frame.render_widget(command_palette, chunks[1]);
 			if let Some(floating_window) = floating_window {
 				frame.render_widget(floating_window, chunks[1]);
+			}
+			if let Some(notification_preview) = notification_preview.clone() {
+				frame.render_widget(notification_preview, chunks[1]);
 			}
 			frame.render_widget(status_bar, chunks[2]);
 			frame.set_cursor_position(cursor_to_draw);
@@ -62,12 +71,21 @@ impl Renderer {
 			if let Some(floating_window) = floating_window {
 				frame.render_widget(floating_window, chunks[1]);
 			}
+			if let Some(notification_preview) = notification_preview.clone() {
+				frame.render_widget(notification_preview, chunks[1]);
+			}
 			frame.render_widget(status_bar, chunks[2]);
 			frame.set_cursor_position(cursor_to_draw);
 			return;
 		}
+		if let Some(notification_center) = notification_center {
+			frame.render_widget(notification_center, chunks[1]);
+		}
 		if let Some(floating_window) = floating_window {
 			frame.render_widget(floating_window, chunks[1]);
+		}
+		if let Some(notification_preview) = notification_preview {
+			frame.render_widget(notification_preview, chunks[1]);
 		}
 		frame.render_widget(status_bar, chunks[2]);
 		if let Some(cursor_to_draw) = cursor_position {

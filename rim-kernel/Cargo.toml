@@ -14,3 +14,4 @@ unicode-width.workspace      = true
 ropey.workspace              = true
 serde.workspace              = true
 rim-command-macros.workspace = true
+time.workspace               = true

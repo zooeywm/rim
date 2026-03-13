@@ -3,11 +3,7 @@ use std::path::PathBuf;
 use ratatui::layout::Rect;
 use rim_kernel::state::{CursorState, RimState};
 
-use super::{
-	DIR_DOWN, DIR_LEFT, DIR_RIGHT, DIR_UP, SelectionSegment, VisualSelectionSpec, WindowAreaWidget,
-	collect_visual_selection_segments, dirs_from_symbol, display_width_of_char_prefix, render_line_for_display,
-	symbol_from_dirs, visible_slice_by_display_width,
-};
+use super::{DIR_DOWN, DIR_LEFT, DIR_RIGHT, DIR_UP, SelectionSegment, VisualSelectionSpec, WindowAreaWidget, collect_visual_selection_segments, dirs_from_symbol, display_width_of_char_prefix, render_line_for_display, symbol_from_dirs, visible_slice_by_display_width};
 
 fn merged_symbol(existing: &str, add_dirs: u8) -> &'static str {
 	symbol_from_dirs(dirs_from_symbol(existing) | add_dirs)
@@ -94,18 +90,15 @@ fn render_line_for_display_should_expand_tab_to_spaces() {
 fn visual_segments_should_cover_range_in_single_line() {
 	let content = "abcdef";
 	let text_rect = Rect { x: 0, y: 0, width: 10, height: 1 };
-	let segments = collect_visual_selection_segments(
-		content,
-		VisualSelectionSpec {
-			text_rect,
-			scroll_x: 0,
-			scroll_y: 0,
-			anchor: CursorState { row: 1, col: 2 },
-			cursor: CursorState { row: 1, col: 4 },
-			line_wise: false,
-			block_wise: false,
-		},
-	);
+	let segments = collect_visual_selection_segments(content, VisualSelectionSpec {
+		text_rect,
+		scroll_x: 0,
+		scroll_y: 0,
+		anchor: CursorState { row: 1, col: 2 },
+		cursor: CursorState { row: 1, col: 4 },
+		line_wise: false,
+		block_wise: false,
+	});
 	assert_eq!(segments.len(), 1);
 	let SelectionSegment { x_start, x_end, y } = segments[0];
 	assert_eq!(y, 0);
@@ -117,18 +110,15 @@ fn visual_segments_should_cover_range_in_single_line() {
 fn visual_line_segments_should_cover_entire_line_width() {
 	let content = "abcdef";
 	let text_rect = Rect { x: 0, y: 0, width: 10, height: 1 };
-	let segments = collect_visual_selection_segments(
-		content,
-		VisualSelectionSpec {
-			text_rect,
-			scroll_x: 0,
-			scroll_y: 0,
-			anchor: CursorState { row: 1, col: 3 },
-			cursor: CursorState { row: 1, col: 3 },
-			line_wise: true,
-			block_wise: false,
-		},
-	);
+	let segments = collect_visual_selection_segments(content, VisualSelectionSpec {
+		text_rect,
+		scroll_x: 0,
+		scroll_y: 0,
+		anchor: CursorState { row: 1, col: 3 },
+		cursor: CursorState { row: 1, col: 3 },
+		line_wise: true,
+		block_wise: false,
+	});
 	assert_eq!(segments.len(), 1);
 	let SelectionSegment { x_start, x_end, y } = segments[0];
 	assert_eq!(y, 0);
@@ -140,18 +130,15 @@ fn visual_line_segments_should_cover_entire_line_width() {
 fn visual_segments_should_include_newline_marker_slot() {
 	let content = "ab\ncd";
 	let text_rect = Rect { x: 0, y: 0, width: 10, height: 2 };
-	let segments = collect_visual_selection_segments(
-		content,
-		VisualSelectionSpec {
-			text_rect,
-			scroll_x: 0,
-			scroll_y: 0,
-			anchor: CursorState { row: 1, col: 2 },
-			cursor: CursorState { row: 1, col: 3 },
-			line_wise: false,
-			block_wise: false,
-		},
-	);
+	let segments = collect_visual_selection_segments(content, VisualSelectionSpec {
+		text_rect,
+		scroll_x: 0,
+		scroll_y: 0,
+		anchor: CursorState { row: 1, col: 2 },
+		cursor: CursorState { row: 1, col: 3 },
+		line_wise: false,
+		block_wise: false,
+	});
 	assert_eq!(segments.len(), 1);
 	let SelectionSegment { x_start, x_end, y } = segments[0];
 	assert_eq!(y, 0);
@@ -163,18 +150,15 @@ fn visual_segments_should_include_newline_marker_slot() {
 fn visual_block_segments_should_cover_same_columns_across_rows() {
 	let content = "abcd\nefgh\nijkl";
 	let text_rect = Rect { x: 0, y: 0, width: 10, height: 3 };
-	let segments = collect_visual_selection_segments(
-		content,
-		VisualSelectionSpec {
-			text_rect,
-			scroll_x: 0,
-			scroll_y: 0,
-			anchor: CursorState { row: 1, col: 2 },
-			cursor: CursorState { row: 3, col: 3 },
-			line_wise: false,
-			block_wise: true,
-		},
-	);
+	let segments = collect_visual_selection_segments(content, VisualSelectionSpec {
+		text_rect,
+		scroll_x: 0,
+		scroll_y: 0,
+		anchor: CursorState { row: 1, col: 2 },
+		cursor: CursorState { row: 3, col: 3 },
+		line_wise: false,
+		block_wise: true,
+	});
 	assert_eq!(segments.len(), 3);
 	for (index, segment) in segments.iter().enumerate() {
 		assert_eq!(segment.y, index as u16);
@@ -184,27 +168,268 @@ fn visual_block_segments_should_cover_same_columns_across_rows() {
 }
 
 #[test]
+fn visual_block_segments_should_extend_with_virtual_cursor_column() {
+	let content = "abcdef
+x
+zzz";
+	let text_rect = Rect { x: 0, y: 0, width: 20, height: 3 };
+	let segments = collect_visual_selection_segments(content, VisualSelectionSpec {
+		text_rect,
+		scroll_x: 0,
+		scroll_y: 0,
+		anchor: CursorState { row: 1, col: 5 },
+		cursor: CursorState { row: 3, col: 9 },
+		line_wise: false,
+		block_wise: true,
+	});
+	assert_eq!(segments.len(), 3);
+	for (index, segment) in segments.iter().enumerate() {
+		assert_eq!(segment.y, index as u16);
+		assert_eq!(segment.x_start, 4);
+		assert_eq!(segment.x_end, 9);
+	}
+}
+
+#[test]
+fn visual_block_segments_should_cover_blank_rows_inside_block() {
+	let content = "abcdef
+
+
+xyz";
+	let text_rect = Rect { x: 0, y: 0, width: 20, height: 4 };
+	let segments = collect_visual_selection_segments(content, VisualSelectionSpec {
+		text_rect,
+		scroll_x: 0,
+		scroll_y: 0,
+		anchor: CursorState { row: 1, col: 5 },
+		cursor: CursorState { row: 4, col: 9 },
+		line_wise: false,
+		block_wise: true,
+	});
+	assert_eq!(segments.len(), 4);
+	for (index, segment) in segments.iter().enumerate() {
+		assert_eq!(segment.y, index as u16);
+		assert_eq!(segment.x_start, 4);
+		assert_eq!(segment.x_end, 9);
+	}
+}
+
+#[test]
 fn visual_block_segments_should_stay_rectangular_with_tab_mixed_lines() {
 	let content = "ab\tcdef\nabcdefg\nab\txyzz";
 	let text_rect = Rect { x: 0, y: 0, width: 40, height: 3 };
-	let segments = collect_visual_selection_segments(
-		content,
-		VisualSelectionSpec {
-			text_rect,
-			scroll_x: 0,
-			scroll_y: 0,
-			anchor: CursorState { row: 1, col: 5 },
-			cursor: CursorState { row: 3, col: 7 },
-			line_wise: false,
-			block_wise: true,
-		},
-	);
+	let segments = collect_visual_selection_segments(content, VisualSelectionSpec {
+		text_rect,
+		scroll_x: 0,
+		scroll_y: 0,
+		anchor: CursorState { row: 1, col: 5 },
+		cursor: CursorState { row: 3, col: 7 },
+		line_wise: false,
+		block_wise: true,
+	});
 	assert_eq!(segments.len(), 3);
 	let first = &segments[0];
 	for segment in &segments[1..] {
 		assert_eq!(segment.x_start, first.x_start);
 		assert_eq!(segment.x_end, first.x_end);
 	}
+}
+
+#[test]
+fn visual_block_cursor_should_render_inside_tab_padding() {
+	let mut state = RimState::new();
+	let buffer_id = state.create_buffer(
+		Some(PathBuf::from("vb_tab_padding.rs")),
+		"	foo
+bar",
+	);
+	state.bind_buffer_to_active_window(buffer_id);
+	state.update_active_tab_layout(20, 6);
+	let content_area = Rect { x: 0, y: 0, width: 20, height: 6 };
+	state.enter_visual_block_mode();
+	let (_, initial_cursor_position) = WindowAreaWidget::from_state(&state, content_area);
+	state.move_cursor_right_for_visual_char();
+	state.move_cursor_right_for_visual_char();
+
+	let (_, cursor_position) = WindowAreaWidget::from_state(&state, content_area);
+	let (initial_x, initial_y) =
+		initial_cursor_position.expect("initial visual block cursor should be drawable");
+	let (x, y) = cursor_position.expect("visual block cursor should be drawable inside tab padding");
+	assert_eq!(y, initial_y);
+	assert_eq!(x, initial_x + 2);
+}
+
+#[test]
+fn visual_block_cursor_should_render_at_virtual_column() {
+	let mut state = RimState::new();
+	let buffer_id = state.create_buffer(
+		Some(PathBuf::from("virtual_cursor.rs")),
+		"abcdef
+x
+zzz",
+	);
+	state.bind_buffer_to_active_window(buffer_id);
+	state.update_active_tab_layout(8, 6);
+	for _ in 0..4 {
+		state.move_cursor_right();
+	}
+	state.enter_visual_block_mode();
+	state.move_cursor_down();
+	state.move_cursor_down();
+	for _ in 0..4 {
+		state.move_cursor_right_for_visual_char();
+	}
+
+	let content_area = Rect { x: 0, y: 0, width: 8, height: 6 };
+	let (_, cursor_position) = WindowAreaWidget::from_state(&state, content_area);
+	let (x, y) = cursor_position.expect("visual block cursor should be drawable");
+	assert_eq!((x, y), (7, 2));
+}
+
+#[test]
+fn visual_block_append_cursor_should_land_on_previous_block_right_edge() {
+	let mut state = RimState::new();
+	let buffer_id = state.create_buffer(
+		Some(PathBuf::from("block_append_cursor.rs")),
+		"    enqueue_save(&self,
+        StorageIoImpl::inj_ref",
+	);
+	state.bind_buffer_to_active_window(buffer_id);
+	state.update_active_tab_layout(40, 6);
+	for _ in 0..8 {
+		state.move_cursor_right();
+	}
+	state.enter_visual_block_mode();
+	state.move_cursor_down();
+
+	let content_area = Rect { x: 0, y: 0, width: 40, height: 6 };
+	let (widget_before, _) = WindowAreaWidget::from_state(&state, content_area);
+	let expected_x = widget_before
+		.selection_segments
+		.iter()
+		.filter(|segment| segment.y == 0)
+		.map(|segment| segment.x_end)
+		.max()
+		.expect("top-row block segment should exist");
+
+	state.begin_visual_block_insert(true);
+
+	let (_, cursor_position) = WindowAreaWidget::from_state(&state, content_area);
+	let (x, y) = cursor_position.expect("block append cursor should be drawable");
+	assert_eq!((x, y), (expected_x, 0));
+}
+
+#[test]
+fn visual_block_insert_before_cursor_should_land_on_previous_block_left_edge() {
+	let mut state = RimState::new();
+	let buffer_id = state.create_buffer(
+		Some(PathBuf::from("block_insert_before_cursor.rs")),
+		"    enqueue_save(&self,
+        StorageIoImpl::inj_ref",
+	);
+	state.bind_buffer_to_active_window(buffer_id);
+	state.update_active_tab_layout(40, 6);
+	for _ in 0..8 {
+		state.move_cursor_right();
+	}
+	state.enter_visual_block_mode();
+	state.move_cursor_down();
+
+	let content_area = Rect { x: 0, y: 0, width: 40, height: 6 };
+	let (widget_before, _) = WindowAreaWidget::from_state(&state, content_area);
+	let expected_x = widget_before
+		.selection_segments
+		.iter()
+		.filter(|segment| segment.y == 0)
+		.map(|segment| segment.x_start)
+		.min()
+		.expect("top-row block segment should exist");
+
+	state.begin_visual_block_insert(false);
+
+	let (_, cursor_position) = WindowAreaWidget::from_state(&state, content_area);
+	let (x, y) = cursor_position.expect("block insert-before cursor should be drawable");
+	assert_eq!((x, y), (expected_x, 0));
+}
+
+#[test]
+fn visual_block_append_cursor_should_align_with_tabbed_block_edge() {
+	let line1 = "	fn enqueue_save(&self, buffer_id: BufferId, path: PathBuf, text: String) -> Result<(), \
+	             StorageIoError> {";
+	let line2 = "		StorageIoImpl::inj_ref(self.storage_io).enqueue_save(buffer_id, path, text)";
+	let mut state = RimState::new();
+	let buffer_id = state.create_buffer(
+		Some(PathBuf::from("tabbed_block_append.rs")),
+		&format!(
+			"{line1}
+{line2}"
+		),
+	);
+	state.bind_buffer_to_active_window(buffer_id);
+	state.update_active_tab_layout(120, 6);
+	let top_col = line1.find("ue").expect("top row selection should exist") as u16 + 1;
+	let bottom_col = line2.find('g').expect("bottom row selection should exist") as u16 + 1;
+	let active_window = state.active_window_id();
+	state.windows.get_mut(active_window).expect("window exists").cursor = CursorState { row: 1, col: top_col };
+	state.enter_visual_block_mode();
+	state.windows.get_mut(active_window).expect("window exists").cursor =
+		CursorState { row: 2, col: bottom_col };
+
+	let content_area = Rect { x: 0, y: 0, width: 120, height: 6 };
+	let (widget_before, _) = WindowAreaWidget::from_state(&state, content_area);
+	let expected_x = widget_before
+		.selection_segments
+		.iter()
+		.filter(|segment| segment.y == 0)
+		.map(|segment| segment.x_end)
+		.max()
+		.expect("top-row block segment should exist");
+
+	state.begin_visual_block_insert(true);
+
+	let (_, cursor_position) = WindowAreaWidget::from_state(&state, content_area);
+	let (x, y) = cursor_position.expect("tabbed block append cursor should be drawable");
+	assert_eq!((x, y), (expected_x, 0));
+}
+
+#[test]
+fn visual_block_insert_before_cursor_should_align_with_tabbed_block_edge() {
+	let line1 = "	fn enqueue_save(&self, buffer_id: BufferId, path: PathBuf, text: String) -> Result<(), \
+	             StorageIoError> {";
+	let line2 = "		StorageIoImpl::inj_ref(self.storage_io).enqueue_save(buffer_id, path, text)";
+	let mut state = RimState::new();
+	let buffer_id = state.create_buffer(
+		Some(PathBuf::from("tabbed_block_insert_before.rs")),
+		&format!(
+			"{line1}
+{line2}"
+		),
+	);
+	state.bind_buffer_to_active_window(buffer_id);
+	state.update_active_tab_layout(120, 6);
+	let top_col = line1.find("ue").expect("top row selection should exist") as u16 + 1;
+	let bottom_col = line2.find('g').expect("bottom row selection should exist") as u16 + 1;
+	let active_window = state.active_window_id();
+	state.windows.get_mut(active_window).expect("window exists").cursor = CursorState { row: 1, col: top_col };
+	state.enter_visual_block_mode();
+	state.windows.get_mut(active_window).expect("window exists").cursor =
+		CursorState { row: 2, col: bottom_col };
+
+	let content_area = Rect { x: 0, y: 0, width: 120, height: 6 };
+	let (widget_before, _) = WindowAreaWidget::from_state(&state, content_area);
+	let expected_x = widget_before
+		.selection_segments
+		.iter()
+		.filter(|segment| segment.y == 0)
+		.map(|segment| segment.x_start)
+		.min()
+		.expect("top-row block segment should exist");
+
+	state.begin_visual_block_insert(false);
+
+	let (_, cursor_position) = WindowAreaWidget::from_state(&state, content_area);
+	let (x, y) = cursor_position.expect("tabbed block insert-before cursor should be drawable");
+	assert_eq!((x, y), (expected_x, 0));
 }
 
 #[test]

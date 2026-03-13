@@ -4,12 +4,7 @@ use ropey::Rope;
 use serde::Deserialize;
 use slotmap::SlotMap;
 
-use super::{
-	BufferHistoryEntry, BufferState, EditorMode, RimState, StatusBarState, TabId, TabState,
-	WindowBufferViewState, WindowState, WorkspaceBufferHistorySnapshot, WorkspaceBufferSnapshot,
-	WorkspaceSessionSnapshot, WorkspaceTabSnapshot, WorkspaceWindowBufferViewSnapshot, WorkspaceWindowSnapshot,
-	buffer_name_from_path, clamp_cursor_for_rope,
-};
+use super::{BufferHistoryEntry, BufferState, EditorMode, RimState, StatusBarState, TabId, TabState, WindowBufferViewState, WindowState, WorkspaceBufferHistorySnapshot, WorkspaceBufferSnapshot, WorkspaceSessionSnapshot, WorkspaceTabSnapshot, WorkspaceWindowBufferViewSnapshot, WorkspaceWindowSnapshot, buffer_name_from_path, clamp_cursor_for_rope};
 
 const WORKSPACE_SESSION_VERSION: u32 = 1;
 
@@ -43,7 +38,11 @@ impl RimState {
 				};
 				Some(WorkspaceBufferSnapshot {
 					path: buffer.path.clone(),
-					text: buffer.text.to_string(),
+					text: if self.force_quit_trim_file_dirty_in_session && buffer.dirty {
+						buffer.clean_text.to_string()
+					} else {
+						buffer.text.to_string()
+					},
 					clean_text: buffer.clean_text.to_string(),
 					history,
 				})
@@ -59,7 +58,7 @@ impl RimState {
 		let tabs = tab_items
 			.into_iter()
 			.map(|(_, tab)| WorkspaceTabSnapshot {
-				windows: tab
+				windows:             tab
 					.windows
 					.iter()
 					.filter_map(|window_id| {
@@ -108,7 +107,7 @@ impl RimState {
 					.iter()
 					.position(|window_id| *window_id == tab.active_window)
 					.unwrap_or(0),
-				buffer_order: tab
+				buffer_order:        tab
 					.buffer_order
 					.iter()
 					.filter_map(|buffer_id| buffer_index_by_id.get(buffer_id).copied())
@@ -134,6 +133,7 @@ impl RimState {
 		self.visual_anchor = None;
 		self.command_line.clear();
 		self.quit_after_save = false;
+		self.force_quit_trim_file_dirty_in_session = false;
 		self.pending_save_path = None;
 		self.preferred_col = None;
 		self.line_slot = None;
@@ -229,14 +229,11 @@ impl RimState {
 						.get(buffer_id)
 						.map(|buffer| clamp_cursor_for_rope(&buffer.text, view_snapshot.cursor))
 						.unwrap_or(view_snapshot.cursor);
-					self.window_buffer_views.insert(
-						(window_id, buffer_id),
-						WindowBufferViewState {
-							cursor: clamped_cursor,
-							scroll_x: view_snapshot.scroll_x,
-							scroll_y: view_snapshot.scroll_y,
-						},
-					);
+					self.window_buffer_views.insert((window_id, buffer_id), WindowBufferViewState {
+						cursor:   clamped_cursor,
+						scroll_x: view_snapshot.scroll_x,
+						scroll_y: view_snapshot.scroll_y,
+					});
 				}
 				if let Some(buffer_id) = buffer_id {
 					let current_view =
@@ -285,18 +282,16 @@ impl RimState {
 		true
 	}
 
-	pub fn has_restorable_workspace_session(&self) -> bool {
-		!self.tabs.is_empty()
-	}
+	pub fn has_restorable_workspace_session(&self) -> bool { !self.tabs.is_empty() }
 }
 
 #[derive(Deserialize)]
 struct WorkspaceBufferSnapshotCompat {
-	path: Option<std::path::PathBuf>,
-	text: String,
+	path:       Option<std::path::PathBuf>,
+	text:       String,
 	clean_text: String,
 	#[serde(default)]
-	history: Option<WorkspaceBufferHistorySnapshot>,
+	history:    Option<WorkspaceBufferHistorySnapshot>,
 	#[serde(default)]
 	undo_stack: Vec<BufferHistoryEntry>,
 	#[serde(default)]
@@ -305,9 +300,7 @@ struct WorkspaceBufferSnapshotCompat {
 
 impl<'de> Deserialize<'de> for WorkspaceBufferSnapshot {
 	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-	where
-		D: serde::Deserializer<'de>,
-	{
+	where D: serde::Deserializer<'de> {
 		let compat = WorkspaceBufferSnapshotCompat::deserialize(deserializer)?;
 		let history = compat.history.or_else(|| {
 			((compat.path.is_none()) && (!compat.undo_stack.is_empty() || !compat.redo_stack.is_empty())).then_some(

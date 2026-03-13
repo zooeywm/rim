@@ -18,14 +18,18 @@ impl TopBarWidget {
 		let mut buffer_spans = Vec::new();
 		for (idx, id) in buffer_ids.iter().enumerate() {
 			let is_active = active_buffer_id == Some(*id);
-			let style = if is_active {
+			let Some(buffer) = state.buffers.get(*id) else {
+				continue;
+			};
+			let deleted_on_disk = buffer.path.as_ref().is_some_and(|path| !path.exists());
+			let mut style = if is_active {
 				Style::default().fg(Color::White).bg(Color::DarkGray).add_modifier(Modifier::BOLD)
 			} else {
 				Style::default().fg(Color::Gray)
 			};
-			let Some(buffer) = state.buffers.get(*id) else {
-				continue;
-			};
+			if deleted_on_disk {
+				style = style.add_modifier(Modifier::CROSSED_OUT);
+			}
 			let mut label = buffer.name.clone();
 			if buffer.dirty {
 				label.push('*');
@@ -83,6 +87,7 @@ impl Widget for TopBarWidget {
 mod tests {
 	use std::path::PathBuf;
 
+	use ratatui::style::Modifier;
 	use rim_kernel::state::RimState;
 
 	use super::TopBarWidget;
@@ -132,5 +137,28 @@ mod tests {
 			.collect::<Vec<_>>();
 
 		assert_eq!(labels, vec!["untitled".to_string()]);
+	}
+
+	#[test]
+	fn deleted_file_should_show_crossed_out_label_in_top_bar() {
+		let mut state = RimState::new();
+		let nanos = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map(|duration| duration.as_nanos())
+			.unwrap_or(0);
+		let file_path = std::env::temp_dir().join(format!("rim-topbar-deleted-{}.rs", nanos));
+		std::fs::write(file_path.as_path(), "fn main() {}").expect("temp file should be created");
+
+		let buffer_id = state.create_buffer(Some(file_path.clone()), "fn main() {}");
+		state.bind_buffer_to_active_window(buffer_id);
+		std::fs::remove_file(file_path.as_path()).expect("temp file should be removed");
+
+		let widget = TopBarWidget::from_state(&state);
+		let deleted_span = widget
+			.buffer_spans
+			.iter()
+			.find(|span| span.content.as_ref().starts_with("rim-topbar-deleted-"))
+			.expect("deleted buffer label should be present");
+		assert!(deleted_span.style.add_modifier.contains(Modifier::CROSSED_OUT));
 	}
 }

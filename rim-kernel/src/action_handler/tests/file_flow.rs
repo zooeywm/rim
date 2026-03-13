@@ -1,7 +1,7 @@
 use std::{ops::ControlFlow, path::PathBuf, time::{Duration, Instant}};
 
 use super::support::{FilePickerPorts, RecordingPorts, SwapDecisionPorts, dispatch_test_action, normalize_test_path};
-use crate::{action::{AppAction, EditorAction, FileAction, KeyCode, KeyEvent, KeyModifiers, SwapConflictInfo, SystemAction}, command::{CommandAliasConfig, CommandAliasSection, CommandConfigFile}, state::{BufferEditSnapshot, BufferHistoryEntry, CursorState, PendingSwapDecision, PersistedBufferHistory, RimState, WorkspaceBufferHistorySnapshot, WorkspaceBufferSnapshot, WorkspaceSessionSnapshot, WorkspaceTabSnapshot, WorkspaceWindowBufferViewSnapshot, WorkspaceWindowSnapshot}};
+use crate::{action::{AppAction, EditorAction, FileAction, KeyCode, KeyEvent, KeyModifiers, SwapConflictCheckResult, SwapConflictInfo, SystemAction}, command::{CommandAliasConfig, CommandAliasSection, CommandConfigFile}, state::{BufferEditSnapshot, BufferHistoryEntry, CursorState, PendingSwapDecision, PersistedBufferHistory, RimState, WorkspaceBufferHistorySnapshot, WorkspaceBufferSnapshot, WorkspaceSessionSnapshot, WorkspaceTabSnapshot, WorkspaceWindowBufferViewSnapshot, WorkspaceWindowSnapshot}};
 
 #[test]
 fn file_load_completed_should_mark_buffer_clean() {
@@ -113,7 +113,9 @@ fn workspace_session_loaded_should_restore_state_and_enqueue_runtime_bindings() 
 	assert_eq!(state.buffers.len(), 2);
 	assert_eq!(ports.open_requests.borrow().len(), 1);
 	assert_eq!(ports.watch_requests.borrow().len(), 1);
-	assert_eq!(ports.initialize_bases.borrow().len(), 1);
+	assert_eq!(ports.swap_conflict_detects.borrow().len(), 1);
+	assert!(ports.swap_recovers.borrow().is_empty());
+	assert!(ports.initialize_bases.borrow().is_empty());
 	assert_eq!(ports.history_loads.borrow().len(), 1);
 	assert_eq!(ports.open_requests.borrow()[0].1, source_path);
 	assert!(!ports.history_loads.borrow()[0].3);
@@ -323,6 +325,74 @@ fn command_q_bang_should_force_quit_when_buffer_is_dirty() {
 }
 
 #[test]
+fn command_q_bang_should_trim_dirty_text_from_session_snapshot() {
+	let mut state = RimState::new();
+	let ports = RecordingPorts::default();
+	let path = normalize_test_path("qbang_trim.txt");
+	let buffer_id = state.create_buffer(Some(path.clone()), "clean");
+	state.bind_buffer_to_active_window(buffer_id);
+	state.replace_buffer_text_preserving_cursor(buffer_id, "dirty".to_string());
+	state.set_buffer_dirty(buffer_id, true);
+	state.enter_command_mode();
+	state.push_command_char('q');
+	state.push_command_char('!');
+
+	let flow = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
+	);
+
+	assert!(matches!(flow, ControlFlow::Break(())));
+	assert_eq!(ports.session_saves.borrow().len(), 1);
+	let snapshot = ports.session_saves.borrow()[0].clone();
+	let file_buffer = snapshot
+		.buffers
+		.iter()
+		.find(|buffer| buffer.path.as_ref() == Some(&path))
+		.expect("file-backed buffer should be saved");
+	assert_eq!(file_buffer.text, file_buffer.clean_text);
+	assert_eq!(file_buffer.text, "clean");
+}
+
+#[test]
+fn command_qa_bang_should_trim_dirty_text_for_all_buffers_in_session_snapshot() {
+	let mut state = RimState::new();
+	let ports = RecordingPorts::default();
+	let file_path = normalize_test_path("qab_trim.txt");
+	let file_buffer_id = state.create_buffer(Some(file_path.clone()), "file-clean");
+	let untitled_buffer_id = state.create_buffer(None, "untitled-clean");
+	state.bind_buffer_to_active_window(file_buffer_id);
+	state.replace_buffer_text_preserving_cursor(file_buffer_id, "file-dirty".to_string());
+	state.set_buffer_dirty(file_buffer_id, true);
+	state.replace_buffer_text_preserving_cursor(untitled_buffer_id, "untitled-dirty".to_string());
+	state.set_buffer_dirty(untitled_buffer_id, true);
+	state.enter_command_mode();
+	state.push_command_char('q');
+	state.push_command_char('a');
+	state.push_command_char('!');
+
+	let flow = state.apply_action(
+		&ports,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
+	);
+
+	assert!(matches!(flow, ControlFlow::Break(())));
+	assert_eq!(ports.session_saves.borrow().len(), 1);
+	let snapshot = ports.session_saves.borrow()[0].clone();
+	let file_buffer = snapshot
+		.buffers
+		.iter()
+		.find(|buffer| buffer.path.as_ref() == Some(&file_path))
+		.expect("file-backed buffer should be saved");
+	assert_eq!(file_buffer.text, "file-clean");
+	assert_eq!(file_buffer.text, file_buffer.clean_text);
+	let untitled_buffer =
+		snapshot.buffers.iter().find(|buffer| buffer.path.is_none()).expect("untitled buffer should be saved");
+	assert_eq!(untitled_buffer.text, "untitled-clean");
+	assert_eq!(untitled_buffer.text, untitled_buffer.clean_text);
+}
+
+#[test]
 fn command_wq_should_break_after_save_completed_and_save_workspace_session() {
 	let mut state = RimState::new();
 	let ports = RecordingPorts::default();
@@ -492,7 +562,7 @@ fn command_q_should_quit_when_all_buffers_are_clean() {
 fn command_yazi_should_open_selected_file() {
 	let mut state = RimState::new();
 	let ports = FilePickerPorts::default();
-	ports.picked_path.replace(Some(PathBuf::from("picked.txt")));
+	ports.picked_path.replace(Some(PathBuf::from("Cargo.toml")));
 	state.enter_command_mode();
 	state.push_command_char('y');
 	state.push_command_char('a');
@@ -506,7 +576,7 @@ fn command_yazi_should_open_selected_file() {
 
 	assert!(matches!(flow, ControlFlow::Continue(())));
 	assert_eq!(ports.file_loads.borrow().len(), 1);
-	assert_eq!(ports.file_loads.borrow()[0].1, normalize_test_path("picked.txt"));
+	assert_eq!(ports.file_loads.borrow()[0].1, normalize_test_path("Cargo.toml"));
 }
 
 #[test]
@@ -655,7 +725,7 @@ fn command_e_with_path_should_replace_clean_single_untitled_buffer() {
 	let buffer = state.buffers.get(active_id).expect("buffer exists");
 	let expected = normalize_test_path("b.txt");
 	assert_eq!(buffer.path.as_deref(), Some(expected.as_path()));
-	assert_eq!(state.status_bar.message, "loading b.txt");
+	assert_eq!(state.status_bar.message, "new b.txt");
 }
 
 #[test]
@@ -664,7 +734,7 @@ fn open_requested_should_replace_clean_single_untitled_buffer_in_tab() {
 	state.create_untitled_buffer();
 	let ports = RecordingPorts::default();
 	let original_buffer_id = state.active_buffer_id().expect("active buffer should exist");
-	let path = normalize_test_path("replace.rs");
+	let path = normalize_test_path("Cargo.toml");
 
 	let flow = state.apply_action(&ports, AppAction::File(FileAction::OpenRequested { path: path.clone() }));
 
@@ -673,7 +743,7 @@ fn open_requested_should_replace_clean_single_untitled_buffer_in_tab() {
 	assert_eq!(state.active_buffer_id(), Some(original_buffer_id));
 	let buffer = state.buffers.get(original_buffer_id).expect("buffer should exist");
 	assert_eq!(buffer.path.as_ref(), Some(&path));
-	assert_eq!(buffer.name, "replace.rs");
+	assert_eq!(buffer.name, "Cargo.toml");
 	assert_eq!(state.active_tab_buffer_ids(), vec![original_buffer_id]);
 	assert_eq!(ports.file_loads.borrow().as_slice(), &[(original_buffer_id, path.clone())]);
 	assert_eq!(ports.open_requests.borrow().as_slice(), &[(original_buffer_id, path.clone())]);
@@ -770,10 +840,34 @@ fn open_requested_should_enqueue_file_load() {
 	let mut state = RimState::new();
 	let ports = RecordingPorts::default();
 
-	let path = PathBuf::from("a.txt");
+	let path = PathBuf::from("Cargo.toml");
 	let _ = state.apply_action(&ports, AppAction::File(crate::action::FileAction::OpenRequested { path }));
 
 	assert_eq!(ports.file_loads.borrow().len(), 1);
+}
+
+#[test]
+fn open_requested_should_prepare_new_buffer_when_path_missing() {
+	let mut state = RimState::new();
+	state.create_untitled_buffer();
+	let ports = RecordingPorts::default();
+	let nanos = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|duration| duration.as_nanos())
+		.unwrap_or(0);
+	let missing = normalize_test_path(format!("target-missing-{}.rs", nanos).as_str());
+
+	let flow = state.apply_action(&ports, AppAction::File(FileAction::OpenRequested { path: missing.clone() }));
+
+	assert!(matches!(flow, ControlFlow::Continue(())));
+	let active = state.active_buffer_id().expect("active buffer should exist");
+	let buffer = state.buffers.get(active).expect("buffer should exist");
+	assert_eq!(buffer.path.as_ref(), Some(&missing));
+	assert_eq!(buffer.text.to_string(), "");
+	assert_eq!(state.status_bar.message, format!("new {}", missing.display()));
+	assert!(ports.file_loads.borrow().is_empty());
+	assert!(ports.open_requests.borrow().is_empty());
+	assert!(ports.watch_requests.borrow().is_empty());
 }
 
 #[test]
@@ -916,7 +1010,7 @@ fn swap_recover_completed_with_no_changes_should_update_status_message() {
 		AppAction::File(FileAction::SwapRecoverCompleted { buffer_id, result: Ok(None) }),
 	);
 
-	assert_eq!(state.status_bar.message, "swap clean: no recovery needed");
+	assert_eq!(state.status_bar.message, "file reloaded");
 }
 
 #[test]
@@ -957,7 +1051,10 @@ fn swap_conflict_detected_should_enter_pending_prompt() {
 		&ports,
 		AppAction::File(FileAction::SwapConflictDetected {
 			buffer_id,
-			result: Ok(Some(SwapConflictInfo { pid: 99, username: "other".to_string() })),
+			result: Ok(SwapConflictCheckResult::Conflict(SwapConflictInfo {
+				pid:      99,
+				username: "other".to_string(),
+			})),
 		}),
 	);
 
@@ -968,4 +1065,28 @@ fn swap_conflict_detected_should_enter_pending_prompt() {
 	assert_eq!(pending.owner_pid, 99);
 	assert_eq!(pending.owner_username, "other");
 	assert!(state.status_bar.message.contains("[r]ecover"));
+}
+
+#[test]
+fn swap_conflict_detected_without_conflict_should_initialize_swap_base() {
+	let mut state = RimState::new();
+	let ports = SwapDecisionPorts::default();
+	let path = normalize_test_path("swap_base_init.txt");
+	let buffer_id = state.create_buffer(Some(path.clone()), "base-text");
+	state.bind_buffer_to_active_window(buffer_id);
+
+	let _ = state.apply_action(
+		&ports,
+		AppAction::File(FileAction::SwapConflictDetected {
+			buffer_id,
+			result: Ok(SwapConflictCheckResult::NoSwapActionNeeded),
+		}),
+	);
+
+	assert_eq!(ports.swap_inits.borrow().len(), 1);
+	let (init_buffer_id, init_path, init_text, delete_existing) = &ports.swap_inits.borrow()[0];
+	assert_eq!(*init_buffer_id, buffer_id);
+	assert_eq!(init_path, &path);
+	assert_eq!(init_text, "base-text");
+	assert!(!delete_existing);
 }
