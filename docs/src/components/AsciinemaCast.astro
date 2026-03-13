@@ -1,0 +1,57 @@
+---
+import playerCssHref from 'asciinema-player/dist/bundle/asciinema-player.css?url';
+import playerScriptSrc from 'asciinema-player/dist/bundle/asciinema-player.min.js?url';
+
+interface Props {
+	id?: string;
+	src: string;
+	title?: string;
+	poster?: string;
+}
+
+const {
+	id = `asciinema-player-${Math.random().toString(36).slice(2, 10)}`,
+	src,
+	title = 'Terminal demo',
+	poster = 'npt:0:03',
+} = Astro.props;
+---
+
+<link rel="stylesheet" href={playerCssHref} />
+
+<div class="rim-asciinema-cast">
+	<div id={id} class="rim-asciinema-cast__player" aria-label={title}></div>
+</div>
+
+<script src={playerScriptSrc}></script>
+<script is:inline define:vars={{ id, src, poster }}>
+	const container = document.getElementById(id);
+	const player = globalThis.AsciinemaPlayer;
+
+	if (container && player) {
+		player.create(src, container, {
+			poster,
+			fit: 'width',
+			controls: 'auto',
+			idleTimeLimit: 1,
+			theme: 'auto/asciinema',
+		});
+	}
+</script>
+
+<style>
+	.rim-asciinema-cast {
+		margin: 1.5rem 0;
+	}
+
+	.rim-asciinema-cast :global(.asciinema-player) {
+		border: 1px solid var(--rim-code-block-border);
+		border-radius: 1rem;
+		box-shadow: 0 14px 32px var(--rim-code-block-shadow);
+		overflow: hidden;
+	}
+
+	.rim-asciinema-cast :global(.ap-player) {
+		border-radius: 1rem;
+	}
+</style>

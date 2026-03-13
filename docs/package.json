@@ -15,5 +15,8 @@
   "dependencies": {
     "@astrojs/starlight": "^0.38.1",
     "astro": "^6.0.1"
+  },
+  "devDependencies": {
+    "asciinema-player": "^3.15.1"
   }
 }

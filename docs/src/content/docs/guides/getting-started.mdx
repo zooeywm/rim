@@ -4,6 +4,32 @@ description: Install, build, and launch rim locally.
 ---
 
 import { Aside, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
+import AsciinemaCast from '../../../components/AsciinemaCast.astro';
+
+## Watch a terminal demo
+
+This asciinema recording is captured in a visible `kitty + zsh -il` session and then switches into `rim`. It walks through a compact showcase of the main interactive surfaces:
+
+- key hints with `F1`
+- insert and normal mode transitions
+- visual line selection
+- visual block insert
+- command line usage
+- workspace file picker
+- notification review
+- window split, focus movement, and tab switching
+- save and quit
+
+<Aside type="tip" title="How to use the player">
+	Press play to watch the recording inline, drag the timeline to jump around, and use the player's copyable terminal text if you want to inspect a command or message.
+</Aside>
+
+<AsciinemaCast
+	id="getting-started-demo"
+	src="/rim/casts/rim-full-demo.cast"
+	title="rim full feature demo"
+	poster="npt:0:04"
+/>
 
 ## What `rim` is
 
