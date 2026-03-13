@@ -360,7 +360,7 @@ fn visual_block_append_cursor_should_align_with_tabbed_block_edge() {
 	let mut state = RimState::new();
 	let buffer_id = state.create_buffer(
 		Some(PathBuf::from("tabbed_block_append.rs")),
-		&format!(
+		format!(
 			"{line1}
 {line2}"
 		),
@@ -400,7 +400,7 @@ fn visual_block_insert_before_cursor_should_align_with_tabbed_block_edge() {
 	let mut state = RimState::new();
 	let buffer_id = state.create_buffer(
 		Some(PathBuf::from("tabbed_block_insert_before.rs")),
-		&format!(
+		format!(
 			"{line1}
 {line2}"
 		),

@@ -824,9 +824,9 @@ impl CommandRegistry {
 							scope: scope_label.to_string(),
 							binding_index,
 							reason: format!(
-								"conflicting key binding '{}' already mapped to '{}'",
+								"conflicting key binding '{}' already mapped to '{:?}'",
 								render_normal_sequence(&keys),
-								format!("{:?}", existing.command_id)
+								existing.command_id
 							),
 						});
 						conflicted = true;

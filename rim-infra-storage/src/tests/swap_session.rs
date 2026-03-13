@@ -292,7 +292,7 @@ fn recover_should_replay_existing_swap_edit_log() {
 fn detect_conflict_should_ignore_swap_owned_by_current_process() {
 	let swap_dir = make_tmp_dir("conflict-self");
 	let source_path = swap_dir.join("sample.txt");
-	let mut session = SwapSession::new(
+	let session = SwapSession::new(
 		BufferId::default(),
 		source_path.as_path(),
 		swap_dir.as_path(),
@@ -310,7 +310,7 @@ fn detect_conflict_should_ignore_swap_owned_by_current_process() {
 fn detect_conflict_should_report_swap_owned_by_other_process() {
 	let swap_dir = make_tmp_dir("conflict-peer");
 	let source_path = swap_dir.join("sample.txt");
-	let mut session = SwapSession::new(
+	let session = SwapSession::new(
 		BufferId::default(),
 		source_path.as_path(),
 		swap_dir.as_path(),
@@ -335,7 +335,7 @@ fn detect_conflict_should_report_swap_owned_by_other_process() {
 fn detect_conflict_should_ignore_swap_owned_by_alive_other_process() {
 	let swap_dir = make_tmp_dir("conflict-peer-alive");
 	let source_path = swap_dir.join("sample.txt");
-	let mut session = SwapSession::new(
+	let session = SwapSession::new(
 		BufferId::default(),
 		source_path.as_path(),
 		swap_dir.as_path(),
@@ -436,7 +436,7 @@ fn recover_without_existing_swap_should_not_emit_recover_completed_event() {
 fn close_should_keep_swap_file_when_owned_by_other_process() {
 	let swap_dir = make_tmp_dir("drop-foreign-owner");
 	let source_path = swap_dir.join("sample.txt");
-	let mut session = SwapSession::new(
+	let session = SwapSession::new(
 		BufferId::default(),
 		source_path.as_path(),
 		swap_dir.as_path(),

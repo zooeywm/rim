@@ -535,10 +535,10 @@ impl RimState {
 	}
 
 	pub(crate) fn active_cursor_display_col(&self) -> u16 {
-		if self.is_visual_block_mode() {
-			if let Some(col) = self.visual_block_cursor_display_col {
-				return col;
-			}
+		if self.is_visual_block_mode()
+			&& let Some(col) = self.visual_block_cursor_display_col
+		{
+			return col;
 		}
 		if let Some(block_insert) = self.pending_block_insert {
 			return block_insert.cursor_display_col;

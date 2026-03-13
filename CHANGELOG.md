@@ -1,6 +1,46 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [0.0.3] - 2026-03-13
+
+### Bug Fixes
+
+- Fix visual block insert inside tab padding
+
+
+### Chore
+
+- Cargo update
+
+
+### Features
+
+- Split config files and unify keymap-driven editor behavior
+
+- Add full config reload and floating key hint window
+
+- Add command palette with invalid alias diagnostics
+
+- Unify workspace picker IO and overlay keymap scopes
+
+- Make key hints toggleable across overlay scopes
+
+- Finalize picker preview and wrap/scroll behavior improvements
+
+- Scrollable file picker and hot reload in filer picker and preview
+
+
+### Refactor
+
+- Derive typed builtin command metadata and run directives
+
+- Unify wrap/tab display geometry across kernel and UI
+
+
+### Tests
+
+- Cover wrap geometry and display-column cursor behavior
+
 ## [0.0.2] - 2026-03-10
 
 ### Features
