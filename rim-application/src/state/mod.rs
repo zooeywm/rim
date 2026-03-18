@@ -13,7 +13,7 @@ mod session;
 mod tab;
 mod window;
 
-pub(crate) use rim_domain::text::{buffer_name_from_path, clamp_cursor_for_rope, compute_rope_text_diff, rope_ends_with_newline, rope_is_empty, rope_line_count, rope_line_len_chars, rope_line_without_newline};
+pub(crate) use rim_domain::text::{buffer_name_from_path, compute_rope_text_diff, rope_line_count, rope_line_without_newline};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusBarState {
@@ -1412,10 +1412,6 @@ impl RimState {
 
 	pub(crate) fn sync_window_view_binding(&mut self, window_id: WindowId) {
 		self.editor.sync_window_view_binding(window_id);
-	}
-
-	pub(crate) fn remove_window_view_bindings(&mut self, window_id: WindowId) {
-		self.editor.remove_window_view_bindings(window_id);
 	}
 }
 

@@ -1,197 +1,75 @@
 use ropey::Rope;
 
 use super::RimState;
-use crate::{display_geometry::{char_display_width as geom_char_display_width, cursor_col_for_display_slot as geom_cursor_col_for_display_slot, display_col_of_cursor_slot as geom_display_col_of_cursor_slot, display_width_of_char_prefix_with_virtual as geom_display_width_of_char_prefix_with_virtual, navigable_col_for_display_target as geom_navigable_col_for_display_target, wrapped_row_index_for_cursor as geom_wrapped_row_index_for_cursor, wrapped_total_rows_for_rope as geom_wrapped_total_rows_for_rope}, state::{CursorState, WindowId, rope_ends_with_newline, rope_is_empty, rope_line_count, rope_line_len_chars, rope_line_without_newline}};
+use crate::{display_geometry::{char_display_width as geom_char_display_width, display_col_of_cursor_slot as geom_display_col_of_cursor_slot, wrapped_row_index_for_cursor as geom_wrapped_row_index_for_cursor, wrapped_total_rows_for_rope as geom_wrapped_total_rows_for_rope}, state::{CursorState, WindowId, rope_line_count, rope_line_without_newline}};
 
 impl RimState {
 	pub fn move_cursor_up(&mut self) {
 		tracing::trace!("move up");
-		let target_display_col = self.target_display_col_for_vertical_move();
-		if let Some(cursor) = self.active_buffer_cursor_mut()
-			&& cursor.row > 1
-		{
-			cursor.row = cursor.row.saturating_sub(1);
-		}
-		let row = self.active_cursor().row;
-		let target_col = if self.is_visual_block_mode() || self.is_block_insert_mode() {
-			self.visual_block_col_for_display_target(row, target_display_col)
-		} else {
-			self.navigable_col_for_display_target(row, target_display_col)
-		};
-		if let Some(cursor) = self.active_buffer_cursor_mut() {
-			cursor.col = target_col;
-		}
+		self.editor.move_cursor_up();
 		self.adjust_scroll_after_vertical_move(VerticalMoveDirection::Up);
 	}
 
 	pub fn move_cursor_down(&mut self) {
 		tracing::trace!("move down");
-		let target_display_col = self.target_display_col_for_vertical_move();
-		let max_row = self.max_row();
-		if let Some(cursor) = self.active_buffer_cursor_mut()
-			&& cursor.row < max_row
-		{
-			cursor.row = cursor.row.saturating_add(1);
-		}
-		let row = self.active_cursor().row;
-		let target_col = if self.is_visual_block_mode() || self.is_block_insert_mode() {
-			self.visual_block_col_for_display_target(row, target_display_col)
-		} else {
-			self.navigable_col_for_display_target(row, target_display_col)
-		};
-		if let Some(cursor) = self.active_buffer_cursor_mut() {
-			cursor.col = target_col;
-		}
+		self.editor.move_cursor_down();
 		self.adjust_scroll_after_vertical_move(VerticalMoveDirection::Down);
 	}
 
 	pub fn move_cursor_left(&mut self) {
 		tracing::trace!("move left");
-		if let Some(cursor) = self.active_buffer_cursor_mut()
-			&& cursor.col > 1
-		{
-			cursor.col = cursor.col.saturating_sub(1);
-		}
-		self.preferred_col = None;
+		self.editor.move_cursor_left();
 		self.adjust_scroll_after_horizontal_move(HorizontalMoveDirection::Left);
 	}
 
 	pub fn move_cursor_right(&mut self) {
 		tracing::trace!("move right");
-		let row = self.active_cursor().row;
-		let max_col = self.max_navigable_col_for_row(row);
-		if let Some(cursor) = self.active_buffer_cursor_mut()
-			&& cursor.col < max_col
-		{
-			cursor.col = cursor.col.saturating_add(1);
-		}
-		self.preferred_col = None;
+		self.editor.move_cursor_right();
 		self.adjust_scroll_after_horizontal_move(HorizontalMoveDirection::Right);
 	}
 
 	pub fn move_cursor_left_for_visual_char(&mut self) {
-		if self.is_visual_block_mode() {
-			let next_display_col = self
-				.visual_block_cursor_display_col
-				.unwrap_or_else(|| self.active_cursor_display_col())
-				.saturating_sub(1);
-			self.visual_block_cursor_display_col = Some(next_display_col);
-			self.preferred_col = Some(next_display_col);
-			let row = self.active_cursor().row;
-			let target_col = self.visual_block_col_for_display_target(row, next_display_col);
-			if let Some(cursor_mut) = self.active_buffer_cursor_mut() {
-				cursor_mut.col = target_col;
-			}
-			self.adjust_scroll_after_horizontal_move(HorizontalMoveDirection::Left);
-			return;
-		}
-		if let Some(cursor_mut) = self.active_buffer_cursor_mut()
-			&& cursor_mut.col > 1
-		{
-			cursor_mut.col = cursor_mut.col.saturating_sub(1);
-		}
-		self.preferred_col = None;
+		self.editor.move_cursor_left_for_visual_char();
 		self.adjust_scroll_after_horizontal_move(HorizontalMoveDirection::Left);
 	}
 
 	pub fn move_cursor_right_for_visual_char(&mut self) {
-		if self.is_visual_block_mode() {
-			let next_display_col = self
-				.visual_block_cursor_display_col
-				.unwrap_or_else(|| self.active_cursor_display_col())
-				.saturating_add(1);
-			self.visual_block_cursor_display_col = Some(next_display_col);
-			self.preferred_col = Some(next_display_col);
-			let row = self.active_cursor().row;
-			let target_col = self.visual_block_col_for_display_target(row, next_display_col);
-			if let Some(cursor_mut) = self.active_buffer_cursor_mut() {
-				cursor_mut.col = target_col;
-			}
-			self.adjust_scroll_after_horizontal_move(HorizontalMoveDirection::Right);
-			return;
-		}
-		let row = self.active_cursor().row;
-		let max_col = self.max_visual_char_col_for_row(row);
-		if let Some(cursor_mut) = self.active_buffer_cursor_mut()
-			&& cursor_mut.col < max_col
-		{
-			cursor_mut.col = cursor_mut.col.saturating_add(1);
-		}
-		self.preferred_col = None;
+		self.editor.move_cursor_right_for_visual_char();
 		self.adjust_scroll_after_horizontal_move(HorizontalMoveDirection::Right);
 	}
 
 	pub fn move_cursor_line_start(&mut self) {
-		if let Some(cursor) = self.active_buffer_cursor_mut() {
-			cursor.col = 1;
-		}
-		self.preferred_col = None;
+		self.editor.move_cursor_line_start();
 		self.adjust_scroll_after_horizontal_move(HorizontalMoveDirection::Left);
 	}
 
 	pub fn move_cursor_line_end(&mut self) {
-		let row = self.active_cursor().row;
-		let max_col = self.max_navigable_col_for_row(row);
-		if let Some(cursor) = self.active_buffer_cursor_mut() {
-			cursor.col = max_col;
-		}
-		self.preferred_col = None;
+		self.editor.move_cursor_line_end();
 		self.adjust_scroll_after_horizontal_move(HorizontalMoveDirection::Right);
 	}
 
 	pub fn move_cursor_file_start(&mut self) {
-		let target_display_col = self.capture_preferred_col_for_vertical();
-		if let Some(cursor) = self.active_buffer_cursor_mut() {
-			cursor.row = 1;
-		}
-		let target_col = self.navigable_col_for_display_target(1, target_display_col);
-		if let Some(cursor) = self.active_buffer_cursor_mut() {
-			cursor.col = target_col;
-		}
+		self.editor.move_cursor_file_start();
 		self.adjust_scroll_after_vertical_move(VerticalMoveDirection::Up);
 	}
 
 	pub fn move_cursor_file_end(&mut self) {
-		let target_display_col = self.capture_preferred_col_for_vertical();
-		let max_row = self.max_row();
-		if let Some(cursor) = self.active_buffer_cursor_mut() {
-			cursor.row = max_row;
-		}
-		let target_col = self.navigable_col_for_display_target(max_row, target_display_col);
-		if let Some(cursor) = self.active_buffer_cursor_mut() {
-			cursor.col = target_col;
-		}
+		self.editor.move_cursor_file_end();
 		self.adjust_scroll_after_vertical_move(VerticalMoveDirection::Down);
 	}
 
 	pub fn move_cursor_right_for_insert(&mut self) {
-		let row = self.active_cursor().row;
-		let max_col = self.max_col_for_row(row);
-		if let Some(cursor) = self.active_buffer_cursor_mut()
-			&& cursor.col < max_col
-		{
-			cursor.col = cursor.col.saturating_add(1);
-		}
-		self.preferred_col = None;
+		self.editor.move_cursor_right_for_insert();
 		self.adjust_scroll_after_horizontal_move(HorizontalMoveDirection::Right);
 	}
 
 	pub fn move_cursor_to_insert_line_end_slot(&mut self) {
-		let row = self.active_cursor().row;
-		let max_col = self.max_col_for_row(row);
-		if let Some(cursor) = self.active_buffer_cursor_mut() {
-			cursor.col = max_col.max(1);
-		}
-		self.preferred_col = None;
+		self.editor.move_cursor_to_insert_line_end_slot();
 		self.adjust_scroll_after_horizontal_move(HorizontalMoveDirection::Right);
 	}
 
 	pub(crate) fn clamp_cursor_to_navigable_col(&mut self) {
-		let row = self.active_cursor().row;
-		let max_col = self.max_navigable_col_for_row(row);
-		if let Some(cursor) = self.active_buffer_cursor_mut() {
-			cursor.col = cursor.col.min(max_col).max(1);
-		}
+		self.editor.clamp_cursor_to_navigable_col();
 		self.align_active_window_scroll_to_cursor();
 	}
 
@@ -235,27 +113,9 @@ impl RimState {
 		changed
 	}
 
-	pub fn active_cursor(&self) -> CursorState {
-		self.windows.get(self.active_window_id()).map(|window| window.cursor).unwrap_or_default()
-	}
+	pub fn active_cursor(&self) -> CursorState { self.editor.active_cursor() }
 
-	fn target_display_col_for_vertical_move(&mut self) -> u16 {
-		if self.is_visual_block_mode() {
-			let col = self.visual_block_cursor_display_col.unwrap_or_else(|| self.active_cursor_display_col());
-			self.preferred_col = Some(col);
-			return col;
-		}
-		self.capture_preferred_col_for_vertical()
-	}
-
-	fn capture_preferred_col_for_vertical(&mut self) -> u16 {
-		if let Some(col) = self.preferred_col {
-			return col;
-		}
-		let col = self.active_cursor_display_col();
-		self.preferred_col = Some(col);
-		col
-	}
+	fn capture_preferred_col_for_vertical(&mut self) -> u16 { self.editor.capture_preferred_col_for_vertical() }
 
 	fn move_cursor_and_scroll_half_page(&mut self, delta: i16, target_display_col: u16) {
 		let active_window_id = self.active_window_id();
@@ -282,35 +142,7 @@ impl RimState {
 		}
 	}
 
-	fn max_row(&self) -> u16 { self.active_buffer_rope().map(|text| rope_line_count(text) as u16).unwrap_or(1) }
-
-	pub(super) fn max_col_for_row(&self, row: u16) -> u16 {
-		let row_index = row.saturating_sub(1) as usize;
-		let line_len =
-			self.active_buffer_rope().map(|text| rope_line_len_chars(text, row_index) as u16).unwrap_or(0);
-		line_len.saturating_add(1)
-	}
-
-	fn max_navigable_col_for_row(&self, row: u16) -> u16 { self.max_col_for_row(row).saturating_sub(1).max(1) }
-
-	fn max_visual_char_col_for_row(&self, row: u16) -> u16 {
-		let line_len = self.max_col_for_row(row).saturating_sub(1);
-		if self.row_has_newline_char(row) { line_len.saturating_add(1).max(1) } else { line_len.max(1) }
-	}
-
-	fn row_has_newline_char(&self, row: u16) -> bool {
-		let Some(text) = self.active_buffer_rope() else {
-			return false;
-		};
-		if rope_is_empty(text) {
-			return false;
-		}
-		let total_rows = rope_line_count(text) as u16;
-		if row < total_rows {
-			return true;
-		}
-		row == total_rows && rope_ends_with_newline(text)
-	}
+	fn max_row(&self) -> u16 { self.editor.max_row() }
 
 	fn active_window_visible_rows(&self) -> u16 {
 		let window_id = self.active_window_id();
@@ -535,56 +367,12 @@ impl RimState {
 		}
 	}
 
-	pub(crate) fn active_cursor_display_col(&self) -> u16 {
-		if self.is_visual_block_mode()
-			&& let Some(col) = self.visual_block_cursor_display_col
-		{
-			return col;
-		}
-		if let Some(block_insert) = self.pending_block_insert {
-			return block_insert.cursor_display_col;
-		}
-		let cursor = self.active_cursor();
-		let row_index = cursor.row.saturating_sub(1) as usize;
-		let char_index = cursor.col.saturating_sub(1) as usize;
-		self
-			.active_buffer_rope()
-			.and_then(|text| rope_line_without_newline(text, row_index))
-			.map(|line| geom_display_width_of_char_prefix_with_virtual(line.as_str(), char_index) as u16)
-			.unwrap_or(0)
-	}
+	pub(crate) fn active_cursor_display_col(&self) -> u16 { self.editor.active_cursor_display_col() }
 
-	fn active_line_display_width(&self) -> u16 {
-		let cursor = self.active_cursor();
-		let row_index = cursor.row.saturating_sub(1) as usize;
-		let base_width = self
-			.active_buffer_rope()
-			.and_then(|text| rope_line_without_newline(text, row_index))
-			.map(|line| line.chars().map(|ch| geom_char_display_width(ch) as u16).sum())
-			.unwrap_or(0);
-
-		if self.is_visual_block_mode() || self.is_block_insert_mode() {
-			base_width.max(self.active_cursor_display_col())
-		} else {
-			base_width
-		}
-	}
+	fn active_line_display_width(&self) -> u16 { self.editor.active_line_display_width() }
 
 	fn navigable_col_for_display_target(&self, row: u16, target_display_col: u16) -> u16 {
-		let Some(text) = self.active_buffer_rope() else {
-			return 1;
-		};
-		let col = geom_navigable_col_for_display_target(text, row, target_display_col);
-		col.min(self.max_navigable_col_for_row(row)).max(1)
-	}
-
-	fn visual_block_col_for_display_target(&self, row: u16, target_display_col: u16) -> u16 {
-		let row_index = row.saturating_sub(1) as usize;
-		let Some(line) = self.active_buffer_rope().and_then(|text| rope_line_without_newline(text, row_index))
-		else {
-			return target_display_col.saturating_add(1).max(1);
-		};
-		geom_cursor_col_for_display_slot(line.as_str(), target_display_col)
+		self.editor.navigable_col_for_display_target(row, target_display_col)
 	}
 
 	fn max_scroll_y_for_active_window(&self, visible_rows: u16) -> u16 {

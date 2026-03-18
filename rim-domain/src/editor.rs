@@ -1,7 +1,10 @@
 mod buffer;
 mod core;
 mod edit;
+mod movement;
+mod session;
 mod tab;
+mod visual;
 mod window;
 
 use std::collections::{BTreeMap, HashMap};
@@ -14,7 +17,9 @@ use crate::model::{BufferId, BufferState, CursorState, EditorMode, PendingBlockI
 pub enum EditorOperationError {
 	NoActiveBuffer,
 	ActiveBufferMissing,
+	NoAnchor,
 	OutOfRange,
+	EmptySelection,
 	NoChar,
 	SlotEmpty,
 	NothingToUndo,
