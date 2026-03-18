@@ -53,9 +53,9 @@ impl RimState {
 impl RimState {
 	fn predicted_normal_mode_editor_action_for_key(state: &RimState, key: KeyEvent) -> Option<EditorAction> {
 		let normal_key = Self::to_normal_key(state, key)?;
-		let mut keys = state.normal_sequence.clone();
+		let mut keys = state.workbench.normal_sequence.clone();
 		keys.push(normal_key);
-		match mode_flow::resolve_normal_sequence_with_registry(&state.command_registry, &keys) {
+		match mode_flow::resolve_normal_sequence_with_registry(&state.workbench.command_registry, &keys) {
 			SequenceMatch::Action(AppAction::Editor(editor_action)) => Some(editor_action),
 			_ => None,
 		}
@@ -63,7 +63,7 @@ impl RimState {
 
 	fn dispatch_internal<P>(ports: &P, state: &mut RimState, action: AppAction) -> ControlFlow<()>
 	where P: ActionPorts {
-		let status_before = state.status_bar.message.clone();
+		let status_before = state.workbench.status_bar.message.clone();
 		match action {
 			AppAction::Editor(EditorAction::KeyPressed(key)) => {
 				return Self::handle_key(ports, state, key);
@@ -120,11 +120,12 @@ impl RimState {
 				}
 			},
 		}
-		if state.status_bar.message != status_before && is_error_status_message(state.status_bar.message.as_str())
+		if state.workbench.status_bar.message != status_before
+			&& is_error_status_message(state.workbench.status_bar.message.as_str())
 		{
-			let error_message = state.status_bar.message.clone();
+			let error_message = state.workbench.status_bar.message.clone();
 			state.push_notification(NotificationLevel::Error, error_message);
-			state.status_bar.message = status_before;
+			state.workbench.status_bar.message = status_before;
 		}
 		ControlFlow::Continue(())
 	}

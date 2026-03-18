@@ -72,7 +72,7 @@ where
 	P: ActionPorts,
 {
 	let normal_key = super::mode_flow::to_normal_key(state, key)?;
-	match state.command_registry.resolve_scope_sequence(scope, &[normal_key]) {
+	match state.workbench.command_registry.resolve_scope_sequence(scope, &[normal_key]) {
 		BindingMatch::Exact(CommandTarget::Builtin(builtin)) => {
 			Some(execute_builtin_command(ports, state, builtin, None))
 		}
@@ -83,13 +83,13 @@ where
 
 fn execute_current_command_input<P>(ports: &P, state: &mut RimState) -> ControlFlow<()>
 where P: ActionPorts {
-	let raw_command = state.command_line.clone();
+	let raw_command = state.workbench.command_line.clone();
 	let command = raw_command.trim().to_string();
 	if command.is_empty() {
 		state.exit_command_mode();
 		return ControlFlow::Continue(());
 	}
-	let resolved = state.command_registry.resolve_command_input(command.as_str());
+	let resolved = state.workbench.command_registry.resolve_command_input(command.as_str());
 	let Some(resolved) = resolved else {
 		state.push_notification(NotificationLevel::Error, format!("unknown command: {}", command));
 		return ControlFlow::Continue(());
@@ -356,7 +356,7 @@ where P: StoragePorts {
 		let err = ActionHandlerError::Reload { source };
 		error!("workspace file list enqueue failed for command palette: {}", err);
 		state.fail_workspace_file_cache_loading();
-		state.status_bar.message = format!("workspace file list failed: {}", err);
+		state.workbench.status_bar.message = format!("workspace file list failed: {}", err);
 	}
 }
 
@@ -394,7 +394,7 @@ where P: ActionPorts {
 		error!("workspace file picker enqueue failed: {}", err);
 		state.fail_workspace_file_cache_loading();
 		state.close_workspace_file_picker();
-		state.status_bar.message = format!("workspace file picker failed: {}", err);
+		state.workbench.status_bar.message = format!("workspace file picker failed: {}", err);
 	}
 }
 
@@ -418,17 +418,17 @@ where P: StoragePorts {
 fn quit_application<P>(ports: &P, state: &mut RimState, force: bool) -> ControlFlow<()>
 where P: ActionPorts {
 	if !force && state.has_dirty_buffers() {
-		state.status_bar.message = "quit all blocked: unsaved changes".to_string();
+		state.workbench.status_bar.message = "quit all blocked: unsaved changes".to_string();
 		return ControlFlow::Continue(());
 	}
-	state.force_quit_trim_file_dirty_in_session = force;
+	state.workbench.force_quit_trim_file_dirty_in_session = force;
 	RimState::dispatch_internal(ports, state, AppAction::System(crate::action::SystemAction::Quit))
 }
 
 fn quit_current_scope<P>(ports: &P, state: &mut RimState, force: bool) -> ControlFlow<()>
 where P: ActionPorts {
 	if !force && state.has_dirty_buffers() {
-		state.status_bar.message = "quit blocked: unsaved changes (use :q!)".to_string();
+		state.workbench.status_bar.message = "quit blocked: unsaved changes (use :q!)".to_string();
 		return ControlFlow::Continue(());
 	}
 	if state.active_tab_window_ids().len() > 1 {
@@ -437,7 +437,7 @@ where P: ActionPorts {
 	if state.tabs.len() > 1 {
 		return RimState::dispatch_internal(ports, state, AppAction::Tab(crate::action::TabAction::CloseCurrent));
 	}
-	state.force_quit_trim_file_dirty_in_session = force;
+	state.workbench.force_quit_trim_file_dirty_in_session = force;
 	RimState::dispatch_internal(ports, state, AppAction::System(crate::action::SystemAction::Quit))
 }
 
@@ -454,8 +454,9 @@ fn enqueue_save_active_buffer<P>(
 		&& path_override.is_none()
 		&& matches!(state.active_buffer_is_externally_modified(), Some(true))
 	{
-		state.status_bar.message = "save blocked: file changed externally (use :w! to overwrite)".to_string();
-		state.quit_after_save = false;
+		state.workbench.status_bar.message =
+			"save blocked: file changed externally (use :w! to overwrite)".to_string();
+		state.workbench.quit_after_save = false;
 		return;
 	}
 
@@ -464,20 +465,20 @@ fn enqueue_save_active_buffer<P>(
 	let (buffer_id, path, text) = match state.active_buffer_save_snapshot(path_override.clone()) {
 		Ok(snapshot) => snapshot,
 		Err(reason) => {
-			state.status_bar.message = format!("save failed: {}", reason);
-			state.quit_after_save = false;
+			state.workbench.status_bar.message = format!("save failed: {}", reason);
+			state.workbench.quit_after_save = false;
 			return;
 		}
 	};
 
-	state.in_flight_internal_saves.insert(buffer_id);
+	state.workbench.in_flight_internal_saves.insert(buffer_id);
 	if let Err(source) = ports.enqueue_save(buffer_id, path, text) {
 		let err = ActionHandlerError::Save { source };
 		error!("io worker unavailable while enqueueing file save: {}", err);
-		state.status_bar.message = "save failed: io worker unavailable".to_string();
-		state.in_flight_internal_saves.remove(&buffer_id);
+		state.workbench.status_bar.message = "save failed: io worker unavailable".to_string();
+		state.workbench.in_flight_internal_saves.remove(&buffer_id);
 		state.clear_recent_internal_save(buffer_id);
-		state.quit_after_save = false;
+		state.workbench.quit_after_save = false;
 		return;
 	}
 
@@ -486,8 +487,8 @@ fn enqueue_save_active_buffer<P>(
 	} else {
 		state.set_pending_save_path(buffer_id, None);
 	}
-	state.quit_after_save = quit_after_save;
-	state.status_bar.message = "saving...".to_string();
+	state.workbench.quit_after_save = quit_after_save;
+	state.workbench.status_bar.message = "saving...".to_string();
 }
 
 fn enqueue_reload_active_buffer<P>(ports: &P, state: &mut RimState, force_reload: bool)
@@ -495,14 +496,15 @@ where P: RuntimePorts {
 	let active_is_dirty =
 		state.active_buffer_id().and_then(|id| state.buffers.get(id)).map(|buffer| buffer.dirty).unwrap_or(false);
 	if !force_reload && active_is_dirty {
-		state.status_bar.message = "reload blocked: buffer is dirty (use :e! to force reload)".to_string();
+		state.workbench.status_bar.message =
+			"reload blocked: buffer is dirty (use :e! to force reload)".to_string();
 		return;
 	}
 
 	let (buffer_id, path) = match state.active_buffer_load_target() {
 		Ok(target) => target,
 		Err(reason) => {
-			state.status_bar.message = format!("reload failed: {}", reason);
+			state.workbench.status_bar.message = format!("reload failed: {}", reason);
 			return;
 		}
 	};
@@ -510,10 +512,10 @@ where P: RuntimePorts {
 	if let Err(source) = ports.enqueue_load(buffer_id, path.clone()) {
 		let err = ActionHandlerError::Reload { source };
 		error!("io worker unavailable while enqueueing file load: {}", err);
-		state.status_bar.message = "reload failed: io worker unavailable".to_string();
+		state.workbench.status_bar.message = "reload failed: io worker unavailable".to_string();
 		return;
 	}
-	state.status_bar.message = format!("loading {}", path.display());
+	state.workbench.status_bar.message = format!("loading {}", path.display());
 }
 
 fn enqueue_open_with_picker<P>(ports: &P, state: &mut RimState)
@@ -523,11 +525,11 @@ where P: ActionPorts {
 			let _ = RimState::dispatch_internal(ports, state, AppAction::File(FileAction::OpenRequested { path }));
 		}
 		Ok(None) => {
-			state.status_bar.message = "open cancelled".to_string();
+			state.workbench.status_bar.message = "open cancelled".to_string();
 		}
 		Err(err) => {
 			error!("file picker failed: {}", err);
-			state.status_bar.message = format!("open failed: {}", err);
+			state.workbench.status_bar.message = format!("open failed: {}", err);
 		}
 	}
 }
@@ -542,44 +544,45 @@ fn enqueue_save_all_buffers<P>(
 {
 	let (snapshots, missing_path) = state.all_buffer_save_snapshots();
 	if missing_path > 0 {
-		state.status_bar.message = format!("save all failed: {} buffer(s) have no file path", missing_path);
-		state.quit_after_save = false;
+		state.workbench.status_bar.message =
+			format!("save all failed: {} buffer(s) have no file path", missing_path);
+		state.workbench.quit_after_save = false;
 		return;
 	}
 	if !force_overwrite
 		&& snapshots.iter().any(|(buffer_id, ..)| {
 			state.buffers.get(*buffer_id).map(|buffer| buffer.externally_modified).unwrap_or(false)
 		}) {
-		state.status_bar.message =
+		state.workbench.status_bar.message =
 			"save all blocked: file changed externally (use :wqa! to overwrite)".to_string();
-		state.quit_after_save = false;
+		state.workbench.quit_after_save = false;
 		return;
 	}
 	if snapshots.is_empty() {
 		if missing_path > 0 {
-			state.status_bar.message = "save failed: no buffer has file path".to_string();
+			state.workbench.status_bar.message = "save failed: no buffer has file path".to_string();
 		} else {
-			state.status_bar.message = "nothing to save".to_string();
+			state.workbench.status_bar.message = "nothing to save".to_string();
 		}
-		state.quit_after_save = false;
+		state.workbench.quit_after_save = false;
 		return;
 	}
 
 	let mut enqueued = 0usize;
 	for (buffer_id, path, text) in snapshots {
-		state.in_flight_internal_saves.insert(buffer_id);
+		state.workbench.in_flight_internal_saves.insert(buffer_id);
 		if let Err(source) = ports.enqueue_save(buffer_id, path, text) {
 			let err = ActionHandlerError::SaveAll { source };
 			error!("io worker unavailable while enqueueing file save: {}", err);
-			state.status_bar.message = "save failed: io worker unavailable".to_string();
-			state.in_flight_internal_saves.remove(&buffer_id);
+			state.workbench.status_bar.message = "save failed: io worker unavailable".to_string();
+			state.workbench.in_flight_internal_saves.remove(&buffer_id);
 			state.clear_recent_internal_save(buffer_id);
-			state.quit_after_save = false;
+			state.workbench.quit_after_save = false;
 			return;
 		}
 		enqueued = enqueued.saturating_add(1);
 	}
 
-	state.quit_after_save = quit_after_save;
-	state.status_bar.message = format!("saving {} buffers...", enqueued);
+	state.workbench.quit_after_save = quit_after_save;
+	state.workbench.status_bar.message = format!("saving {} buffers...", enqueued);
 }

@@ -19,13 +19,16 @@ impl RimState {
 		let cursor_pos = format!("{}:{} {}", cursor.row, cursor.col, progress);
 
 		if self.mode == EditorMode::Command {
-			return format!(":{} | {}", self.command_line, cursor_pos);
+			return format!(":{} | {}", self.workbench.command_line, cursor_pos);
 		}
-		if self.status_bar.key_sequence.is_empty() {
-			return format!("{} | {}", self.status_bar.message, cursor_pos);
+		if self.workbench.status_bar.key_sequence.is_empty() {
+			return format!("{} | {}", self.workbench.status_bar.message, cursor_pos);
 		}
 
-		format!("{} | keys {} | {}", self.status_bar.message, self.status_bar.key_sequence, cursor_pos)
+		format!(
+			"{} | keys {} | {}",
+			self.workbench.status_bar.message, self.workbench.status_bar.key_sequence, cursor_pos
+		)
 	}
 
 	pub fn is_insert_mode(&self) -> bool { self.mode == EditorMode::Insert }
@@ -50,7 +53,7 @@ impl RimState {
 		self.visual_block_anchor_display_col = None;
 		self.visual_block_cursor_display_col = None;
 		self.pending_block_insert = None;
-		self.status_bar.mode = StatusBarMode::Insert;
+		self.workbench.status_bar.mode = StatusBarMode::Insert;
 		self.close_key_hints();
 		self.close_workspace_file_picker();
 		self.close_notification_center();
@@ -62,7 +65,7 @@ impl RimState {
 		self.visual_block_anchor_display_col = None;
 		self.visual_block_cursor_display_col = None;
 		self.pending_block_insert = Some(pending);
-		self.status_bar.mode = StatusBarMode::InsertBlock;
+		self.workbench.status_bar.mode = StatusBarMode::InsertBlock;
 		self.close_key_hints();
 		self.close_workspace_file_picker();
 		self.close_notification_center();
@@ -74,7 +77,7 @@ impl RimState {
 		self.visual_block_anchor_display_col = None;
 		self.visual_block_cursor_display_col = None;
 		self.pending_block_insert = None;
-		self.status_bar.mode = StatusBarMode::Normal;
+		self.workbench.status_bar.mode = StatusBarMode::Normal;
 		self.close_key_hints();
 		self.close_workspace_file_picker();
 		self.close_notification_center();
@@ -84,8 +87,8 @@ impl RimState {
 	pub fn enter_command_mode(&mut self) {
 		self.mode = EditorMode::Command;
 		self.visual_anchor = None;
-		self.command_line.clear();
-		self.status_bar.mode = StatusBarMode::Command;
+		self.workbench.command_line.clear();
+		self.workbench.status_bar.mode = StatusBarMode::Command;
 		self.close_key_hints();
 		self.close_workspace_file_picker();
 		self.close_notification_center();
@@ -95,8 +98,8 @@ impl RimState {
 	pub fn exit_command_mode(&mut self) {
 		self.mode = EditorMode::Normal;
 		self.visual_anchor = None;
-		self.command_line.clear();
-		self.status_bar.mode = StatusBarMode::Normal;
+		self.workbench.command_line.clear();
+		self.workbench.status_bar.mode = StatusBarMode::Normal;
 		self.close_key_hints();
 		self.close_command_palette();
 		self.close_workspace_file_picker();
@@ -110,7 +113,7 @@ impl RimState {
 		}
 		self.visual_block_anchor_display_col = None;
 		self.visual_block_cursor_display_col = None;
-		self.status_bar.mode = StatusBarMode::Visual;
+		self.workbench.status_bar.mode = StatusBarMode::Visual;
 		self.close_key_hints();
 		self.close_workspace_file_picker();
 		self.close_notification_center();
@@ -122,7 +125,7 @@ impl RimState {
 		self.visual_anchor = Some(CursorState { row: anchor_row, col: 1 });
 		self.visual_block_anchor_display_col = None;
 		self.visual_block_cursor_display_col = None;
-		self.status_bar.mode = StatusBarMode::VisualLine;
+		self.workbench.status_bar.mode = StatusBarMode::VisualLine;
 		self.close_key_hints();
 		self.close_workspace_file_picker();
 		self.close_notification_center();
@@ -136,7 +139,7 @@ impl RimState {
 		let display_col = self.active_cursor_display_col();
 		self.visual_block_anchor_display_col = Some(display_col);
 		self.visual_block_cursor_display_col = Some(display_col);
-		self.status_bar.mode = StatusBarMode::VisualBlock;
+		self.workbench.status_bar.mode = StatusBarMode::VisualBlock;
 		self.close_key_hints();
 		self.close_workspace_file_picker();
 		self.close_notification_center();
@@ -147,34 +150,34 @@ impl RimState {
 		self.visual_anchor = None;
 		self.visual_block_anchor_display_col = None;
 		self.visual_block_cursor_display_col = None;
-		self.status_bar.mode = StatusBarMode::Normal;
+		self.workbench.status_bar.mode = StatusBarMode::Normal;
 		self.close_key_hints();
 		self.close_workspace_file_picker();
 		self.close_notification_center();
 	}
 
 	pub fn push_command_char(&mut self, ch: char) {
-		self.command_line.push(ch);
+		self.workbench.command_line.push(ch);
 		self.refresh_command_palette();
 	}
 
 	pub fn pop_command_char(&mut self) {
-		let _ = self.command_line.pop();
+		let _ = self.workbench.command_line.pop();
 		self.refresh_command_palette();
 	}
 
 	pub fn take_command_line(&mut self) -> String {
-		let command = self.command_line.trim().to_string();
+		let command = self.workbench.command_line.trim().to_string();
 		self.exit_command_mode();
 		command
 	}
 
 	pub fn set_pending_swap_decision(&mut self, pending: PendingSwapDecision) {
-		self.pending_swap_decision = Some(pending);
+		self.workbench.pending_swap_decision = Some(pending);
 	}
 
 	pub fn take_pending_swap_decision(&mut self) -> Option<PendingSwapDecision> {
-		self.pending_swap_decision.take()
+		self.workbench.pending_swap_decision.take()
 	}
 
 	pub fn begin_insert_history_group(&mut self) {

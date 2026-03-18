@@ -4,12 +4,12 @@ use crate::display_geometry::{char_display_width as geom_char_display_width, cur
 impl RimState {
 	pub fn begin_visual_block_insert(&mut self, append: bool) {
 		let Some((start, end)) = self.normalized_visual_bounds() else {
-			self.status_bar.message = "block insert failed: no anchor".to_string();
+			self.workbench.status_bar.message = "block insert failed: no anchor".to_string();
 			self.exit_visual_mode();
 			return;
 		};
 		let Some(text) = self.active_buffer_rope() else {
-			self.status_bar.message = "block insert failed: no active buffer".to_string();
+			self.workbench.status_bar.message = "block insert failed: no active buffer".to_string();
 			self.exit_visual_mode();
 			return;
 		};
@@ -18,7 +18,7 @@ impl RimState {
 		let insert_col = block_col_for_display_target(text, start.row, target_display);
 
 		let Some((_buffer, window)) = self.active_buffer_and_window_mut() else {
-			self.status_bar.message = "block insert failed: no active buffer".to_string();
+			self.workbench.status_bar.message = "block insert failed: no active buffer".to_string();
 			self.exit_visual_mode();
 			return;
 		};
@@ -148,13 +148,13 @@ impl RimState {
 		let line_wise = self.is_visual_line_mode();
 		let block_wise = self.is_visual_block_mode();
 		let Some((start, end)) = self.normalized_visual_bounds() else {
-			self.status_bar.message = "visual delete failed: no anchor".to_string();
+			self.workbench.status_bar.message = "visual delete failed: no anchor".to_string();
 			self.exit_visual_mode();
 			return false;
 		};
 
 		let Some((buffer, window)) = self.active_buffer_and_window_mut() else {
-			self.status_bar.message = "visual delete failed: no active buffer".to_string();
+			self.workbench.status_bar.message = "visual delete failed: no active buffer".to_string();
 			self.exit_visual_mode();
 			return false;
 		};
@@ -163,7 +163,7 @@ impl RimState {
 		let end_row = end.row.saturating_sub(1) as usize;
 		let editable_line_count = rope_editable_line_count(&buffer.text);
 		if start_row >= editable_line_count || end_row >= editable_line_count {
-			self.status_bar.message = "visual delete failed: out of range".to_string();
+			self.workbench.status_bar.message = "visual delete failed: out of range".to_string();
 			self.exit_visual_mode();
 			return false;
 		}
@@ -184,7 +184,7 @@ impl RimState {
 			}
 
 			if !deleted_any {
-				self.status_bar.message = "visual delete failed: empty".to_string();
+				self.workbench.status_bar.message = "visual delete failed: empty".to_string();
 				self.exit_visual_mode();
 				return false;
 			}
@@ -202,18 +202,18 @@ impl RimState {
 			self.line_slot_block_wise = true;
 			self.align_active_window_scroll_to_cursor();
 			self.exit_visual_mode();
-			self.status_bar.message = "selection deleted".to_string();
+			self.workbench.status_bar.message = "selection deleted".to_string();
 			return true;
 		}
 
 		if line_wise {
 			let Some(deleted) = rope_join_rows_without_newline(&buffer.text, start_row, end_row) else {
-				self.status_bar.message = "visual delete failed: out of range".to_string();
+				self.workbench.status_bar.message = "visual delete failed: out of range".to_string();
 				self.exit_visual_mode();
 				return false;
 			};
 			let Some(delete_range) = rope_linewise_char_range(&buffer.text, start_row, end_row) else {
-				self.status_bar.message = "visual delete failed: out of range".to_string();
+				self.workbench.status_bar.message = "visual delete failed: out of range".to_string();
 				self.exit_visual_mode();
 				return false;
 			};
@@ -228,14 +228,14 @@ impl RimState {
 			self.mark_active_buffer_dirty();
 			self.align_active_window_scroll_to_cursor();
 			self.exit_visual_mode();
-			self.status_bar.message = "selection deleted".to_string();
+			self.workbench.status_bar.message = "selection deleted".to_string();
 			return true;
 		}
 
 		let start_line_len = rope_editable_line_len_chars(&buffer.text, start_row).unwrap_or(0) as u16;
 		let end_line_len = rope_editable_line_len_chars(&buffer.text, end_row).unwrap_or(0) as u16;
 		if start_line_len == 0 && end_line_len == 0 {
-			self.status_bar.message = "visual delete failed: empty".to_string();
+			self.workbench.status_bar.message = "visual delete failed: empty".to_string();
 			self.exit_visual_mode();
 			return false;
 		}
@@ -245,12 +245,12 @@ impl RimState {
 
 		let Some(delete_start) = rope_cursor_char(&buffer.text, start_row, start_col.saturating_sub(1) as usize)
 		else {
-			self.status_bar.message = "visual delete failed: out of range".to_string();
+			self.workbench.status_bar.message = "visual delete failed: out of range".to_string();
 			self.exit_visual_mode();
 			return false;
 		};
 		let Some(delete_end) = rope_cursor_char(&buffer.text, end_row, end_col as usize) else {
-			self.status_bar.message = "visual delete failed: out of range".to_string();
+			self.workbench.status_bar.message = "visual delete failed: out of range".to_string();
 			self.exit_visual_mode();
 			return false;
 		};
@@ -265,7 +265,7 @@ impl RimState {
 		self.line_slot_block_wise = false;
 		self.align_active_window_scroll_to_cursor();
 		self.exit_visual_mode();
-		self.status_bar.message = "selection deleted".to_string();
+		self.workbench.status_bar.message = "selection deleted".to_string();
 		true
 	}
 
@@ -308,27 +308,27 @@ impl RimState {
 		} else {
 			self.enter_insert_mode();
 		}
-		self.status_bar.message = "selection changed".to_string();
+		self.workbench.status_bar.message = "selection changed".to_string();
 	}
 
 	pub fn yank_visual_selection_to_slot(&mut self) {
 		let line_wise = self.is_visual_line_mode();
 		let block_wise = self.is_visual_block_mode();
 		let Some((start, end)) = self.normalized_visual_bounds() else {
-			self.status_bar.message = "visual yank failed: no anchor".to_string();
+			self.workbench.status_bar.message = "visual yank failed: no anchor".to_string();
 			self.exit_visual_mode();
 			return;
 		};
 
 		let Some(text) = self.active_buffer_rope() else {
-			self.status_bar.message = "visual yank failed: no active buffer".to_string();
+			self.workbench.status_bar.message = "visual yank failed: no active buffer".to_string();
 			self.exit_visual_mode();
 			return;
 		};
 		let start_row = start.row.saturating_sub(1) as usize;
 		let end_row = end.row.saturating_sub(1) as usize;
 		if start_row >= rope_editable_line_count(text) || end_row >= rope_editable_line_count(text) {
-			self.status_bar.message = "visual yank failed: out of range".to_string();
+			self.workbench.status_bar.message = "visual yank failed: out of range".to_string();
 			self.exit_visual_mode();
 			return;
 		}
@@ -344,7 +344,7 @@ impl RimState {
 				yanked_any = true;
 			}
 			if !yanked_any {
-				self.status_bar.message = "visual yank failed: empty".to_string();
+				self.workbench.status_bar.message = "visual yank failed: empty".to_string();
 				self.exit_visual_mode();
 				return;
 			}
@@ -352,7 +352,7 @@ impl RimState {
 			self.line_slot_line_wise = false;
 			self.line_slot_block_wise = true;
 			self.exit_visual_mode();
-			self.status_bar.message = "selection yanked".to_string();
+			self.workbench.status_bar.message = "selection yanked".to_string();
 			return;
 		}
 		if line_wise {
@@ -360,7 +360,7 @@ impl RimState {
 			self.line_slot_line_wise = true;
 			self.line_slot_block_wise = false;
 			self.exit_visual_mode();
-			self.status_bar.message = "selection yanked".to_string();
+			self.workbench.status_bar.message = "selection yanked".to_string();
 			return;
 		}
 
@@ -370,12 +370,12 @@ impl RimState {
 		let end_col = end.col.max(1).min(end_line_len.max(1));
 
 		let Some(yank_start) = rope_cursor_char(text, start_row, start_col.saturating_sub(1) as usize) else {
-			self.status_bar.message = "visual yank failed: out of range".to_string();
+			self.workbench.status_bar.message = "visual yank failed: out of range".to_string();
 			self.exit_visual_mode();
 			return;
 		};
 		let Some(yank_end) = rope_cursor_char(text, end_row, end_col as usize) else {
-			self.status_bar.message = "visual yank failed: out of range".to_string();
+			self.workbench.status_bar.message = "visual yank failed: out of range".to_string();
 			self.exit_visual_mode();
 			return;
 		};
@@ -385,26 +385,26 @@ impl RimState {
 		self.line_slot_line_wise = false;
 		self.line_slot_block_wise = false;
 		self.exit_visual_mode();
-		self.status_bar.message = "selection yanked".to_string();
+		self.workbench.status_bar.message = "selection yanked".to_string();
 	}
 
 	pub fn replace_visual_selection_with_slot(&mut self) {
 		let line_wise = self.is_visual_line_mode();
 		let block_wise = self.is_visual_block_mode();
 		let Some(slot_text) = self.line_slot.clone() else {
-			self.status_bar.message = "paste failed: slot is empty".to_string();
+			self.workbench.status_bar.message = "paste failed: slot is empty".to_string();
 			self.exit_visual_mode();
 			return;
 		};
 		let slot_block_wise = self.line_slot_block_wise;
 		let Some((start, end)) = self.normalized_visual_bounds() else {
-			self.status_bar.message = "visual paste failed: no anchor".to_string();
+			self.workbench.status_bar.message = "visual paste failed: no anchor".to_string();
 			self.exit_visual_mode();
 			return;
 		};
 
 		let Some((buffer, window)) = self.active_buffer_and_window_mut() else {
-			self.status_bar.message = "visual paste failed: no active buffer".to_string();
+			self.workbench.status_bar.message = "visual paste failed: no active buffer".to_string();
 			self.exit_visual_mode();
 			return;
 		};
@@ -413,7 +413,7 @@ impl RimState {
 		let end_row = end.row.saturating_sub(1) as usize;
 		let editable_line_count = rope_editable_line_count(&buffer.text);
 		if start_row >= editable_line_count || end_row >= editable_line_count {
-			self.status_bar.message = "visual paste failed: out of range".to_string();
+			self.workbench.status_bar.message = "visual paste failed: out of range".to_string();
 			self.exit_visual_mode();
 			return;
 		}
@@ -447,13 +447,13 @@ impl RimState {
 			self.mark_active_buffer_dirty();
 			self.align_active_window_scroll_to_cursor();
 			self.exit_visual_mode();
-			self.status_bar.message = "selection replaced".to_string();
+			self.workbench.status_bar.message = "selection replaced".to_string();
 			return;
 		}
 
 		if line_wise {
 			let Some(replace_range) = rope_linewise_char_range(&buffer.text, start_row, end_row) else {
-				self.status_bar.message = "visual paste failed: out of range".to_string();
+				self.workbench.status_bar.message = "visual paste failed: out of range".to_string();
 				self.exit_visual_mode();
 				return;
 			};
@@ -468,7 +468,7 @@ impl RimState {
 			self.mark_active_buffer_dirty();
 			self.align_active_window_scroll_to_cursor();
 			self.exit_visual_mode();
-			self.status_bar.message = "selection replaced".to_string();
+			self.workbench.status_bar.message = "selection replaced".to_string();
 			return;
 		}
 
@@ -479,12 +479,12 @@ impl RimState {
 
 		let Some(replace_start) = rope_cursor_char(&buffer.text, start_row, start_col.saturating_sub(1) as usize)
 		else {
-			self.status_bar.message = "visual paste failed: out of range".to_string();
+			self.workbench.status_bar.message = "visual paste failed: out of range".to_string();
 			self.exit_visual_mode();
 			return;
 		};
 		let Some(replace_end) = rope_cursor_char(&buffer.text, end_row, end_col as usize) else {
-			self.status_bar.message = "visual paste failed: out of range".to_string();
+			self.workbench.status_bar.message = "visual paste failed: out of range".to_string();
 			self.exit_visual_mode();
 			return;
 		};
@@ -497,7 +497,7 @@ impl RimState {
 		self.mark_active_buffer_dirty();
 		self.align_active_window_scroll_to_cursor();
 		self.exit_visual_mode();
-		self.status_bar.message = "selection replaced".to_string();
+		self.workbench.status_bar.message = "selection replaced".to_string();
 	}
 
 	fn current_visual_block_display_bounds(

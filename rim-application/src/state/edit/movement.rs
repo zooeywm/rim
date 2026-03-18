@@ -334,7 +334,7 @@ impl RimState {
 			return;
 		};
 		let visible_rows = self.active_window_visible_rows();
-		let threshold = self.cursor_scroll_threshold.min(visible_rows.saturating_sub(1));
+		let threshold = self.workbench.cursor_scroll_threshold.min(visible_rows.saturating_sub(1));
 		let top_row = window.scroll_y.saturating_add(1);
 		let bottom_row = top_row.saturating_add(visible_rows.saturating_sub(1));
 		let top_safe_row = top_row.saturating_add(threshold);
@@ -384,7 +384,7 @@ impl RimState {
 		let visible_rows = self.active_window_visible_rows();
 		let max_row = self.max_row();
 		let max_scroll = max_row.saturating_sub(visible_rows);
-		let threshold = self.cursor_scroll_threshold;
+		let threshold = self.workbench.cursor_scroll_threshold;
 		let visible_tail = visible_rows.saturating_sub(1);
 
 		if let Some(window) = self.windows.get_mut(active_window_id) {
@@ -411,7 +411,8 @@ impl RimState {
 		if self.word_wrap_enabled() {
 			let _ = direction;
 			self.align_active_window_scroll_to_cursor();
-			if let Some(window) = self.windows.get_mut(self.active_window_id()) {
+			let active_window_id = self.active_window_id();
+			if let Some(window) = self.windows.get_mut(active_window_id) {
 				window.scroll_x = 0;
 			}
 			return;
@@ -419,7 +420,7 @@ impl RimState {
 		let active_window_id = self.active_window_id();
 		let visible_cols = self.active_window_visible_text_cols();
 		let visible_tail = visible_cols.saturating_sub(1);
-		let threshold = self.cursor_scroll_threshold.min(visible_tail);
+		let threshold = self.workbench.cursor_scroll_threshold.min(visible_tail);
 		let cursor_display_col = self.active_cursor_display_col();
 		let line_display_width = self.active_line_display_width();
 		let max_scroll = line_display_width.saturating_sub(visible_tail);
@@ -458,14 +459,14 @@ impl RimState {
 		let visible_rows = self.active_window_visible_rows();
 		let max_row = self.max_row();
 		let max_scroll = max_row.saturating_sub(visible_rows);
-		let threshold = self.cursor_scroll_threshold.min(visible_rows.saturating_sub(1));
+		let threshold = self.workbench.cursor_scroll_threshold.min(visible_rows.saturating_sub(1));
 		let visible_tail = visible_rows.saturating_sub(1);
 		let top_trigger = window.scroll_y.saturating_add(threshold);
 		let bottom = window.scroll_y.saturating_add(visible_tail);
 		let bottom_trigger = bottom.saturating_sub(threshold);
 		let visible_cols = self.active_window_visible_text_cols();
 		let col_tail = visible_cols.saturating_sub(1);
-		let col_threshold = self.cursor_scroll_threshold.min(col_tail);
+		let col_threshold = self.workbench.cursor_scroll_threshold.min(col_tail);
 		let cursor_display_col = self.active_cursor_display_col();
 		let line_display_width = self.active_line_display_width();
 		let max_scroll_x = line_display_width.saturating_sub(col_tail);
@@ -615,7 +616,7 @@ impl RimState {
 		let active_window_id = self.active_window_id();
 		let visible_rows = self.active_window_visible_rows();
 		let max_scroll = self.max_scroll_y_for_active_window(visible_rows);
-		let threshold = self.cursor_scroll_threshold.min(visible_rows.saturating_sub(1));
+		let threshold = self.workbench.cursor_scroll_threshold.min(visible_rows.saturating_sub(1));
 		let visible_tail = visible_rows.saturating_sub(1);
 		let cursor_wrapped_row = self.active_cursor_wrapped_row_index();
 
@@ -648,7 +649,7 @@ impl RimState {
 		let cursor_wrapped_row = self.active_cursor_wrapped_row_index();
 		let visible_rows = self.active_window_visible_rows();
 		let max_scroll = self.max_scroll_y_for_active_window(visible_rows);
-		let threshold = self.cursor_scroll_threshold.min(visible_rows.saturating_sub(1));
+		let threshold = self.workbench.cursor_scroll_threshold.min(visible_rows.saturating_sub(1));
 		let visible_tail = visible_rows.saturating_sub(1);
 		let top_trigger = window.scroll_y.saturating_add(threshold);
 		let bottom = window.scroll_y.saturating_add(visible_tail);

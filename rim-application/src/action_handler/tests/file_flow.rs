@@ -109,7 +109,7 @@ fn workspace_session_loaded_should_restore_state_and_enqueue_runtime_bindings() 
 		.apply_action(&ports, AppAction::File(FileAction::WorkspaceSessionLoaded { result: Ok(Some(snapshot)) }));
 
 	assert!(matches!(flow, ControlFlow::Continue(())));
-	assert_eq!(state.status_bar.message, "session restored");
+	assert_eq!(state.workbench.status_bar.message, "session restored");
 	assert_eq!(state.buffers.len(), 2);
 	assert_eq!(ports.open_requests.borrow().len(), 1);
 	assert_eq!(ports.watch_requests.borrow().len(), 1);
@@ -143,7 +143,7 @@ fn workspace_session_loaded_none_should_create_untitled_buffer() {
 
 	assert!(matches!(flow, ControlFlow::Continue(())));
 	assert_eq!(state.buffers.len(), 1);
-	assert_eq!(state.status_bar.message, "new file");
+	assert_eq!(state.workbench.status_bar.message, "new file");
 	assert!(state.active_buffer_id().is_some());
 }
 
@@ -165,7 +165,7 @@ fn external_change_detected_should_be_ignored_briefly_after_save() {
 	);
 
 	assert!(ports.external_loads.borrow().is_empty());
-	assert_eq!(state.status_bar.message, "file saved");
+	assert_eq!(state.workbench.status_bar.message, "file saved");
 }
 
 #[test]
@@ -175,7 +175,7 @@ fn external_change_detected_should_reload_after_ignore_window_expires() {
 	let path = PathBuf::from("a.txt");
 	let buffer_id = state.create_buffer(Some(path.clone()), "old");
 	state.bind_buffer_to_active_window(buffer_id);
-	state.ignore_external_change_until.insert(buffer_id, Instant::now() - Duration::from_millis(1));
+	state.workbench.ignore_external_change_until.insert(buffer_id, Instant::now() - Duration::from_millis(1));
 
 	let _ = state.apply_action(
 		&ports,
@@ -197,13 +197,13 @@ fn internal_save_echo_should_not_leave_reloading_message() {
 		&ports,
 		AppAction::File(crate::action::FileAction::SaveCompleted { buffer_id, result: Ok(()) }),
 	);
-	assert_eq!(state.status_bar.message, "file saved");
+	assert_eq!(state.workbench.status_bar.message, "file saved");
 
 	let _ = state.apply_action(
 		&ports,
 		AppAction::File(crate::action::FileAction::ExternalChangeDetected { buffer_id, path }),
 	);
-	assert_eq!(state.status_bar.message, "file saved");
+	assert_eq!(state.workbench.status_bar.message, "file saved");
 	assert!(ports.external_loads.borrow().is_empty());
 }
 
@@ -214,7 +214,7 @@ fn external_change_detected_should_be_ignored_while_internal_save_in_flight() {
 	let path = PathBuf::from("a.txt");
 	let buffer_id = state.create_buffer(Some(path.clone()), "old");
 	state.bind_buffer_to_active_window(buffer_id);
-	state.in_flight_internal_saves.insert(buffer_id);
+	state.workbench.in_flight_internal_saves.insert(buffer_id);
 
 	let _ = state.apply_action(
 		&ports,
@@ -239,7 +239,7 @@ fn command_q_should_be_blocked_when_any_buffer_is_dirty() {
 	);
 
 	assert!(matches!(flow, ControlFlow::Continue(())));
-	assert_eq!(state.status_bar.message, "quit blocked: unsaved changes (use :q!)");
+	assert_eq!(state.workbench.status_bar.message, "quit blocked: unsaved changes (use :q!)");
 }
 
 #[test]
@@ -258,7 +258,7 @@ fn command_qa_should_be_blocked_when_any_buffer_is_dirty() {
 	);
 
 	assert!(matches!(flow, ControlFlow::Continue(())));
-	assert_eq!(state.status_bar.message, "quit all blocked: unsaved changes");
+	assert_eq!(state.workbench.status_bar.message, "quit all blocked: unsaved changes");
 }
 
 #[test]
@@ -407,7 +407,7 @@ fn command_wq_should_break_after_save_completed_and_save_workspace_session() {
 		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
 	);
 	assert!(matches!(flow, ControlFlow::Continue(())));
-	assert!(state.quit_after_save);
+	assert!(state.workbench.quit_after_save);
 
 	let flow = state.apply_action(
 		&ports,
@@ -437,16 +437,16 @@ fn command_wqa_should_enqueue_save_all_and_quit_after_last_save() {
 		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
 	);
 	assert!(matches!(flow, ControlFlow::Continue(())));
-	assert!(state.quit_after_save);
+	assert!(state.workbench.quit_after_save);
 	assert_eq!(ports.file_loads.borrow().len(), 0);
-	assert_eq!(state.in_flight_internal_saves.len(), 2);
+	assert_eq!(state.workbench.in_flight_internal_saves.len(), 2);
 
 	let flow = state.apply_action(
 		&ports,
 		AppAction::File(crate::action::FileAction::SaveCompleted { buffer_id: first, result: Ok(()) }),
 	);
 	assert!(matches!(flow, ControlFlow::Continue(())));
-	assert!(state.quit_after_save);
+	assert!(state.workbench.quit_after_save);
 	assert_eq!(ports.session_saves.borrow().len(), 0);
 
 	let flow = state.apply_action(
@@ -476,8 +476,8 @@ fn command_wqa_should_be_blocked_when_any_buffer_has_no_path() {
 	);
 
 	assert!(matches!(flow, ControlFlow::Continue(())));
-	assert_eq!(state.status_bar.message, "save all failed: 1 buffer(s) have no file path");
-	assert!(!state.quit_after_save);
+	assert_eq!(state.workbench.status_bar.message, "save all failed: 1 buffer(s) have no file path");
+	assert!(!state.workbench.quit_after_save);
 }
 
 #[test]
@@ -500,8 +500,11 @@ fn command_wqa_should_be_blocked_when_any_buffer_was_changed_externally() {
 	);
 
 	assert!(matches!(flow, ControlFlow::Continue(())));
-	assert_eq!(state.status_bar.message, "save all blocked: file changed externally (use :wqa! to overwrite)");
-	assert!(!state.quit_after_save);
+	assert_eq!(
+		state.workbench.status_bar.message,
+		"save all blocked: file changed externally (use :wqa! to overwrite)"
+	);
+	assert!(!state.workbench.quit_after_save);
 }
 
 #[test]
@@ -525,8 +528,8 @@ fn command_wqa_bang_should_force_save_all_and_quit() {
 		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
 	);
 	assert!(matches!(flow, ControlFlow::Continue(())));
-	assert!(state.quit_after_save);
-	assert_eq!(state.in_flight_internal_saves.len(), 2);
+	assert!(state.workbench.quit_after_save);
+	assert_eq!(state.workbench.in_flight_internal_saves.len(), 2);
 
 	let _ = state.apply_action(
 		&ports,
@@ -594,7 +597,7 @@ fn command_yazi_should_report_cancelled_when_no_file_is_selected() {
 	);
 
 	assert!(matches!(flow, ControlFlow::Continue(())));
-	assert_eq!(state.status_bar.message, "open cancelled");
+	assert_eq!(state.workbench.status_bar.message, "open cancelled");
 }
 
 #[test]
@@ -640,7 +643,10 @@ fn external_changed_should_not_reload_when_buffer_is_dirty() {
 	assert_eq!(buffer.text.to_string(), "old");
 	assert!(buffer.dirty);
 	assert!(buffer.externally_modified);
-	assert_eq!(state.status_bar.message, "file changed externally; use :w! to overwrite or :e! to reload");
+	assert_eq!(
+		state.workbench.status_bar.message,
+		"file changed externally; use :w! to overwrite or :e! to reload"
+	);
 }
 
 #[test]
@@ -659,7 +665,10 @@ fn command_w_should_be_blocked_when_file_was_changed_externally() {
 	);
 
 	assert!(matches!(flow, ControlFlow::Continue(())));
-	assert_eq!(state.status_bar.message, "save blocked: file changed externally (use :w! to overwrite)");
+	assert_eq!(
+		state.workbench.status_bar.message,
+		"save blocked: file changed externally (use :w! to overwrite)"
+	);
 }
 
 #[test]
@@ -677,7 +686,7 @@ fn command_e_should_be_blocked_when_buffer_is_dirty() {
 	);
 
 	assert!(matches!(flow, ControlFlow::Continue(())));
-	assert_eq!(state.status_bar.message, "reload blocked: buffer is dirty (use :e! to force reload)");
+	assert_eq!(state.workbench.status_bar.message, "reload blocked: buffer is dirty (use :e! to force reload)");
 }
 
 #[test]
@@ -697,7 +706,7 @@ fn command_e_bang_should_reload_even_when_buffer_is_dirty() {
 	);
 
 	assert!(matches!(flow, ControlFlow::Continue(())));
-	assert_eq!(state.status_bar.message, format!("loading {}", path.display()));
+	assert_eq!(state.workbench.status_bar.message, format!("loading {}", path.display()));
 }
 
 #[test]
@@ -725,7 +734,7 @@ fn command_e_with_path_should_replace_clean_single_untitled_buffer() {
 	let buffer = state.buffers.get(active_id).expect("buffer exists");
 	let expected = normalize_test_path("b.txt");
 	assert_eq!(buffer.path.as_deref(), Some(expected.as_path()));
-	assert_eq!(state.status_bar.message, "new b.txt");
+	assert_eq!(state.workbench.status_bar.message, "new b.txt");
 }
 
 #[test]
@@ -796,7 +805,7 @@ fn command_e_with_same_path_should_reuse_existing_buffer_in_same_tab() {
 	assert!(matches!(flow, ControlFlow::Continue(())));
 	let active_id = state.active_buffer_id().expect("active buffer exists");
 	assert_eq!(active_id, existing);
-	assert_eq!(state.status_bar.message, "switched b.txt");
+	assert_eq!(state.workbench.status_bar.message, "switched b.txt");
 	let expected = normalize_test_path("b.txt");
 	let count =
 		state.buffers.iter().filter(|(_, buffer)| buffer.path.as_deref() == Some(expected.as_path())).count();
@@ -828,7 +837,7 @@ fn command_e_with_same_path_should_reuse_existing_buffer_across_tabs() {
 	assert!(matches!(flow, ControlFlow::Continue(())));
 	let active_id = state.active_buffer_id().expect("active buffer exists");
 	assert_eq!(active_id, existing);
-	assert_eq!(state.status_bar.message, "switched b.txt");
+	assert_eq!(state.workbench.status_bar.message, "switched b.txt");
 	let expected = normalize_test_path("b.txt");
 	let count =
 		state.buffers.iter().filter(|(_, buffer)| buffer.path.as_deref() == Some(expected.as_path())).count();
@@ -864,7 +873,7 @@ fn open_requested_should_prepare_new_buffer_when_path_missing() {
 	let buffer = state.buffers.get(active).expect("buffer should exist");
 	assert_eq!(buffer.path.as_ref(), Some(&missing));
 	assert_eq!(buffer.text.to_string(), "");
-	assert_eq!(state.status_bar.message, format!("new {}", missing.display()));
+	assert_eq!(state.workbench.status_bar.message, format!("new {}", missing.display()));
 	assert!(ports.file_loads.borrow().is_empty());
 	assert!(ports.open_requests.borrow().is_empty());
 	assert!(ports.watch_requests.borrow().is_empty());
@@ -993,9 +1002,9 @@ fn swap_conflict_prompt_recover_key_should_enqueue_recover() {
 		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE))),
 	);
 
-	assert!(state.pending_swap_decision.is_none());
+	assert!(state.workbench.pending_swap_decision.is_none());
 	assert_eq!(ports.swap_recovers.borrow().len(), 1);
-	assert_eq!(state.status_bar.message, "recovering from swap...");
+	assert_eq!(state.workbench.status_bar.message, "recovering from swap...");
 }
 
 #[test]
@@ -1003,14 +1012,14 @@ fn swap_recover_completed_with_no_changes_should_update_status_message() {
 	let mut state = RimState::new();
 	let buffer_id = state.create_buffer(None, "base");
 	state.bind_buffer_to_active_window(buffer_id);
-	state.status_bar.message = "recovering from swap...".to_string();
+	state.workbench.status_bar.message = "recovering from swap...".to_string();
 
 	let _ = dispatch_test_action(
 		&mut state,
 		AppAction::File(FileAction::SwapRecoverCompleted { buffer_id, result: Ok(None) }),
 	);
 
-	assert_eq!(state.status_bar.message, "file reloaded");
+	assert_eq!(state.workbench.status_bar.message, "file reloaded");
 }
 
 #[test]
@@ -1033,7 +1042,7 @@ fn swap_conflict_prompt_abort_key_should_close_buffer_and_cleanup_watchers() {
 		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE))),
 	);
 
-	assert!(state.pending_swap_decision.is_none());
+	assert!(state.workbench.pending_swap_decision.is_none());
 	assert!(!state.buffers.contains_key(buffer_id));
 	assert_eq!(ports.unwatches.borrow().as_slice(), &[buffer_id]);
 	assert_eq!(ports.swap_closes.borrow().as_slice(), &[buffer_id]);
@@ -1058,13 +1067,13 @@ fn swap_conflict_detected_should_enter_pending_prompt() {
 		}),
 	);
 
-	let pending = state.pending_swap_decision.as_ref().expect("pending decision should exist");
+	let pending = state.workbench.pending_swap_decision.as_ref().expect("pending decision should exist");
 	assert_eq!(pending.buffer_id, buffer_id);
 	assert_eq!(pending.source_path, path);
 	assert_eq!(pending.base_text, "base");
 	assert_eq!(pending.owner_pid, 99);
 	assert_eq!(pending.owner_username, "other");
-	assert!(state.status_bar.message.contains("[r]ecover"));
+	assert!(state.workbench.status_bar.message.contains("[r]ecover"));
 }
 
 #[test]

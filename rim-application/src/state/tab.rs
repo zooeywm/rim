@@ -6,7 +6,7 @@ impl RimState {
 	pub fn open_new_tab(&mut self) -> TabId {
 		let tab_id = self.insert_tab_after_active();
 		self.switch_tab(tab_id);
-		self.status_bar.message = "new tab".to_string();
+		self.workbench.status_bar.message = "new tab".to_string();
 		tab_id
 	}
 
@@ -71,7 +71,7 @@ impl RimState {
 		}
 		let current_tab = self.active_tab;
 		self.remove_tab(current_tab);
-		self.status_bar.message = "tab closed".to_string();
+		self.workbench.status_bar.message = "tab closed".to_string();
 	}
 
 	pub fn switch_to_prev_tab(&mut self) {
@@ -94,7 +94,8 @@ impl RimState {
 		let current = self.active_tab.0;
 		let new_id = TabId(current.saturating_add(1));
 		let buffer_id = self.create_buffer(None, String::new());
-		if let Some(current_tab) = self.tabs.get_mut(&self.active_tab) {
+		let active_tab = self.active_tab;
+		if let Some(current_tab) = self.tabs.get_mut(&active_tab) {
 			current_tab.buffer_order.retain(|id| *id != buffer_id);
 		}
 		let window_id = self.create_window(Some(buffer_id)).expect("create default tab window should never fail");

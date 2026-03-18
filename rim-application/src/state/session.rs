@@ -37,7 +37,7 @@ impl RimState {
 				};
 				Some(WorkspaceBufferSnapshot {
 					path: buffer.path.clone(),
-					text: if self.force_quit_trim_file_dirty_in_session && buffer.dirty {
+					text: if self.workbench.force_quit_trim_file_dirty_in_session && buffer.dirty {
 						buffer.clean_text.to_string()
 					} else {
 						buffer.text.to_string()
@@ -130,23 +130,23 @@ impl RimState {
 
 		self.mode = EditorMode::Normal;
 		self.visual_anchor = None;
-		self.command_line.clear();
-		self.quit_after_save = false;
-		self.force_quit_trim_file_dirty_in_session = false;
-		self.pending_save_path = None;
+		self.workbench.command_line.clear();
+		self.workbench.quit_after_save = false;
+		self.workbench.force_quit_trim_file_dirty_in_session = false;
+		self.workbench.pending_save_path = None;
 		self.preferred_col = None;
 		self.line_slot = None;
 		self.line_slot_line_wise = false;
 		self.line_slot_block_wise = false;
-		self.normal_sequence.clear();
-		self.visual_g_pending = false;
+		self.workbench.normal_sequence.clear();
+		self.workbench.visual_g_pending = false;
 		self.pending_insert_group = None;
 		self.pending_block_insert = None;
-		self.pending_swap_decision = None;
-		self.in_flight_internal_saves.clear();
-		self.ignore_external_change_until.clear();
+		self.workbench.pending_swap_decision = None;
+		self.workbench.in_flight_internal_saves.clear();
+		self.workbench.ignore_external_change_until.clear();
 		self.window_buffer_views.clear();
-		self.status_bar = StatusBarState::default();
+		self.workbench.status_bar = StatusBarState::default();
 
 		self.buffers = SlotMap::with_key();
 		self.buffer_order.clear();
@@ -277,7 +277,7 @@ impl RimState {
 			.get(snapshot.active_tab_index.min(tab_ids.len().saturating_sub(1)))
 			.copied()
 			.unwrap_or(tab_ids[0]);
-		self.status_bar.message = "session restored".to_string();
+		self.workbench.status_bar.message = "session restored".to_string();
 		true
 	}
 

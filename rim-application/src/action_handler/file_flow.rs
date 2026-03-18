@@ -116,10 +116,10 @@ pub(super) fn handle_pending_swap_decision_key<P>(
 where
 	P: ActionPorts,
 {
-	state.normal_sequence.clear();
-	state.status_bar.key_sequence.clear();
+	state.workbench.normal_sequence.clear();
+	state.workbench.status_bar.key_sequence.clear();
 
-	let Some(pending) = state.pending_swap_decision.as_ref() else {
+	let Some(pending) = state.workbench.pending_swap_decision.as_ref() else {
 		return ControlFlow::Continue(());
 	};
 
@@ -140,7 +140,7 @@ where
 		return ControlFlow::Continue(());
 	};
 	if !matches!(selected, 'r' | 'd' | 'e' | 'a') {
-		state.status_bar.message = swap_conflict_prompt_message(&SwapConflictInfo {
+		state.workbench.status_bar.message = swap_conflict_prompt_message(&SwapConflictInfo {
 			pid:      pending.owner_pid,
 			username: pending.owner_username.clone(),
 		});
@@ -154,7 +154,7 @@ where
 	match selected {
 		'r' => {
 			enqueue_swap_recover(ports, pending.buffer_id, pending.source_path.clone(), pending.base_text);
-			state.status_bar.message = "recovering from swap...".to_string();
+			state.workbench.status_bar.message = "recovering from swap...".to_string();
 		}
 		'd' => {
 			if let Err(source) =
@@ -162,9 +162,9 @@ where
 			{
 				let err = ActionHandlerError::PersistenceSwapInitializeBase { source };
 				error!("persistence worker unavailable while enqueueing base init: {}", err);
-				state.status_bar.message = "swap delete failed: swap worker unavailable".to_string();
+				state.workbench.status_bar.message = "swap delete failed: swap worker unavailable".to_string();
 			} else {
-				state.status_bar.message = "swap deleted".to_string();
+				state.workbench.status_bar.message = "swap deleted".to_string();
 			}
 		}
 		'e' => {
@@ -173,9 +173,9 @@ where
 			{
 				let err = ActionHandlerError::PersistenceSwapInitializeBase { source };
 				error!("persistence worker unavailable while enqueueing base init: {}", err);
-				state.status_bar.message = "swap ignore failed: swap worker unavailable".to_string();
+				state.workbench.status_bar.message = "swap ignore failed: swap worker unavailable".to_string();
 			} else {
-				state.status_bar.message = "editing without swap recovery".to_string();
+				state.workbench.status_bar.message = "editing without swap recovery".to_string();
 			}
 		}
 		'a' => {
@@ -188,7 +188,7 @@ where
 				let err = ActionHandlerError::PersistenceSwapClose { source };
 				error!("persistence worker unavailable while enqueueing swap close: {}", err);
 			}
-			state.status_bar.message = format!("open aborted: {}", pending.source_path.display());
+			state.workbench.status_bar.message = format!("open aborted: {}", pending.source_path.display());
 		}
 		_ => {}
 	}
@@ -216,9 +216,9 @@ where P: ActionPorts {
 					owner_pid: conflict.pid,
 					owner_username: conflict.username.clone(),
 				});
-				state.normal_sequence.clear();
-				state.status_bar.key_sequence.clear();
-				state.status_bar.message = swap_conflict_prompt_message(&conflict);
+				state.workbench.normal_sequence.clear();
+				state.workbench.status_bar.key_sequence.clear();
+				state.workbench.status_bar.message = swap_conflict_prompt_message(&conflict);
 			}
 			Ok(SwapConflictCheckResult::NoSwapActionNeeded) => {
 				let Some((source_path, base_text)) = state
@@ -236,7 +236,7 @@ where P: ActionPorts {
 			}
 			Err(err) => {
 				error!("swap conflict check failed: buffer_id={:?}, error={}", buffer_id, err);
-				state.status_bar.message = "swap check failed".to_string();
+				state.workbench.status_bar.message = "swap check failed".to_string();
 			}
 		},
 		FileAction::SwapRecoverCompleted { buffer_id, result } => match result {
@@ -246,11 +246,11 @@ where P: ActionPorts {
 				state.refresh_buffer_dirty(buffer_id);
 				state.set_buffer_externally_modified(buffer_id, false);
 				enqueue_history_load_for_buffer(ports, state, buffer_id, true);
-				state.status_bar.message = "swap recovered: unsaved edits restored".to_string();
+				state.workbench.status_bar.message = "swap recovered: unsaved edits restored".to_string();
 			}
 			Ok(None) => {
 				state.set_buffer_externally_modified(buffer_id, false);
-				state.status_bar.message = "file reloaded".to_string();
+				state.workbench.status_bar.message = "file reloaded".to_string();
 			}
 			Err(err) => {
 				error!("swap recover failed: buffer_id={:?}, error={}", buffer_id, err);
@@ -286,17 +286,17 @@ where P: ActionPorts {
 					enqueue_workspace_runtime_bindings(ports, state);
 				} else {
 					state.create_untitled_buffer();
-					state.status_bar.message = "session restore failed".to_string();
+					state.workbench.status_bar.message = "session restore failed".to_string();
 				}
 			}
 			Ok(None) => {
 				state.create_untitled_buffer();
-				state.status_bar.message = "new file".to_string();
+				state.workbench.status_bar.message = "new file".to_string();
 			}
 			Err(err) => {
 				error!("workspace session load failed: {}", err);
 				state.create_untitled_buffer();
-				state.status_bar.message = format!("session load failed: {}", err);
+				state.workbench.status_bar.message = format!("session load failed: {}", err);
 			}
 		},
 		FileAction::WorkspaceFilesListed { workspace_root, result } => match result {
@@ -327,7 +327,7 @@ where P: ActionPorts {
 				}
 				if entries.is_empty() {
 					state.close_workspace_file_picker();
-					state.status_bar.message = "workspace file picker: no files found".to_string();
+					state.workbench.status_bar.message = "workspace file picker: no files found".to_string();
 					return ControlFlow::Continue(());
 				}
 				state.replace_workspace_file_picker_entries(entries);
@@ -344,7 +344,7 @@ where P: ActionPorts {
 				error!("workspace file picker list failed: {}", err);
 				state.fail_workspace_file_cache_loading();
 				state.close_workspace_file_picker();
-				state.status_bar.message = format!("workspace file picker failed: {}", err);
+				state.workbench.status_bar.message = format!("workspace file picker failed: {}", err);
 			}
 		},
 		FileAction::WorkspaceFilesChanged { workspace_root } => {
@@ -365,7 +365,7 @@ where P: ActionPorts {
 				if state.workspace_file_picker_open() {
 					state.close_workspace_file_picker();
 				}
-				state.status_bar.message = format!("workspace file relist failed: {}", err);
+				state.workbench.status_bar.message = format!("workspace file relist failed: {}", err);
 			}
 		}
 		FileAction::WorkspaceFilePreviewLoaded { path, result } => match result {
@@ -391,7 +391,7 @@ where P: ActionPorts {
 				state.mark_buffer_clean(buffer_id);
 				state.set_buffer_externally_modified(buffer_id, false);
 				enqueue_history_load_for_buffer(ports, state, buffer_id, true);
-				state.status_bar.message = "file loaded".to_string();
+				state.workbench.status_bar.message = "file loaded".to_string();
 				if let Some(source_path) = state.buffers.get(buffer_id).and_then(|buffer| buffer.path.clone())
 					&& let Err(source) = ports.enqueue_detect_conflict(buffer_id, source_path)
 				{
@@ -401,7 +401,7 @@ where P: ActionPorts {
 			}
 			(crate::action::FileLoadSource::Open, Err(err)) => {
 				error!("file load failed: buffer_id={:?}, error={}", buffer_id, err);
-				state.status_bar.message = format!("load failed: {}", err);
+				state.workbench.status_bar.message = format!("load failed: {}", err);
 			}
 			(crate::action::FileLoadSource::External, Ok(text)) => {
 				let is_active = state.active_buffer_id() == Some(buffer_id);
@@ -414,7 +414,7 @@ where P: ActionPorts {
 				if is_dirty {
 					state.set_buffer_externally_modified(buffer_id, true);
 					if is_active {
-						state.status_bar.message =
+						state.workbench.status_bar.message =
 							"file changed externally; use :w! to overwrite or :e! to reload".to_string();
 					}
 					return ControlFlow::Continue(());
@@ -425,7 +425,7 @@ where P: ActionPorts {
 				state.set_buffer_externally_modified(buffer_id, false);
 				enqueue_history_load_for_buffer(ports, state, buffer_id, false);
 				if is_active {
-					state.status_bar.message = format!("reloaded {}", name);
+					state.workbench.status_bar.message = format!("reloaded {}", name);
 				}
 			}
 			(crate::action::FileLoadSource::External, Err(err)) => {
@@ -445,7 +445,7 @@ where P: ActionPorts {
 				} else {
 					state.bind_buffer_to_active_window(buffer_id);
 				}
-				state.status_bar.message = format!("switched {}", path.display());
+				state.workbench.status_bar.message = format!("switched {}", path.display());
 				return ControlFlow::Continue(());
 			}
 			if !normalized_path.exists() {
@@ -458,7 +458,7 @@ where P: ActionPorts {
 					buffer_id
 				};
 				state.bind_buffer_to_active_window(buffer_id);
-				state.status_bar.message = format!("new {}", path.display());
+				state.workbench.status_bar.message = format!("new {}", path.display());
 				return ControlFlow::Continue(());
 			}
 			let buffer_id = if let Some(untitled_buffer_id) = replaceable_untitled {
@@ -480,13 +480,13 @@ where P: ActionPorts {
 			if let Err(source) = ports.enqueue_load(buffer_id, normalized_path.clone()) {
 				let io_err = ActionHandlerError::OpenFileLoad { source };
 				error!("io worker unavailable while enqueueing file load: {}", io_err);
-				state.status_bar.message = "load failed: io worker unavailable".to_string();
+				state.workbench.status_bar.message = "load failed: io worker unavailable".to_string();
 			} else {
-				state.status_bar.message = format!("loading {}", path.display());
+				state.workbench.status_bar.message = format!("loading {}", path.display());
 			}
 		}
 		FileAction::ExternalChangeDetected { buffer_id, path } => {
-			if state.in_flight_internal_saves.contains(&buffer_id) {
+			if state.workbench.in_flight_internal_saves.contains(&buffer_id) {
 				return ControlFlow::Continue(());
 			}
 			if state.should_ignore_recent_external_change(buffer_id) {
@@ -500,7 +500,7 @@ where P: ActionPorts {
 			if buffer.dirty {
 				state.set_buffer_externally_modified(buffer_id, true);
 				if state.active_buffer_id() == Some(buffer_id) {
-					state.status_bar.message =
+					state.workbench.status_bar.message =
 						"file changed externally; use :w! to overwrite or :e! to reload".to_string();
 				}
 				return ControlFlow::Continue(());
@@ -509,14 +509,14 @@ where P: ActionPorts {
 				let err = ActionHandlerError::ExternalReload { source };
 				error!("io worker unavailable while enqueueing external reload: {}", err);
 				if state.active_buffer_id() == Some(buffer_id) {
-					state.status_bar.message = "reload failed: io worker unavailable".to_string();
+					state.workbench.status_bar.message = "reload failed: io worker unavailable".to_string();
 				}
 				return ControlFlow::Continue(());
 			}
 		}
 		FileAction::SaveCompleted { buffer_id, result } => match result {
 			Ok(()) => {
-				state.in_flight_internal_saves.remove(&buffer_id);
+				state.workbench.in_flight_internal_saves.remove(&buffer_id);
 				state.mark_recent_internal_save(buffer_id);
 				state.apply_pending_save_path_if_matches(buffer_id);
 				if let Some(path) = state.buffers.get(buffer_id).and_then(|buffer| buffer.path.clone()) {
@@ -532,9 +532,9 @@ where P: ActionPorts {
 				state.mark_buffer_clean(buffer_id);
 				state.set_buffer_externally_modified(buffer_id, false);
 				enqueue_history_save_for_buffer(ports, state, buffer_id);
-				state.status_bar.message = "file saved".to_string();
-				if state.quit_after_save && state.in_flight_internal_saves.is_empty() {
-					state.quit_after_save = false;
+				state.workbench.status_bar.message = "file saved".to_string();
+				if state.workbench.quit_after_save && state.workbench.in_flight_internal_saves.is_empty() {
+					state.workbench.quit_after_save = false;
 					return RimState::dispatch_internal(
 						ports,
 						state,
@@ -543,12 +543,12 @@ where P: ActionPorts {
 				}
 			}
 			Err(err) => {
-				state.in_flight_internal_saves.remove(&buffer_id);
+				state.workbench.in_flight_internal_saves.remove(&buffer_id);
 				state.clear_recent_internal_save(buffer_id);
-				state.quit_after_save = false;
+				state.workbench.quit_after_save = false;
 				state.clear_pending_save_path_if_matches(buffer_id);
 				error!("file save failed: buffer_id={:?} error={}", buffer_id, err);
-				state.status_bar.message = format!("save failed: {}", err);
+				state.workbench.status_bar.message = format!("save failed: {}", err);
 			}
 		},
 	}

@@ -8,7 +8,7 @@ pub(super) struct StatusBarWidget {
 
 impl StatusBarWidget {
 	pub(super) fn from_state(state: &RimState) -> Self {
-		Self { mode: state.status_bar.mode, status_line: state.status_line() }
+		Self { mode: state.workbench.status_bar.mode, status_line: state.status_line() }
 	}
 }
 

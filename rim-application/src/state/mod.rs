@@ -1,9 +1,8 @@
-use std::{collections::{BTreeMap, HashMap, HashSet, VecDeque}, fmt, path::{Path, PathBuf}, time::{Duration, Instant, SystemTime}};
+use std::{collections::{HashMap, HashSet, VecDeque}, fmt, ops::{Deref, DerefMut}, path::{Path, PathBuf}, time::{Duration, Instant, SystemTime}};
 
 use frizbee::{Config as FrizbeeConfig, match_list_indices};
-pub use rim_domain::model::{BufferEditSnapshot, BufferHistoryEntry, BufferId, BufferState, BufferSwitchDirection, CursorState, EditorMode, FocusDirection, PendingBlockInsert, PendingInsertUndoGroup, PersistedBufferHistory, RopeTextDiff, SplitAxis, TabId, TabState, WindowBufferViewState, WindowId, WindowState, WorkspaceBufferHistorySnapshot, WorkspaceBufferSnapshot, WorkspaceSessionSnapshot, WorkspaceTabSnapshot, WorkspaceWindowBufferViewSnapshot, WorkspaceWindowSnapshot};
+pub use rim_domain::{editor::EditorState, model::{BufferEditSnapshot, BufferHistoryEntry, BufferId, BufferState, BufferSwitchDirection, CursorState, EditorMode, FocusDirection, PendingBlockInsert, PendingInsertUndoGroup, PersistedBufferHistory, RopeTextDiff, SplitAxis, TabId, TabState, WindowBufferViewState, WindowId, WindowState, WorkspaceBufferHistorySnapshot, WorkspaceBufferSnapshot, WorkspaceSessionSnapshot, WorkspaceTabSnapshot, WorkspaceWindowBufferViewSnapshot, WorkspaceWindowSnapshot}};
 use ropey::Rope;
-use slotmap::SlotMap;
 use time::{OffsetDateTime, format_description::FormatItem, macros::format_description};
 use tracing::error;
 
@@ -270,6 +269,79 @@ pub struct PendingSwapDecision {
 	pub owner_username: String,
 }
 
+#[derive(Debug)]
+pub struct WorkbenchState {
+	pub title:                                 String,
+	pub workspace_root:                        PathBuf,
+	pub leader_key:                            char,
+	pub command_line:                          String,
+	pub quit_after_save:                       bool,
+	pub force_quit_trim_file_dirty_in_session: bool,
+	pub pending_save_path:                     Option<(BufferId, PathBuf)>,
+	pub cursor_scroll_threshold:               u16,
+	pub key_hints_width:                       u16,
+	pub key_hints_max_height:                  u16,
+	pub word_wrap:                             bool,
+	pub picker_preview_word_wrap:              bool,
+	pub normal_sequence:                       Vec<NormalSequenceKey>,
+	pub visual_g_pending:                      bool,
+	pub pending_swap_decision:                 Option<PendingSwapDecision>,
+	pub in_flight_internal_saves:              HashSet<BufferId>,
+	pub ignore_external_change_until:          HashMap<BufferId, Instant>,
+	pub command_registry:                      CommandRegistry,
+	pub overlay:                               Option<OverlayState>,
+	pub command_palette:                       Option<CommandPaletteState>,
+	pub workspace_file_picker:                 Option<WorkspaceFilePickerState>,
+	pub notification_center:                   Option<NotificationCenterState>,
+	pub notifications:                         Vec<NotificationEntry>,
+	notification_preview_active:               Vec<ActiveNotification>,
+	notification_preview_queue:                VecDeque<u64>,
+	next_notification_id:                      u64,
+	pub workspace_file_cache:                  Vec<WorkspaceFileEntry>,
+	pub workspace_file_cache_loading:          bool,
+	pub status_bar:                            StatusBarState,
+}
+
+impl WorkbenchState {
+	pub fn new() -> Self {
+		Self {
+			title:                                 "Rim".to_string(),
+			workspace_root:                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+			leader_key:                            ' ',
+			command_line:                          String::new(),
+			quit_after_save:                       false,
+			force_quit_trim_file_dirty_in_session: false,
+			pending_save_path:                     None,
+			cursor_scroll_threshold:               0,
+			key_hints_width:                       42,
+			key_hints_max_height:                  36,
+			word_wrap:                             false,
+			picker_preview_word_wrap:              true,
+			normal_sequence:                       Vec::new(),
+			visual_g_pending:                      false,
+			pending_swap_decision:                 None,
+			in_flight_internal_saves:              HashSet::new(),
+			ignore_external_change_until:          HashMap::new(),
+			command_registry:                      CommandRegistry::with_defaults(),
+			overlay:                               None,
+			command_palette:                       None,
+			workspace_file_picker:                 None,
+			notification_center:                   None,
+			notifications:                         Vec::new(),
+			notification_preview_active:           Vec::new(),
+			notification_preview_queue:            VecDeque::new(),
+			next_notification_id:                  1,
+			workspace_file_cache:                  Vec::new(),
+			workspace_file_cache_loading:          false,
+			status_bar:                            StatusBarState::default(),
+		}
+	}
+}
+
+impl Default for WorkbenchState {
+	fn default() -> Self { Self::new() }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkspaceFilePickerBodyLayout {
 	pub horizontal_split: bool,
@@ -328,51 +400,18 @@ fn format_local_timestamp(time: SystemTime) -> String {
 
 #[derive(Debug)]
 pub struct RimState {
-	pub title:                                 String,
-	pub workspace_root:                        PathBuf,
-	pub active_tab:                            TabId,
-	pub leader_key:                            char,
-	pub mode:                                  EditorMode,
-	pub visual_anchor:                         Option<CursorState>,
-	pub visual_block_anchor_display_col:       Option<u16>,
-	pub visual_block_cursor_display_col:       Option<u16>,
-	pub command_line:                          String,
-	pub quit_after_save:                       bool,
-	pub force_quit_trim_file_dirty_in_session: bool,
-	pub pending_save_path:                     Option<(BufferId, PathBuf)>,
-	pub preferred_col:                         Option<u16>,
-	pub line_slot:                             Option<String>,
-	pub line_slot_line_wise:                   bool,
-	pub line_slot_block_wise:                  bool,
-	pub cursor_scroll_threshold:               u16,
-	pub key_hints_width:                       u16,
-	pub key_hints_max_height:                  u16,
-	pub word_wrap:                             bool,
-	pub picker_preview_word_wrap:              bool,
-	pub normal_sequence:                       Vec<NormalSequenceKey>,
-	pub visual_g_pending:                      bool,
-	pub pending_insert_group:                  Option<PendingInsertUndoGroup>,
-	pub pending_block_insert:                  Option<PendingBlockInsert>,
-	pub pending_swap_decision:                 Option<PendingSwapDecision>,
-	pub in_flight_internal_saves:              HashSet<BufferId>,
-	pub ignore_external_change_until:          HashMap<BufferId, Instant>,
-	pub command_registry:                      CommandRegistry,
-	pub overlay:                               Option<OverlayState>,
-	pub command_palette:                       Option<CommandPaletteState>,
-	pub workspace_file_picker:                 Option<WorkspaceFilePickerState>,
-	pub notification_center:                   Option<NotificationCenterState>,
-	pub notifications:                         Vec<NotificationEntry>,
-	notification_preview_active:               Vec<ActiveNotification>,
-	notification_preview_queue:                VecDeque<u64>,
-	next_notification_id:                      u64,
-	pub workspace_file_cache:                  Vec<WorkspaceFileEntry>,
-	pub workspace_file_cache_loading:          bool,
-	pub(crate) window_buffer_views:            HashMap<(WindowId, BufferId), WindowBufferViewState>,
-	pub buffers:                               SlotMap<BufferId, BufferState>,
-	pub buffer_order:                          Vec<BufferId>,
-	pub windows:                               SlotMap<WindowId, WindowState>,
-	pub tabs:                                  BTreeMap<TabId, TabState>,
-	pub status_bar:                            StatusBarState,
+	pub editor:    EditorState,
+	pub workbench: WorkbenchState,
+}
+
+impl Deref for RimState {
+	type Target = EditorState;
+
+	fn deref(&self) -> &Self::Target { &self.editor }
+}
+
+impl DerefMut for RimState {
+	fn deref_mut(&mut self) -> &mut Self::Target { &mut self.editor }
 }
 
 impl RimState {
@@ -381,81 +420,20 @@ impl RimState {
 	const NOTIFICATION_PREVIEW_CAPACITY: usize = 5;
 	const NOTIFICATION_PREVIEW_DURATION: Duration = Duration::from_secs(3);
 
-	pub fn new() -> Self {
-		let buffers = SlotMap::with_key();
-		let mut windows = SlotMap::with_key();
-		let mut tabs = BTreeMap::new();
-
-		let tab_id = TabId(1);
-		let window_id = windows.insert(WindowState::default());
-
-		tabs.insert(tab_id, TabState {
-			windows:       vec![window_id],
-			active_window: window_id,
-			buffer_order:  Vec::new(),
-		});
-
-		Self {
-			title: "Rim".to_string(),
-			workspace_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-			active_tab: tab_id,
-			leader_key: ' ',
-			mode: EditorMode::Normal,
-			visual_anchor: None,
-			visual_block_anchor_display_col: None,
-			visual_block_cursor_display_col: None,
-			command_line: String::new(),
-			quit_after_save: false,
-			force_quit_trim_file_dirty_in_session: false,
-			pending_save_path: None,
-			preferred_col: None,
-			line_slot: None,
-			line_slot_line_wise: false,
-			line_slot_block_wise: false,
-			cursor_scroll_threshold: 0,
-			key_hints_width: 42,
-			key_hints_max_height: 36,
-			word_wrap: false,
-			picker_preview_word_wrap: true,
-			normal_sequence: Vec::new(),
-			visual_g_pending: false,
-			pending_insert_group: None,
-			pending_block_insert: None,
-			pending_swap_decision: None,
-			in_flight_internal_saves: HashSet::new(),
-			ignore_external_change_until: HashMap::new(),
-			command_registry: CommandRegistry::with_defaults(),
-			overlay: None,
-			command_palette: None,
-			workspace_file_picker: None,
-			notification_center: None,
-			notifications: Vec::new(),
-			notification_preview_active: Vec::new(),
-			notification_preview_queue: VecDeque::new(),
-			next_notification_id: 1,
-			workspace_file_cache: Vec::new(),
-			workspace_file_cache_loading: false,
-			window_buffer_views: HashMap::new(),
-			buffers,
-			buffer_order: Vec::new(),
-			windows,
-			tabs,
-			status_bar: StatusBarState::default(),
-		}
-	}
+	pub fn new() -> Self { Self { editor: EditorState::new(), workbench: WorkbenchState::new() } }
 
 	pub fn apply_command_config(&mut self, config: &CommandConfigFile) -> Vec<CommandConfigError> {
-		self.command_registry.apply_config(config)
+		self.workbench.command_registry.apply_config(config)
 	}
 
 	pub fn push_notification(&mut self, level: NotificationLevel, message: impl Into<String>) {
 		let message = message.into();
 		let now = Instant::now();
-		let id = self.next_notification_id;
-		self.next_notification_id = self.next_notification_id.saturating_add(1);
+		let id = self.workbench.next_notification_id;
+		self.workbench.next_notification_id = self.workbench.next_notification_id.saturating_add(1);
 		let created_at = SystemTime::now();
 		let created_at_local = format_local_timestamp(created_at);
-		self.notifications.push(NotificationEntry {
+		self.workbench.notifications.push(NotificationEntry {
 			id,
 			level,
 			message,
@@ -463,37 +441,40 @@ impl RimState {
 			created_at_local,
 			read: false,
 		});
-		self.notification_preview_queue.push_back(id);
+		self.workbench.notification_preview_queue.push_back(id);
 		self.tick_notifications(now);
 	}
 
 	pub fn tick_notifications(&mut self, now: Instant) -> bool {
-		let before = self.notification_preview_active.len();
-		self.notification_preview_active.retain(|item| item.expires_at > now);
-		while self.notification_preview_active.len() < Self::NOTIFICATION_PREVIEW_CAPACITY {
-			let Some(next_id) = self.notification_preview_queue.pop_front() else {
+		let before = self.workbench.notification_preview_active.len();
+		self.workbench.notification_preview_active.retain(|item| item.expires_at > now);
+		while self.workbench.notification_preview_active.len() < Self::NOTIFICATION_PREVIEW_CAPACITY {
+			let Some(next_id) = self.workbench.notification_preview_queue.pop_front() else {
 				break;
 			};
-			if self.notifications.iter().any(|entry| entry.id == next_id) {
-				self.notification_preview_active.push(ActiveNotification {
+			if self.workbench.notifications.iter().any(|entry| entry.id == next_id) {
+				self.workbench.notification_preview_active.push(ActiveNotification {
 					id:         next_id,
 					expires_at: now + Self::NOTIFICATION_PREVIEW_DURATION,
 				});
 			}
 		}
-		before != self.notification_preview_active.len()
-			|| !self.notification_preview_active.is_empty()
-			|| !self.notification_preview_queue.is_empty()
+		before != self.workbench.notification_preview_active.len()
+			|| !self.workbench.notification_preview_active.is_empty()
+			|| !self.workbench.notification_preview_queue.is_empty()
 	}
 
 	pub fn notification_preview(&self) -> Option<NotificationPreviewState> {
-		if self.notification_preview_active.is_empty() && self.notification_preview_queue.is_empty() {
+		if self.workbench.notification_preview_active.is_empty()
+			&& self.workbench.notification_preview_queue.is_empty()
+		{
 			return None;
 		}
 		let items = self
+			.workbench
 			.notification_preview_active
 			.iter()
-			.filter_map(|active| self.notifications.iter().find(|entry| entry.id == active.id))
+			.filter_map(|active| self.workbench.notifications.iter().find(|entry| entry.id == active.id))
 			.map(|entry| NotificationPreviewItem {
 				id:               entry.id,
 				level:            entry.level,
@@ -510,7 +491,7 @@ impl RimState {
 	}
 
 	fn notification_center_open_hint(&self) -> String {
-		let mut bindings = self.command_registry.binding_sequences_for_builtin(
+		let mut bindings = self.workbench.command_registry.binding_sequences_for_builtin(
 			KeymapScope::ModeNormal,
 			BuiltinCommand::Command(CommandCommand::Notifications),
 		);
@@ -524,26 +505,27 @@ impl RimState {
 	}
 
 	pub fn unread_notification_count(&self) -> usize {
-		self.notifications.iter().filter(|entry| !entry.read).count()
+		self.workbench.notifications.iter().filter(|entry| !entry.read).count()
 	}
 
 	pub fn open_notification_center(&mut self) {
 		self.close_key_hints();
 		self.close_workspace_file_picker();
 		self.close_command_palette();
-		if self.notification_center.is_none() {
-			self.notification_center = Some(NotificationCenterState::default());
+		if self.workbench.notification_center.is_none() {
+			self.workbench.notification_center = Some(NotificationCenterState::default());
 		}
 		self.mark_selected_notification_read();
 	}
 
-	pub fn close_notification_center(&mut self) { self.notification_center = None; }
+	pub fn close_notification_center(&mut self) { self.workbench.notification_center = None; }
 
-	pub fn notification_center_open(&self) -> bool { self.notification_center.is_some() }
+	pub fn notification_center_open(&self) -> bool { self.workbench.notification_center.is_some() }
 
 	pub fn notification_center_view(&self) -> Option<NotificationCenterView> {
-		let center = self.notification_center.as_ref()?;
+		let center = self.workbench.notification_center.as_ref()?;
 		let mut items = self
+			.workbench
 			.notifications
 			.iter()
 			.rev()
@@ -569,14 +551,14 @@ impl RimState {
 	}
 
 	pub fn move_notification_center_selection(&mut self, delta: isize) -> bool {
-		let Some(center) = self.notification_center.as_mut() else {
+		let Some(center) = self.workbench.notification_center.as_mut() else {
 			return false;
 		};
-		if self.notifications.is_empty() {
+		if self.workbench.notifications.is_empty() {
 			center.selected = 0;
 			return false;
 		}
-		let max_index = self.notifications.len().saturating_sub(1);
+		let max_index = self.workbench.notifications.len().saturating_sub(1);
 		let next = center.selected.saturating_add_signed(delta).min(max_index);
 		let changed = next != center.selected;
 		center.selected = next;
@@ -585,66 +567,70 @@ impl RimState {
 	}
 
 	pub fn delete_selected_notification(&mut self) -> bool {
-		let Some(center) = self.notification_center.as_mut() else {
+		let Some(center) = self.workbench.notification_center.as_mut() else {
 			return false;
 		};
-		if self.notifications.is_empty() {
+		if self.workbench.notifications.is_empty() {
 			center.selected = 0;
 			return false;
 		}
-		let selected_in_reverse = center.selected.min(self.notifications.len().saturating_sub(1));
-		let index = self.notifications.len().saturating_sub(1).saturating_sub(selected_in_reverse);
-		let removed = self.notifications.remove(index);
-		self.notification_preview_queue.retain(|id| *id != removed.id);
-		self.notification_preview_active.retain(|item| item.id != removed.id);
-		if self.notifications.is_empty() {
+		let selected_in_reverse = center.selected.min(self.workbench.notifications.len().saturating_sub(1));
+		let index = self.workbench.notifications.len().saturating_sub(1).saturating_sub(selected_in_reverse);
+		let removed = self.workbench.notifications.remove(index);
+		self.workbench.notification_preview_queue.retain(|id| *id != removed.id);
+		self.workbench.notification_preview_active.retain(|item| item.id != removed.id);
+		if self.workbench.notifications.is_empty() {
 			center.selected = 0;
 		} else {
-			center.selected = center.selected.min(self.notifications.len().saturating_sub(1));
+			center.selected = center.selected.min(self.workbench.notifications.len().saturating_sub(1));
 		}
 		self.mark_selected_notification_read();
 		true
 	}
 
 	fn mark_selected_notification_read(&mut self) {
-		let Some(center) = self.notification_center.as_ref() else {
+		let Some(center) = self.workbench.notification_center.as_ref() else {
 			return;
 		};
-		if self.notifications.is_empty() {
+		if self.workbench.notifications.is_empty() {
 			return;
 		}
-		let selected_in_reverse = center.selected.min(self.notifications.len().saturating_sub(1));
-		let index = self.notifications.len().saturating_sub(1).saturating_sub(selected_in_reverse);
-		if let Some(entry) = self.notifications.get_mut(index) {
+		let selected_in_reverse = center.selected.min(self.workbench.notifications.len().saturating_sub(1));
+		let index = self.workbench.notifications.len().saturating_sub(1).saturating_sub(selected_in_reverse);
+		if let Some(entry) = self.workbench.notifications.get_mut(index) {
 			entry.read = true;
 		}
 	}
 
 	pub fn register_plugin_command(&mut self, registration: PluginCommandRegistration) -> Result<(), String> {
-		self.command_registry.register_plugin_command(registration)
+		self.workbench.command_registry.register_plugin_command(registration)
 	}
 
-	pub fn command_palette(&self) -> Option<&CommandPaletteState> { self.command_palette.as_ref() }
+	pub fn command_palette(&self) -> Option<&CommandPaletteState> { self.workbench.command_palette.as_ref() }
 
 	pub fn workspace_file_picker(&self) -> Option<&WorkspaceFilePickerState> {
-		self.workspace_file_picker.as_ref()
+		self.workbench.workspace_file_picker.as_ref()
 	}
 
-	pub fn workspace_root(&self) -> &Path { self.workspace_root.as_path() }
+	pub fn workspace_root(&self) -> &Path { self.workbench.workspace_root.as_path() }
 
-	pub fn set_workspace_root(&mut self, workspace_root: PathBuf) { self.workspace_root = workspace_root; }
+	pub fn set_workspace_root(&mut self, workspace_root: PathBuf) {
+		self.workbench.workspace_root = workspace_root;
+	}
 
 	pub fn refresh_command_palette(&mut self) {
 		if !self.is_command_mode() {
-			self.command_palette = None;
+			self.workbench.command_palette = None;
 			return;
 		}
 		let previous_palette_preview = self
+			.workbench
 			.command_palette
 			.as_ref()
 			.map(|palette| (palette.preview_title.clone(), palette.preview_lines.clone(), palette.preview_scroll))
 			.unwrap_or_else(|| (String::new(), Vec::new(), 0));
 		let previous_selected_file = self
+			.workbench
 			.command_palette
 			.as_ref()
 			.and_then(|palette| palette.items.get(palette.selected))
@@ -654,14 +640,15 @@ impl RimState {
 			.command_palette_path_argument_context()
 			.map(|(command, query)| (command.to_string(), query.to_string()))
 		{
-			if self.workspace_file_cache_loading {
+			if self.workbench.workspace_file_cache_loading {
 				(Vec::new(), true, true)
 			} else {
 				(self.command_palette_file_matches(file_query.as_str(), 512), false, true)
 			}
 		} else {
-			let command_query = self.command_line.split_whitespace().next().unwrap_or_default();
+			let command_query = self.workbench.command_line.split_whitespace().next().unwrap_or_default();
 			let items = self
+				.workbench
 				.command_registry
 				.command_palette_matches(command_query, 512)
 				.into_iter()
@@ -679,6 +666,7 @@ impl RimState {
 				})
 				.unwrap_or_else(|| {
 					self
+						.workbench
 						.command_palette
 						.as_ref()
 						.map(|palette| palette.selected.min(items.len().saturating_sub(1)))
@@ -686,6 +674,7 @@ impl RimState {
 				})
 		} else {
 			self
+				.workbench
 				.command_palette
 				.as_ref()
 				.map(|palette| palette.selected.min(items.len().saturating_sub(1)))
@@ -702,8 +691,8 @@ impl RimState {
 		} else {
 			(String::new(), Vec::new(), 0)
 		};
-		self.command_palette = Some(CommandPaletteState {
-			query: self.command_line.clone(),
+		self.workbench.command_palette = Some(CommandPaletteState {
+			query: self.workbench.command_line.clone(),
 			items,
 			selected,
 			loading,
@@ -715,40 +704,42 @@ impl RimState {
 	}
 
 	pub fn close_command_palette(&mut self) {
-		self.command_palette = None;
+		self.workbench.command_palette = None;
 		if matches!(
-			self.overlay,
+			self.workbench.overlay,
 			Some(OverlayState::KeyHints(KeyHintsOverlayState { scope: KeymapScope::OverlayCommandPalette, .. }))
 		) {
-			self.overlay = None;
+			self.workbench.overlay = None;
 		}
 	}
 
-	pub fn has_workspace_file_cache(&self) -> bool { !self.workspace_file_cache.is_empty() }
+	pub fn has_workspace_file_cache(&self) -> bool { !self.workbench.workspace_file_cache.is_empty() }
 
-	pub fn workspace_file_cache_is_loading(&self) -> bool { self.workspace_file_cache_loading }
+	pub fn workspace_file_cache_is_loading(&self) -> bool { self.workbench.workspace_file_cache_loading }
 
-	pub fn workspace_file_cache_entries(&self) -> &[WorkspaceFileEntry] { self.workspace_file_cache.as_slice() }
+	pub fn workspace_file_cache_entries(&self) -> &[WorkspaceFileEntry] {
+		self.workbench.workspace_file_cache.as_slice()
+	}
 
 	pub fn command_palette_needs_workspace_files(&self) -> bool {
 		self.command_palette_path_argument_context().is_some()
-			&& self.workspace_file_cache.is_empty()
-			&& !self.workspace_file_cache_loading
+			&& self.workbench.workspace_file_cache.is_empty()
+			&& !self.workbench.workspace_file_cache_loading
 	}
 
 	pub fn begin_workspace_file_cache_loading(&mut self) {
-		self.workspace_file_cache_loading = true;
+		self.workbench.workspace_file_cache_loading = true;
 		self.refresh_command_palette();
 	}
 
 	pub fn set_workspace_file_cache(&mut self, entries: Vec<WorkspaceFileEntry>) {
-		self.workspace_file_cache = entries;
-		self.workspace_file_cache_loading = false;
+		self.workbench.workspace_file_cache = entries;
+		self.workbench.workspace_file_cache_loading = false;
 		self.refresh_command_palette();
 	}
 
 	pub fn fail_workspace_file_cache_loading(&mut self) {
-		self.workspace_file_cache_loading = false;
+		self.workbench.workspace_file_cache_loading = false;
 		self.refresh_command_palette();
 	}
 
@@ -756,7 +747,7 @@ impl RimState {
 		let total_files = entries.len();
 		self.close_key_hints();
 		self.close_command_palette();
-		self.workspace_file_picker = Some(WorkspaceFilePickerState {
+		self.workbench.workspace_file_picker = Some(WorkspaceFilePickerState {
 			query: String::new(),
 			entries,
 			items: Vec::new(),
@@ -775,11 +766,11 @@ impl RimState {
 	pub fn open_workspace_file_picker_loading(&mut self) {
 		self.close_key_hints();
 		self.close_command_palette();
-		if let Some(picker) = self.workspace_file_picker.as_mut() {
+		if let Some(picker) = self.workbench.workspace_file_picker.as_mut() {
 			picker.loading = true;
 			return;
 		}
-		self.workspace_file_picker = Some(WorkspaceFilePickerState {
+		self.workbench.workspace_file_picker = Some(WorkspaceFilePickerState {
 			query:          String::new(),
 			entries:        Vec::new(),
 			items:          Vec::new(),
@@ -795,23 +786,23 @@ impl RimState {
 	}
 
 	pub fn close_workspace_file_picker(&mut self) {
-		self.workspace_file_picker = None;
+		self.workbench.workspace_file_picker = None;
 		if matches!(
-			self.overlay,
+			self.workbench.overlay,
 			Some(OverlayState::KeyHints(KeyHintsOverlayState { scope: KeymapScope::OverlayPicker, .. }))
 		) {
-			self.overlay = None;
+			self.workbench.overlay = None;
 		}
 	}
 
-	pub fn workspace_file_picker_open(&self) -> bool { self.workspace_file_picker.is_some() }
+	pub fn workspace_file_picker_open(&self) -> bool { self.workbench.workspace_file_picker.is_some() }
 
 	pub fn workspace_file_picker_loading(&self) -> bool {
-		self.workspace_file_picker.as_ref().is_some_and(|picker| picker.loading)
+		self.workbench.workspace_file_picker.as_ref().is_some_and(|picker| picker.loading)
 	}
 
 	pub fn refresh_workspace_file_picker_matches(&mut self) {
-		let Some(picker) = self.workspace_file_picker.as_mut() else {
+		let Some(picker) = self.workbench.workspace_file_picker.as_mut() else {
 			return;
 		};
 		let previous_selected_path = picker.preferred.clone().or_else(|| {
@@ -869,7 +860,7 @@ impl RimState {
 	}
 
 	pub fn replace_workspace_file_picker_entries(&mut self, entries: Vec<WorkspaceFileEntry>) {
-		let Some(picker) = self.workspace_file_picker.as_mut() else {
+		let Some(picker) = self.workbench.workspace_file_picker.as_mut() else {
 			self.open_workspace_file_picker(entries);
 			return;
 		};
@@ -879,7 +870,7 @@ impl RimState {
 	}
 
 	pub fn move_workspace_file_picker_selection(&mut self, delta: isize) -> bool {
-		let Some(picker) = self.workspace_file_picker.as_mut() else {
+		let Some(picker) = self.workbench.workspace_file_picker.as_mut() else {
 			return false;
 		};
 		if picker.items.is_empty() {
@@ -897,7 +888,7 @@ impl RimState {
 	}
 
 	pub fn push_workspace_file_picker_char(&mut self, ch: char) {
-		let Some(picker) = self.workspace_file_picker.as_mut() else {
+		let Some(picker) = self.workbench.workspace_file_picker.as_mut() else {
 			return;
 		};
 		picker.query.push(ch);
@@ -908,7 +899,7 @@ impl RimState {
 	}
 
 	pub fn pop_workspace_file_picker_char(&mut self) {
-		let Some(picker) = self.workspace_file_picker.as_mut() else {
+		let Some(picker) = self.workbench.workspace_file_picker.as_mut() else {
 			return;
 		};
 		let _ = picker.query.pop();
@@ -919,7 +910,7 @@ impl RimState {
 	}
 
 	pub fn selected_workspace_file_picker_path(&self) -> Option<&Path> {
-		let picker = self.workspace_file_picker.as_ref()?;
+		let picker = self.workbench.workspace_file_picker.as_ref()?;
 		let selected = picker.items.get(picker.selected)?;
 		Some(selected.absolute_path.as_path())
 	}
@@ -927,8 +918,8 @@ impl RimState {
 	pub fn set_workspace_file_picker_preview(&mut self, path: &Path, preview: String) {
 		let content_width = self.active_tab_content_size().0;
 		let preview_width = compute_workspace_file_picker_body_layout(content_width).preview_width as usize;
-		let word_wrap = self.picker_preview_word_wrap;
-		let Some(picker) = self.workspace_file_picker.as_mut() else {
+		let word_wrap = self.workbench.picker_preview_word_wrap;
+		let Some(picker) = self.workbench.workspace_file_picker.as_mut() else {
 			return;
 		};
 		let selected = picker.items.get(picker.selected).map(|item| item.absolute_path.as_path());
@@ -952,7 +943,7 @@ impl RimState {
 	}
 
 	pub fn set_workspace_file_picker_preview_loading(&mut self, path: &Path) {
-		let Some(picker) = self.workspace_file_picker.as_mut() else {
+		let Some(picker) = self.workbench.workspace_file_picker.as_mut() else {
 			return;
 		};
 		let selected = picker.items.get(picker.selected).map(|item| item.absolute_path.as_path());
@@ -966,7 +957,7 @@ impl RimState {
 	}
 
 	pub fn clear_workspace_file_picker_preview(&mut self) {
-		let Some(picker) = self.workspace_file_picker.as_mut() else {
+		let Some(picker) = self.workbench.workspace_file_picker.as_mut() else {
 			return;
 		};
 		picker.preview_title.clear();
@@ -977,8 +968,8 @@ impl RimState {
 	pub fn scroll_workspace_file_picker_preview(&mut self, delta: isize) -> bool {
 		let content_width = self.active_tab_content_size().0;
 		let preview_width = compute_workspace_file_picker_body_layout(content_width).preview_width as usize;
-		let word_wrap = self.picker_preview_word_wrap;
-		let Some(picker) = self.workspace_file_picker.as_mut() else {
+		let word_wrap = self.workbench.picker_preview_word_wrap;
+		let Some(picker) = self.workbench.workspace_file_picker.as_mut() else {
 			return false;
 		};
 		let max_scroll = preview_max_scroll_with_mode(picker.preview_lines.as_slice(), preview_width, word_wrap);
@@ -989,7 +980,7 @@ impl RimState {
 	}
 
 	pub fn move_command_palette_selection(&mut self, delta: isize) -> bool {
-		let Some(palette) = self.command_palette.as_mut() else {
+		let Some(palette) = self.workbench.command_palette.as_mut() else {
 			return false;
 		};
 		if palette.items.is_empty() {
@@ -1004,8 +995,8 @@ impl RimState {
 	pub fn scroll_command_palette_preview(&mut self, delta: isize) -> bool {
 		let content_width = self.active_tab_content_size().0;
 		let preview_width = compute_command_palette_preview_width(content_width) as usize;
-		let word_wrap = self.picker_preview_word_wrap;
-		let Some(palette) = self.command_palette.as_mut() else {
+		let word_wrap = self.workbench.picker_preview_word_wrap;
+		let Some(palette) = self.workbench.command_palette.as_mut() else {
 			return false;
 		};
 		if !palette.showing_files {
@@ -1050,47 +1041,50 @@ impl RimState {
 		}
 	}
 
-	pub fn word_wrap_enabled(&self) -> bool { self.word_wrap }
+	pub fn word_wrap_enabled(&self) -> bool { self.workbench.word_wrap }
 
 	pub fn toggle_word_wrap(&mut self) {
-		self.word_wrap = !self.word_wrap;
+		self.workbench.word_wrap = !self.workbench.word_wrap;
 		for window_id in self.active_tab_window_ids() {
 			if let Some(window) = self.windows.get_mut(window_id) {
 				window.scroll_x = 0;
 			}
 		}
 		self.align_active_window_scroll_to_cursor();
-		self.status_bar.message =
-			if self.word_wrap { "word wrap enabled".to_string() } else { "word wrap disabled".to_string() };
+		self.workbench.status_bar.message = if self.workbench.word_wrap {
+			"word wrap enabled".to_string()
+		} else {
+			"word wrap disabled".to_string()
+		};
 	}
 
-	pub fn picker_preview_word_wrap_enabled(&self) -> bool { self.picker_preview_word_wrap }
+	pub fn picker_preview_word_wrap_enabled(&self) -> bool { self.workbench.picker_preview_word_wrap }
 
 	pub fn toggle_picker_preview_word_wrap(&mut self) {
-		self.picker_preview_word_wrap = !self.picker_preview_word_wrap;
+		self.workbench.picker_preview_word_wrap = !self.workbench.picker_preview_word_wrap;
 		let content_width = self.active_tab_content_size().0;
 		let picker_preview_width =
 			compute_workspace_file_picker_body_layout(content_width).preview_width as usize;
 		let command_preview_width = compute_command_palette_preview_width(content_width) as usize;
-		if let Some(picker) = self.workspace_file_picker.as_mut() {
+		if let Some(picker) = self.workbench.workspace_file_picker.as_mut() {
 			let max_scroll = preview_max_scroll_with_mode(
 				picker.preview_lines.as_slice(),
 				picker_preview_width,
-				self.picker_preview_word_wrap,
+				self.workbench.picker_preview_word_wrap,
 			);
 			picker.preview_scroll = picker.preview_scroll.min(max_scroll);
 		}
-		if let Some(palette) = self.command_palette.as_mut()
+		if let Some(palette) = self.workbench.command_palette.as_mut()
 			&& palette.showing_files
 		{
 			let max_scroll = preview_max_scroll_with_mode(
 				palette.preview_lines.as_slice(),
 				command_preview_width,
-				self.picker_preview_word_wrap,
+				self.workbench.picker_preview_word_wrap,
 			);
 			palette.preview_scroll = palette.preview_scroll.min(max_scroll);
 		}
-		self.status_bar.message = if self.picker_preview_word_wrap {
+		self.workbench.status_bar.message = if self.workbench.picker_preview_word_wrap {
 			"picker preview wrap enabled".to_string()
 		} else {
 			"picker preview wrap disabled".to_string()
@@ -1098,12 +1092,12 @@ impl RimState {
 	}
 
 	pub fn selected_command_palette_match(&self) -> Option<&CommandPaletteMatch> {
-		let palette = self.command_palette.as_ref()?;
+		let palette = self.workbench.command_palette.as_ref()?;
 		palette.items.get(palette.selected)?.as_command()
 	}
 
 	pub fn selected_command_palette_file_match(&self) -> Option<&CommandPaletteFileMatch> {
-		let palette = self.command_palette.as_ref()?;
+		let palette = self.workbench.command_palette.as_ref()?;
 		palette.items.get(palette.selected)?.as_file()
 	}
 
@@ -1112,14 +1106,14 @@ impl RimState {
 	}
 
 	pub fn command_palette_showing_files(&self) -> bool {
-		self.command_palette.as_ref().is_some_and(|palette| palette.showing_files)
+		self.workbench.command_palette.as_ref().is_some_and(|palette| palette.showing_files)
 	}
 
 	pub fn set_command_palette_preview(&mut self, path: &Path, preview: String) {
 		let content_width = self.active_tab_content_size().0;
 		let preview_width = compute_command_palette_preview_width(content_width) as usize;
-		let word_wrap = self.picker_preview_word_wrap;
-		let Some(palette) = self.command_palette.as_mut() else {
+		let word_wrap = self.workbench.picker_preview_word_wrap;
+		let Some(palette) = self.workbench.command_palette.as_mut() else {
 			return;
 		};
 		if !palette.showing_files {
@@ -1146,7 +1140,7 @@ impl RimState {
 	}
 
 	pub fn set_command_palette_preview_loading(&mut self, path: &Path) {
-		let Some(palette) = self.command_palette.as_mut() else {
+		let Some(palette) = self.workbench.command_palette.as_mut() else {
 			return;
 		};
 		if !palette.showing_files {
@@ -1163,7 +1157,7 @@ impl RimState {
 	}
 
 	pub fn complete_command_palette_selection(&mut self) -> bool {
-		let Some(palette) = self.command_palette.as_ref() else {
+		let Some(palette) = self.workbench.command_palette.as_ref() else {
 			return false;
 		};
 		let Some(item) = palette.items.get(palette.selected) else {
@@ -1172,15 +1166,15 @@ impl RimState {
 		match item {
 			CommandPaletteItem::Command(item) => {
 				let completion = if item.name.is_empty() { item.command_id_label.clone() } else { item.name.clone() };
-				self.command_line = completion;
+				self.workbench.command_line = completion;
 				self.refresh_command_palette();
 				true
 			}
 			CommandPaletteItem::File(item) => {
-				let Some((command, _)) = self.command_line.split_once(' ') else {
+				let Some((command, _)) = self.workbench.command_line.split_once(' ') else {
 					return false;
 				};
-				self.command_line = format!("{} {}", command, item.relative_path);
+				self.workbench.command_line = format!("{} {}", command, item.relative_path);
 				self.refresh_command_palette();
 				true
 			}
@@ -1188,13 +1182,13 @@ impl RimState {
 	}
 
 	pub fn active_keymap_scope(&self) -> KeymapScope {
-		if let Some(OverlayState::KeyHints(overlay)) = self.overlay.as_ref() {
+		if let Some(OverlayState::KeyHints(overlay)) = self.workbench.overlay.as_ref() {
 			overlay.scope
 		} else if self.workspace_file_picker_open() {
 			KeymapScope::OverlayPicker
 		} else if self.notification_center_open() {
 			KeymapScope::OverlayNotificationCenter
-		} else if self.command_palette().is_some() {
+		} else if self.workbench.command_palette.is_some() {
 			KeymapScope::OverlayCommandPalette
 		} else if self.is_visual_mode() {
 			KeymapScope::ModeVisual
@@ -1208,7 +1202,7 @@ impl RimState {
 	}
 
 	pub fn floating_window(&self) -> Option<&FloatingWindowState> {
-		match self.overlay.as_ref() {
+		match self.workbench.overlay.as_ref() {
 			Some(OverlayState::KeyHints(overlay)) => Some(&overlay.window),
 			Some(OverlayState::FloatingWindow(window)) => Some(window),
 			None => None,
@@ -1216,12 +1210,12 @@ impl RimState {
 	}
 
 	pub fn close_key_hints(&mut self) {
-		if matches!(self.overlay, Some(OverlayState::KeyHints(_))) {
-			self.overlay = None;
+		if matches!(self.workbench.overlay, Some(OverlayState::KeyHints(_))) {
+			self.workbench.overlay = None;
 		}
 	}
 
-	pub fn key_hints_open(&self) -> bool { matches!(self.overlay, Some(OverlayState::KeyHints(_))) }
+	pub fn key_hints_open(&self) -> bool { matches!(self.workbench.overlay, Some(OverlayState::KeyHints(_))) }
 
 	pub fn open_key_hints_overview(&mut self) { self.open_key_hints(Vec::new(), true); }
 
@@ -1234,23 +1228,23 @@ impl RimState {
 	pub fn scroll_key_hints_half_page_down(&mut self) -> bool { self.scroll_overlay_half_page(1) }
 
 	pub fn refresh_key_hints_overlay_after_config_reload(&mut self) {
-		let Some(OverlayState::KeyHints(overlay)) = self.overlay.as_ref() else {
+		let Some(OverlayState::KeyHints(overlay)) = self.workbench.overlay.as_ref() else {
 			return;
 		};
 		self.open_key_hints(overlay.prefix.clone(), overlay.overview);
 	}
 
 	pub fn refresh_pending_key_hints(&mut self) {
-		if self.normal_sequence.is_empty() {
+		if self.workbench.normal_sequence.is_empty() {
 			self.close_key_hints();
 			return;
 		}
-		self.open_key_hints(self.normal_sequence.clone(), false);
+		self.open_key_hints(self.workbench.normal_sequence.clone(), false);
 	}
 
 	fn open_key_hints(&mut self, prefix: Vec<NormalSequenceKey>, overview: bool) {
 		let scope = self.active_keymap_scope();
-		let lines = self.command_registry.key_hints(scope, prefix.as_slice());
+		let lines = self.workbench.command_registry.key_hints(scope, prefix.as_slice());
 		if lines.is_empty() {
 			self.close_key_hints();
 			return;
@@ -1261,13 +1255,13 @@ impl RimState {
 			format!("{} {}", self.active_keymap_scope_label(scope), self.render_sequence(prefix.as_slice()))
 		};
 		let subtitle = Some("Scrollable".to_string());
-		let height = lines.len().saturating_add(4).min(self.key_hints_max_height as usize) as u16;
+		let height = lines.len().saturating_add(4).min(self.workbench.key_hints_max_height as usize) as u16;
 		let window = FloatingWindowState {
 			title,
 			subtitle,
 			footer: Some("Esc close  Backspace back".to_string()),
 			placement: FloatingWindowPlacement::BottomRight {
-				width: self.key_hints_width,
+				width: self.workbench.key_hints_width,
 				height,
 				margin_right: 1,
 				margin_bottom: 1,
@@ -1275,7 +1269,8 @@ impl RimState {
 			lines,
 			scroll: 0,
 		};
-		self.overlay = Some(OverlayState::KeyHints(KeyHintsOverlayState { scope, prefix, overview, window }));
+		self.workbench.overlay =
+			Some(OverlayState::KeyHints(KeyHintsOverlayState { scope, prefix, overview, window }));
 	}
 
 	fn active_keymap_scope_label(&self, scope: KeymapScope) -> &'static str {
@@ -1313,8 +1308,8 @@ impl RimState {
 	}
 
 	fn command_palette_path_argument_context(&self) -> Option<(&str, &str)> {
-		let (command, tail) = self.command_line.split_once(' ')?;
-		let resolved = self.command_registry.resolve_command_input(command)?;
+		let (command, tail) = self.workbench.command_line.split_once(' ')?;
+		let resolved = self.workbench.command_registry.resolve_command_input(command)?;
 		if resolved.spec.arg_kind != CommandArgKind::OptionalPath {
 			return None;
 		}
@@ -1323,6 +1318,7 @@ impl RimState {
 
 	fn command_palette_file_matches(&self, query: &str, limit: usize) -> Vec<CommandPaletteItem> {
 		let mut matches = self
+			.workbench
 			.workspace_file_cache
 			.iter()
 			.filter_map(|entry| {
@@ -1350,11 +1346,11 @@ impl RimState {
 	}
 
 	pub fn step_back_key_hint_prefix(&mut self) -> bool {
-		if self.normal_sequence.pop().is_none() {
+		if self.workbench.normal_sequence.pop().is_none() {
 			self.close_key_hints();
 			return false;
 		}
-		self.status_bar.key_sequence = self.render_sequence(self.normal_sequence.as_slice());
+		self.workbench.status_bar.key_sequence = self.render_sequence(self.workbench.normal_sequence.as_slice());
 		self.refresh_pending_key_hints();
 		true
 	}
@@ -1389,7 +1385,7 @@ impl RimState {
 	}
 
 	fn floating_window_mut(&mut self) -> Option<&mut FloatingWindowState> {
-		match self.overlay.as_mut() {
+		match self.workbench.overlay.as_mut() {
 			Some(OverlayState::KeyHints(overlay)) => Some(&mut overlay.window),
 			Some(OverlayState::FloatingWindow(window)) => Some(window),
 			None => None,
@@ -1461,16 +1457,15 @@ impl RimState {
 	}
 
 	pub(crate) fn sync_window_view_binding(&mut self, window_id: WindowId) {
-		let Some(window) = self.windows.get(window_id) else {
-			return;
-		};
-		let Some(buffer_id) = window.buffer_id else {
+		let Some((buffer_id, cursor, scroll_x, scroll_y)) = self.windows.get(window_id).and_then(|window| {
+			window.buffer_id.map(|buffer_id| (buffer_id, window.cursor, window.scroll_x, window.scroll_y))
+		}) else {
 			return;
 		};
 		self.window_buffer_views.insert((window_id, buffer_id), WindowBufferViewState {
-			cursor:   window.cursor,
-			scroll_x: window.scroll_x,
-			scroll_y: window.scroll_y,
+			cursor,
+			scroll_x,
+			scroll_y,
 		});
 	}
 

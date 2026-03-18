@@ -192,7 +192,7 @@ fn cursor_scroll_threshold_should_trigger_earlier() {
 	let mut state = test_state();
 	set_active_buffer_text(&mut state, "1\n2\n3\n4\n5\n6");
 	state.update_active_tab_layout(80, 4);
-	state.cursor_scroll_threshold = 1;
+	state.workbench.cursor_scroll_threshold = 1;
 
 	state.move_cursor_down();
 	state.move_cursor_down();
@@ -244,7 +244,7 @@ fn scroll_view_down_one_line_should_respect_cursor_scroll_threshold() {
 	let mut state = test_state();
 	set_active_buffer_text(&mut state, "1\n2\n3\n4\n5\n6");
 	state.update_active_tab_layout(80, 4);
-	state.cursor_scroll_threshold = 1;
+	state.workbench.cursor_scroll_threshold = 1;
 
 	state.scroll_view_down_one_line();
 
@@ -259,7 +259,7 @@ fn scroll_view_up_one_line_should_respect_cursor_scroll_threshold() {
 	let mut state = test_state();
 	set_active_buffer_text(&mut state, "1\n2\n3\n4\n5\n6");
 	state.update_active_tab_layout(80, 4);
-	state.cursor_scroll_threshold = 1;
+	state.workbench.cursor_scroll_threshold = 1;
 	let active_window_id = state.active_window_id();
 	let window = state.windows.get_mut(active_window_id).expect("window exists");
 	window.scroll_y = 2;
@@ -423,7 +423,7 @@ fn visual_mode_should_set_anchor_and_status_mode() {
 
 	assert!(state.is_visual_mode());
 	assert_eq!(state.visual_anchor, Some(cursor));
-	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::Visual);
+	assert_eq!(state.workbench.status_bar.mode, super::super::StatusBarMode::Visual);
 }
 
 #[test]
@@ -434,7 +434,7 @@ fn visual_mode_exit_should_clear_anchor_and_restore_normal_mode() {
 
 	assert!(!state.is_visual_mode());
 	assert_eq!(state.visual_anchor, None);
-	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::Normal);
+	assert_eq!(state.workbench.status_bar.mode, super::super::StatusBarMode::Normal);
 }
 
 #[test]
@@ -446,7 +446,7 @@ fn visual_line_mode_should_set_line_anchor_and_status_mode() {
 
 	assert!(state.is_visual_line_mode());
 	assert_eq!(state.visual_anchor, Some(CursorState { row: 1, col: 1 }));
-	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::VisualLine);
+	assert_eq!(state.workbench.status_bar.mode, super::super::StatusBarMode::VisualLine);
 }
 
 #[test]
@@ -458,7 +458,7 @@ fn visual_block_mode_should_set_anchor_and_status_mode() {
 
 	assert!(state.is_visual_block_mode());
 	assert_eq!(state.visual_anchor, Some(cursor));
-	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::VisualBlock);
+	assert_eq!(state.workbench.status_bar.mode, super::super::StatusBarMode::VisualBlock);
 }
 
 #[test]
@@ -478,7 +478,7 @@ fn visual_block_insert_should_enter_insert_block_mode_and_mirror_chars() {
 	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
 	assert_eq!(buffer.text.to_string(), "aXYbc\ndXYef\ngXYhi");
 	assert!(state.is_block_insert_mode());
-	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::InsertBlock);
+	assert_eq!(state.workbench.status_bar.mode, super::super::StatusBarMode::InsertBlock);
 	assert_eq!(state.active_cursor(), CursorState { row: 1, col: 4 });
 }
 
@@ -606,7 +606,7 @@ fn visual_delete_should_remove_selected_chars_in_single_line() {
 	assert_eq!(state.line_slot, Some("bcd".to_string()));
 	assert!(!state.line_slot_block_wise);
 	assert!(!state.is_visual_mode());
-	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::Normal);
+	assert_eq!(state.workbench.status_bar.mode, super::super::StatusBarMode::Normal);
 }
 
 #[test]

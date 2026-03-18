@@ -115,10 +115,10 @@ pub fn apply_all_configs(state: &mut RimState) -> Vec<String> {
 	reset_config_state_to_defaults(state);
 	match load_editor_config() {
 		Ok(Some(config)) => {
-			state.leader_key = config.editor.leader_key;
-			state.cursor_scroll_threshold = config.editor.cursor_scroll_threshold;
-			state.key_hints_width = config.editor.key_hints_width;
-			state.key_hints_max_height = config.editor.key_hints_max_height;
+			state.workbench.leader_key = config.editor.leader_key;
+			state.workbench.cursor_scroll_threshold = config.editor.cursor_scroll_threshold;
+			state.workbench.key_hints_width = config.editor.key_hints_width;
+			state.workbench.key_hints_max_height = config.editor.key_hints_max_height;
 		}
 		Ok(None) => {}
 		Err(err) => {
@@ -164,11 +164,11 @@ pub fn apply_config_errors_to_status(state: &mut RimState, errors: Vec<String>) 
 }
 
 pub fn reset_config_state_to_defaults(state: &mut RimState) {
-	state.leader_key = ' ';
-	state.cursor_scroll_threshold = 0;
-	state.key_hints_width = 42;
-	state.key_hints_max_height = 36;
-	state.command_registry = CommandRegistry::with_defaults();
+	state.workbench.leader_key = ' ';
+	state.workbench.cursor_scroll_threshold = 0;
+	state.workbench.key_hints_width = 42;
+	state.workbench.key_hints_max_height = 36;
+	state.workbench.command_registry = CommandRegistry::with_defaults();
 }
 
 fn migrate_legacy_command_config_if_needed(config_root: &Path) -> Result<()> {

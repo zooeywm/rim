@@ -80,7 +80,8 @@ fn workspace_session_snapshot_should_roundtrip_tabs_windows_and_views() {
 	assert_eq!(restored_view.cursor, CursorState { row: 3, col: 2 });
 	assert_eq!(restored_view.scroll_y, 2);
 
-	restored.tabs.get_mut(&restored.active_tab).expect("tab should exist").active_window = left_window_id;
+	let active_tab = restored.active_tab;
+	restored.tabs.get_mut(&active_tab).expect("tab should exist").active_window = left_window_id;
 	restored.switch_active_window_buffer(BufferSwitchDirection::Next);
 	assert_eq!(restored.active_cursor(), CursorState { row: 3, col: 2 });
 

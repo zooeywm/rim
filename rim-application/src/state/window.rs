@@ -6,8 +6,11 @@ use crate::display_geometry::{char_display_width as geom_char_display_width, dis
 
 impl RimState {
 	pub fn focus_window(&mut self, direction: FocusDirection) {
-		let tab = self.tabs.get_mut(&self.active_tab).expect("invariant: active tab must exist");
-		let active_id = tab.active_window;
+		let active_tab = self.active_tab;
+		let (active_id, window_ids) = {
+			let tab = self.tabs.get(&active_tab).expect("invariant: active tab must exist");
+			(tab.active_window, tab.windows.clone())
+		};
 		let active = self.windows.get(active_id).expect("invariant: active window id must exist in windows");
 		let active_left = i32::from(active.x);
 		let active_right = i32::from(active.x.saturating_add(active.width));
@@ -16,10 +19,8 @@ impl RimState {
 		let active_cx = active_left + (active_right - active_left) / 2;
 		let active_cy = active_top + (active_bottom - active_top) / 2;
 
-		let best = tab
-			.windows
-			.iter()
-			.copied()
+		let best = window_ids
+			.into_iter()
 			.filter(|id| *id != active_id)
 			.filter_map(|id| self.windows.get(id).map(|w| (id, w)))
 			.filter_map(|(id, w)| {
@@ -46,12 +47,15 @@ impl RimState {
 			.map(|(id, _)| id);
 
 		if let Some(target) = best {
-			tab.active_window = target;
+			if let Some(tab) = self.tabs.get_mut(&active_tab) {
+				tab.active_window = target;
+			}
 		}
 	}
 
 	pub fn close_active_window(&mut self) {
-		let tab_snapshot = self.tabs.get(&self.active_tab).expect("invariant: active tab must exist");
+		let active_tab = self.active_tab;
+		let tab_snapshot = self.tabs.get(&active_tab).expect("invariant: active tab must exist");
 		let active_window = tab_snapshot.active_window;
 		if tab_snapshot.windows.len() <= 1 {
 			return;
@@ -67,7 +71,7 @@ impl RimState {
 
 		let _ = self.windows.remove(active_window);
 		self.remove_window_view_bindings(active_window);
-		let tab = self.tabs.get_mut(&self.active_tab).expect("invariant: active tab must exist");
+		let tab = self.tabs.get_mut(&active_tab).expect("invariant: active tab must exist");
 		tab.windows.retain(|id| *id != active_window);
 		tab.active_window = if let Some(id) = absorbed_target {
 			id
@@ -77,7 +81,7 @@ impl RimState {
 			let next_idx = current_idx.min(tab.windows.len().saturating_sub(1));
 			*tab.windows.get(next_idx).expect("tab must keep at least one window")
 		};
-		self.status_bar.message = "window closed".to_string();
+		self.workbench.status_bar.message = "window closed".to_string();
 	}
 
 	pub fn split_active_window(&mut self, axis: SplitAxis) {
@@ -120,7 +124,7 @@ impl RimState {
 		let tab = self.tabs.get_mut(&tab_id).expect("invariant: active tab must exist");
 		tab.windows.push(new_window_id);
 		tab.active_window = new_window_id;
-		self.status_bar.message = match axis {
+		self.workbench.status_bar.message = match axis {
 			SplitAxis::Horizontal => "split horizontal".to_string(),
 			SplitAxis::Vertical => "split vertical".to_string(),
 		};

@@ -90,7 +90,7 @@ impl RimState {
 
 	pub fn close_active_buffer(&mut self) {
 		let Some(active_buffer_id) = self.active_buffer_id() else {
-			self.status_bar.message = "buffer close failed: no active buffer".to_string();
+			self.workbench.status_bar.message = "buffer close failed: no active buffer".to_string();
 			return;
 		};
 		let active_tab_id = self.active_tab;
@@ -99,7 +99,7 @@ impl RimState {
 
 	pub fn close_buffer(&mut self, target_buffer_id: BufferId) {
 		if !self.buffers.contains_key(target_buffer_id) {
-			self.status_bar.message = "buffer close failed: target buffer missing".to_string();
+			self.workbench.status_bar.message = "buffer close failed: target buffer missing".to_string();
 			return;
 		}
 
@@ -115,8 +115,8 @@ impl RimState {
 		};
 		self.buffer_order.retain(|id| *id != target_buffer_id);
 		self.remove_buffer_from_tab_orders(target_buffer_id);
-		self.in_flight_internal_saves.remove(&target_buffer_id);
-		self.ignore_external_change_until.remove(&target_buffer_id);
+		self.workbench.in_flight_internal_saves.remove(&target_buffer_id);
+		self.workbench.ignore_external_change_until.remove(&target_buffer_id);
 
 		let _ = self.buffers.remove(target_buffer_id);
 		if fallback.is_none() {
@@ -137,7 +137,7 @@ impl RimState {
 		}
 
 		self.align_active_window_scroll_to_cursor();
-		self.status_bar.message = "buffer closed".to_string();
+		self.workbench.status_bar.message = "buffer closed".to_string();
 	}
 
 	pub fn close_active_buffer_and_report_global_removal(&mut self) -> Option<(BufferId, bool)> {
@@ -173,7 +173,8 @@ impl RimState {
 	}
 
 	pub fn detach_buffer_from_active_tab_and_try_remove(&mut self, buffer_id: BufferId) -> bool {
-		if let Some(tab) = self.tabs.get_mut(&self.active_tab) {
+		let active_tab = self.active_tab;
+		if let Some(tab) = self.tabs.get_mut(&active_tab) {
 			tab.buffer_order.retain(|id| *id != buffer_id);
 		}
 		self.try_remove_buffer_globally(buffer_id)
@@ -181,7 +182,7 @@ impl RimState {
 
 	fn close_buffer_in_tab(&mut self, tab_id: super::TabId, target_buffer_id: BufferId) -> bool {
 		if !self.buffers.contains_key(target_buffer_id) {
-			self.status_bar.message = "buffer close failed: target buffer missing".to_string();
+			self.workbench.status_bar.message = "buffer close failed: target buffer missing".to_string();
 			return false;
 		}
 
@@ -222,7 +223,7 @@ impl RimState {
 
 		let removed_globally = self.try_remove_buffer_globally(target_buffer_id);
 		self.align_active_window_scroll_to_cursor();
-		self.status_bar.message = "buffer closed".to_string();
+		self.workbench.status_bar.message = "buffer closed".to_string();
 		removed_globally
 	}
 
@@ -235,8 +236,8 @@ impl RimState {
 		}
 
 		self.buffer_order.retain(|id| *id != target_buffer_id);
-		self.in_flight_internal_saves.remove(&target_buffer_id);
-		self.ignore_external_change_until.remove(&target_buffer_id);
+		self.workbench.in_flight_internal_saves.remove(&target_buffer_id);
+		self.workbench.ignore_external_change_until.remove(&target_buffer_id);
 		self.window_buffer_views.retain(|(_, buffer_id), _| *buffer_id != target_buffer_id);
 		let _ = self.buffers.remove(target_buffer_id);
 		true
@@ -244,13 +245,16 @@ impl RimState {
 
 	pub fn replace_buffer_text_preserving_cursor(&mut self, buffer_id: BufferId, text: String) {
 		let is_active = self.active_buffer_id() == Some(buffer_id);
-		let Some(buffer) = self.buffers.get_mut(buffer_id) else {
-			return;
+		let (previous_max_row, new_max_row, next_text) = {
+			let Some(buffer) = self.buffers.get_mut(buffer_id) else {
+				return;
+			};
+			let previous_max_row = rope_line_count(&buffer.text) as u16;
+			buffer.text = Rope::from_str(text.as_str());
+			let next_text = buffer.text.clone();
+			let new_max_row = rope_line_count(&next_text) as u16;
+			(previous_max_row, new_max_row, next_text)
 		};
-		let previous_max_row = rope_line_count(&buffer.text) as u16;
-
-		buffer.text = Rope::from_str(text.as_str());
-		let new_max_row = rope_line_count(&buffer.text) as u16;
 		for ((_, saved_buffer_id), view) in &mut self.window_buffer_views {
 			if *saved_buffer_id != buffer_id {
 				continue;
@@ -258,7 +262,7 @@ impl RimState {
 			if view.cursor.row >= previous_max_row {
 				view.cursor.row = new_max_row;
 			}
-			view.cursor = super::clamp_cursor_for_rope(&buffer.text, view.cursor);
+			view.cursor = super::clamp_cursor_for_rope(&next_text, view.cursor);
 		}
 		for (_, window) in &mut self.windows {
 			if window.buffer_id != Some(buffer_id) {
@@ -267,9 +271,9 @@ impl RimState {
 			if window.cursor.row >= previous_max_row {
 				window.cursor.row = new_max_row;
 			} else {
-				window.cursor = super::clamp_cursor_for_rope(&buffer.text, window.cursor);
+				window.cursor = super::clamp_cursor_for_rope(&next_text, window.cursor);
 			}
-			window.cursor = super::clamp_cursor_for_rope(&buffer.text, window.cursor);
+			window.cursor = super::clamp_cursor_for_rope(&next_text, window.cursor);
 		}
 
 		if is_active {
@@ -285,7 +289,7 @@ impl RimState {
 			self.move_buffer_after_in_tab(self.active_tab, buffer_id, active_buffer_id);
 		}
 		self.bind_buffer_to_active_window(buffer_id);
-		self.status_bar.message = "new buffer".to_string();
+		self.workbench.status_bar.message = "new buffer".to_string();
 		buffer_id
 	}
 
@@ -328,7 +332,7 @@ impl RimState {
 		self.clamp_window_cursors_for_buffer(target);
 		self.align_active_window_scroll_to_cursor();
 		if let Some(buffer) = self.buffers.get(target) {
-			self.status_bar.message = format!("buffer {}", buffer.name);
+			self.workbench.status_bar.message = format!("buffer {}", buffer.name);
 		}
 	}
 
@@ -375,11 +379,11 @@ impl RimState {
 	}
 
 	pub fn set_pending_save_path(&mut self, buffer_id: BufferId, path: Option<PathBuf>) {
-		self.pending_save_path = path.map(|p| (buffer_id, p));
+		self.workbench.pending_save_path = path.map(|p| (buffer_id, p));
 	}
 
 	pub fn apply_pending_save_path_if_matches(&mut self, buffer_id: BufferId) {
-		let Some((pending_buffer_id, path)) = self.pending_save_path.clone() else {
+		let Some((pending_buffer_id, path)) = self.workbench.pending_save_path.clone() else {
 			return;
 		};
 		if pending_buffer_id != buffer_id {
@@ -392,14 +396,14 @@ impl RimState {
 				buffer.name = name;
 			}
 		}
-		self.pending_save_path = None;
+		self.workbench.pending_save_path = None;
 	}
 
 	pub fn clear_pending_save_path_if_matches(&mut self, buffer_id: BufferId) {
-		if let Some((pending_buffer_id, _)) = self.pending_save_path
+		if let Some((pending_buffer_id, _)) = self.workbench.pending_save_path
 			&& pending_buffer_id == buffer_id
 		{
-			self.pending_save_path = None;
+			self.workbench.pending_save_path = None;
 		}
 	}
 
@@ -435,22 +439,23 @@ impl RimState {
 
 	pub fn mark_recent_internal_save(&mut self, buffer_id: BufferId) {
 		self
+			.workbench
 			.ignore_external_change_until
 			.insert(buffer_id, Instant::now() + Self::INTERNAL_SAVE_WATCHER_IGNORE_WINDOW);
 	}
 
 	pub fn clear_recent_internal_save(&mut self, buffer_id: BufferId) {
-		self.ignore_external_change_until.remove(&buffer_id);
+		self.workbench.ignore_external_change_until.remove(&buffer_id);
 	}
 
 	pub fn should_ignore_recent_external_change(&mut self, buffer_id: BufferId) -> bool {
-		let Some(deadline) = self.ignore_external_change_until.get(&buffer_id).copied() else {
+		let Some(deadline) = self.workbench.ignore_external_change_until.get(&buffer_id).copied() else {
 			return false;
 		};
 		if Instant::now() <= deadline {
 			return true;
 		}
-		self.ignore_external_change_until.remove(&buffer_id);
+		self.workbench.ignore_external_change_until.remove(&buffer_id);
 		false
 	}
 
@@ -473,16 +478,19 @@ impl RimState {
 	}
 
 	fn append_insert_history_edit(&mut self, buffer_id: BufferId, edit: BufferEditSnapshot) -> bool {
+		if self
+			.pending_insert_group
+			.as_ref()
+			.is_some_and(|group| group.buffer_id == buffer_id && group.edits.is_empty())
+			&& let Some(buffer) = self.buffers.get_mut(buffer_id)
+		{
+			buffer.redo_stack.clear();
+		}
 		let Some(group) = self.pending_insert_group.as_mut() else {
 			return false;
 		};
 		if group.buffer_id != buffer_id {
 			return false;
-		}
-		if group.edits.is_empty()
-			&& let Some(buffer) = self.buffers.get_mut(buffer_id)
-		{
-			buffer.redo_stack.clear();
 		}
 		if let Some(last_edit) = group.edits.last_mut()
 			&& merge_adjacent_insert_history_edits(last_edit, &edit)
@@ -647,66 +655,70 @@ impl RimState {
 
 	pub fn undo_active_buffer_edit(&mut self) {
 		let Some(buffer_id) = self.active_buffer_id() else {
-			self.status_bar.message = "undo failed: no active buffer".to_string();
+			self.workbench.status_bar.message = "undo failed: no active buffer".to_string();
 			return;
 		};
 		let active_window_id = self.active_window_id();
-		let Some(buffer) = self.buffers.get_mut(buffer_id) else {
-			self.status_bar.message = "undo failed: active buffer missing".to_string();
-			return;
+		let before_cursor = {
+			let Some(buffer) = self.buffers.get_mut(buffer_id) else {
+				self.workbench.status_bar.message = "undo failed: active buffer missing".to_string();
+				return;
+			};
+			let Some(previous_entry) = buffer.undo_stack.pop() else {
+				self.workbench.status_bar.message = "undo: nothing to undo".to_string();
+				return;
+			};
+			let before_cursor = previous_entry.before_cursor;
+			for edit in previous_entry.edits.iter().rev() {
+				apply_text_delta_undo(&mut buffer.text, edit);
+			}
+			buffer.redo_stack.push(previous_entry);
+			if buffer.redo_stack.len() > Self::MAX_HISTORY_ENTRIES {
+				buffer.redo_stack.remove(0);
+			}
+			buffer.dirty = buffer.text != buffer.clean_text;
+			before_cursor
 		};
-		let Some(previous_entry) = buffer.undo_stack.pop() else {
-			self.status_bar.message = "undo: nothing to undo".to_string();
-			return;
-		};
-
-		for edit in previous_entry.edits.iter().rev() {
-			apply_text_delta_undo(&mut buffer.text, edit);
-		}
 		if let Some(window) = self.windows.get_mut(active_window_id) {
-			window.cursor = previous_entry.before_cursor;
+			window.cursor = before_cursor;
 		}
-		buffer.redo_stack.push(previous_entry);
-		if buffer.redo_stack.len() > Self::MAX_HISTORY_ENTRIES {
-			buffer.redo_stack.remove(0);
-		}
-		buffer.dirty = buffer.text != buffer.clean_text;
-		let _ = buffer;
 		self.sync_window_view_binding(active_window_id);
 		self.align_active_window_scroll_to_cursor();
-		self.status_bar.message = "undo".to_string();
+		self.workbench.status_bar.message = "undo".to_string();
 	}
 
 	pub fn redo_active_buffer_edit(&mut self) {
 		let Some(buffer_id) = self.active_buffer_id() else {
-			self.status_bar.message = "redo failed: no active buffer".to_string();
+			self.workbench.status_bar.message = "redo failed: no active buffer".to_string();
 			return;
 		};
 		let active_window_id = self.active_window_id();
-		let Some(buffer) = self.buffers.get_mut(buffer_id) else {
-			self.status_bar.message = "redo failed: active buffer missing".to_string();
-			return;
+		let after_cursor = {
+			let Some(buffer) = self.buffers.get_mut(buffer_id) else {
+				self.workbench.status_bar.message = "redo failed: active buffer missing".to_string();
+				return;
+			};
+			let Some(next_entry) = buffer.redo_stack.pop() else {
+				self.workbench.status_bar.message = "redo: nothing to redo".to_string();
+				return;
+			};
+			let after_cursor = next_entry.after_cursor;
+			for edit in &next_entry.edits {
+				apply_text_delta_redo(&mut buffer.text, edit);
+			}
+			buffer.undo_stack.push(next_entry);
+			if buffer.undo_stack.len() > Self::MAX_HISTORY_ENTRIES {
+				buffer.undo_stack.remove(0);
+			}
+			buffer.dirty = buffer.text != buffer.clean_text;
+			after_cursor
 		};
-		let Some(next_entry) = buffer.redo_stack.pop() else {
-			self.status_bar.message = "redo: nothing to redo".to_string();
-			return;
-		};
-
-		for edit in &next_entry.edits {
-			apply_text_delta_redo(&mut buffer.text, edit);
-		}
 		if let Some(window) = self.windows.get_mut(active_window_id) {
-			window.cursor = next_entry.after_cursor;
+			window.cursor = after_cursor;
 		}
-		buffer.undo_stack.push(next_entry);
-		if buffer.undo_stack.len() > Self::MAX_HISTORY_ENTRIES {
-			buffer.undo_stack.remove(0);
-		}
-		buffer.dirty = buffer.text != buffer.clean_text;
-		let _ = buffer;
 		self.sync_window_view_binding(active_window_id);
 		self.align_active_window_scroll_to_cursor();
-		self.status_bar.message = "redo".to_string();
+		self.workbench.status_bar.message = "redo".to_string();
 	}
 
 	pub fn has_dirty_buffers(&self) -> bool { self.buffers.values().any(|buffer| buffer.dirty) }
@@ -717,18 +729,17 @@ impl RimState {
 	}
 
 	pub(crate) fn clamp_window_cursors_for_buffer(&mut self, buffer_id: BufferId) {
-		let Some(buffer) = self.buffers.get(buffer_id) else {
+		let Some(text) = self.buffers.get(buffer_id).map(|buffer| buffer.text.clone()) else {
 			return;
 		};
-		let text = &buffer.text;
 		for ((_, saved_buffer_id), view) in &mut self.window_buffer_views {
 			if *saved_buffer_id == buffer_id {
-				view.cursor = clamp_cursor_for_rope(text, view.cursor);
+				view.cursor = clamp_cursor_for_rope(&text, view.cursor);
 			}
 		}
 		for (_, window) in &mut self.windows {
 			if window.buffer_id == Some(buffer_id) {
-				window.cursor = clamp_cursor_for_rope(text, window.cursor);
+				window.cursor = clamp_cursor_for_rope(&text, window.cursor);
 			}
 		}
 	}

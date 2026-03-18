@@ -13,7 +13,7 @@ pub(super) enum SequenceMatch {
 
 pub(super) fn handle_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
 where P: ActionPorts {
-	if state.pending_swap_decision.is_some() {
+	if state.workbench.pending_swap_decision.is_some() {
 		return handle_pending_swap_decision_key(ports, state, key);
 	}
 
@@ -29,12 +29,12 @@ where P: ActionPorts {
 	}
 
 	if !state.is_visual_mode() {
-		state.visual_g_pending = false;
+		state.workbench.visual_g_pending = false;
 	}
 
 	if key.modifiers.contains(KeyModifiers::ALT) {
-		state.normal_sequence.clear();
-		state.status_bar.key_sequence.clear();
+		state.workbench.normal_sequence.clear();
+		state.workbench.status_bar.key_sequence.clear();
 		state.close_key_hints();
 		return ControlFlow::Continue(());
 	}
@@ -50,14 +50,14 @@ where P: ActionPorts {
 	let skip_history = matches!(predicted_editor_action, Some(EditorAction::Undo | EditorAction::Redo));
 
 	let flow = if state.is_command_mode() {
-		state.normal_sequence.clear();
-		state.status_bar.key_sequence.clear();
+		state.workbench.normal_sequence.clear();
+		state.workbench.status_bar.key_sequence.clear();
 		command_flow::handle_command_mode_key(ports, state, key)
 	} else if state.is_visual_mode() {
 		handle_visual_mode_key(ports, state, key)
 	} else if state.is_insert_mode() {
-		state.normal_sequence.clear();
-		state.status_bar.key_sequence.clear();
+		state.workbench.normal_sequence.clear();
+		state.workbench.status_bar.key_sequence.clear();
 		handle_insert_mode_key(state, key)
 	} else {
 		handle_normal_mode_key(ports, state, key)
@@ -88,46 +88,49 @@ where P: ActionPorts {
 pub(super) fn handle_normal_mode_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
 where P: ActionPorts {
 	let Some(normal_key) = to_normal_key(state, key) else {
-		state.normal_sequence.clear();
-		state.status_bar.key_sequence.clear();
+		state.workbench.normal_sequence.clear();
+		state.workbench.status_bar.key_sequence.clear();
 		state.close_key_hints();
 		return ControlFlow::Continue(());
 	};
 
-	state.normal_sequence.push(normal_key);
+	state.workbench.normal_sequence.push(normal_key);
 
 	loop {
-		match resolve_normal_sequence_with_registry(&state.command_registry, &state.normal_sequence) {
+		match resolve_normal_sequence_with_registry(
+			&state.workbench.command_registry,
+			&state.workbench.normal_sequence,
+		) {
 			SequenceMatch::Action(action) => {
-				state.normal_sequence.clear();
-				state.status_bar.key_sequence.clear();
+				state.workbench.normal_sequence.clear();
+				state.workbench.status_bar.key_sequence.clear();
 				if !should_keep_key_hints_open_for_action(&action) {
 					state.close_key_hints();
 				}
 				return RimState::dispatch_internal(ports, state, action);
 			}
 			SequenceMatch::Command(target) => {
-				state.normal_sequence.clear();
-				state.status_bar.key_sequence.clear();
+				state.workbench.normal_sequence.clear();
+				state.workbench.status_bar.key_sequence.clear();
 				state.close_key_hints();
 				return command_flow::execute_command_target(ports, state, target, None);
 			}
 			SequenceMatch::Pending => {
-				state.status_bar.key_sequence = render_normal_sequence(&state.normal_sequence);
+				state.workbench.status_bar.key_sequence = render_normal_sequence(&state.workbench.normal_sequence);
 				state.refresh_pending_key_hints();
 				return ControlFlow::Continue(());
 			}
 			SequenceMatch::NoMatch => {
-				if state.normal_sequence.len() <= 1 {
-					state.normal_sequence.clear();
-					state.status_bar.key_sequence.clear();
+				if state.workbench.normal_sequence.len() <= 1 {
+					state.workbench.normal_sequence.clear();
+					state.workbench.status_bar.key_sequence.clear();
 					state.close_key_hints();
 					return ControlFlow::Continue(());
 				}
-				let last = *state.normal_sequence.last().expect("normal sequence has at least one key");
-				state.normal_sequence.clear();
-				state.normal_sequence.push(last);
-				state.status_bar.key_sequence = render_normal_sequence(&state.normal_sequence);
+				let last = *state.workbench.normal_sequence.last().expect("normal sequence has at least one key");
+				state.workbench.normal_sequence.clear();
+				state.workbench.normal_sequence.push(last);
+				state.workbench.status_bar.key_sequence = render_normal_sequence(&state.workbench.normal_sequence);
 				state.refresh_pending_key_hints();
 			}
 		}
@@ -147,7 +150,7 @@ pub(super) fn to_normal_key(state: &RimState, key: KeyEvent) -> Option<NormalSeq
 	}
 
 	if let KeyCode::Char(ch) = key.code {
-		if ch == state.leader_key {
+		if ch == state.workbench.leader_key {
 			return Some(NormalSequenceKey::Leader);
 		}
 		let normalized = if key.modifiers.contains(KeyModifiers::SHIFT) && ch.is_ascii_lowercase() {
@@ -294,7 +297,7 @@ fn handle_block_insert_mode_key(state: &mut RimState, key: KeyEvent) -> ControlF
 		KeyCode::F1 => {}
 		KeyCode::Char(ch) => state.insert_char_at_block_cursor(ch),
 		KeyCode::Enter | KeyCode::Left | KeyCode::Down | KeyCode::Up | KeyCode::Right => {
-			state.status_bar.message = "block insert supports text, tab, backspace, esc only".to_string();
+			state.workbench.status_bar.message = "block insert supports text, tab, backspace, esc only".to_string();
 		}
 	}
 
@@ -304,45 +307,48 @@ fn handle_block_insert_mode_key(state: &mut RimState, key: KeyEvent) -> ControlF
 pub(super) fn handle_visual_mode_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
 where P: ActionPorts {
 	let Some(visual_key) = to_normal_key(state, key) else {
-		state.normal_sequence.clear();
-		state.status_bar.key_sequence.clear();
+		state.workbench.normal_sequence.clear();
+		state.workbench.status_bar.key_sequence.clear();
 		state.close_key_hints();
 		return ControlFlow::Continue(());
 	};
-	state.normal_sequence.push(visual_key);
+	state.workbench.normal_sequence.push(visual_key);
 
 	loop {
-		match resolve_visual_sequence_with_registry(&state.command_registry, &state.normal_sequence) {
+		match resolve_visual_sequence_with_registry(
+			&state.workbench.command_registry,
+			&state.workbench.normal_sequence,
+		) {
 			SequenceMatch::Action(action) => {
-				state.normal_sequence.clear();
-				state.status_bar.key_sequence.clear();
+				state.workbench.normal_sequence.clear();
+				state.workbench.status_bar.key_sequence.clear();
 				if !should_keep_key_hints_open_for_action(&action) {
 					state.close_key_hints();
 				}
 				return RimState::dispatch_internal(ports, state, action);
 			}
 			SequenceMatch::Command(target) => {
-				state.normal_sequence.clear();
-				state.status_bar.key_sequence.clear();
+				state.workbench.normal_sequence.clear();
+				state.workbench.status_bar.key_sequence.clear();
 				state.close_key_hints();
 				return command_flow::execute_command_target(ports, state, target, None);
 			}
 			SequenceMatch::Pending => {
-				state.status_bar.key_sequence = render_normal_sequence(&state.normal_sequence);
+				state.workbench.status_bar.key_sequence = render_normal_sequence(&state.workbench.normal_sequence);
 				state.refresh_pending_key_hints();
 				return ControlFlow::Continue(());
 			}
 			SequenceMatch::NoMatch => {
-				if state.normal_sequence.len() <= 1 {
-					state.normal_sequence.clear();
-					state.status_bar.key_sequence.clear();
+				if state.workbench.normal_sequence.len() <= 1 {
+					state.workbench.normal_sequence.clear();
+					state.workbench.status_bar.key_sequence.clear();
 					state.close_key_hints();
 					return ControlFlow::Continue(());
 				}
-				let last = *state.normal_sequence.last().expect("visual sequence has at least one key");
-				state.normal_sequence.clear();
-				state.normal_sequence.push(last);
-				state.status_bar.key_sequence = render_normal_sequence(&state.normal_sequence);
+				let last = *state.workbench.normal_sequence.last().expect("visual sequence has at least one key");
+				state.workbench.normal_sequence.clear();
+				state.workbench.normal_sequence.push(last);
+				state.workbench.status_bar.key_sequence = render_normal_sequence(&state.workbench.normal_sequence);
 				state.refresh_pending_key_hints();
 			}
 		}
@@ -373,6 +379,7 @@ where P: ActionPorts {
 		return ControlFlow::Continue(());
 	};
 	match state
+		.workbench
 		.command_registry
 		.resolve_scope_sequence(crate::state::KeymapScope::OverlayWhichKey, &[normal_key])
 	{
@@ -386,7 +393,11 @@ where P: ActionPorts {
 
 fn handle_insert_scope_key(state: &mut RimState, key: KeyEvent) -> Option<ControlFlow<()>> {
 	let normal_key = to_normal_key(state, key)?;
-	match state.command_registry.resolve_scope_sequence(crate::state::KeymapScope::ModeInsert, &[normal_key]) {
+	match state
+		.workbench
+		.command_registry
+		.resolve_scope_sequence(crate::state::KeymapScope::ModeInsert, &[normal_key])
+	{
 		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Mode(
 			ModeCommand::Normal,
 		))) => {
@@ -397,7 +408,8 @@ fn handle_insert_scope_key(state: &mut RimState, key: KeyEvent) -> Option<Contro
 			InsertCommand::Newline,
 		))) => {
 			if state.is_block_insert_mode() {
-				state.status_bar.message = "block insert supports text, tab, backspace, esc only".to_string();
+				state.workbench.status_bar.message =
+					"block insert supports text, tab, backspace, esc only".to_string();
 				return Some(ControlFlow::Continue(()));
 			}
 			state.insert_newline_at_cursor();
@@ -417,7 +429,8 @@ fn handle_insert_scope_key(state: &mut RimState, key: KeyEvent) -> Option<Contro
 			InsertCommand::Left,
 		))) => {
 			if state.is_block_insert_mode() {
-				state.status_bar.message = "block insert supports text, tab, backspace, esc only".to_string();
+				state.workbench.status_bar.message =
+					"block insert supports text, tab, backspace, esc only".to_string();
 				return Some(ControlFlow::Continue(()));
 			}
 			state.move_cursor_left();
@@ -427,7 +440,8 @@ fn handle_insert_scope_key(state: &mut RimState, key: KeyEvent) -> Option<Contro
 			InsertCommand::Down,
 		))) => {
 			if state.is_block_insert_mode() {
-				state.status_bar.message = "block insert supports text, tab, backspace, esc only".to_string();
+				state.workbench.status_bar.message =
+					"block insert supports text, tab, backspace, esc only".to_string();
 				return Some(ControlFlow::Continue(()));
 			}
 			state.move_cursor_down();
@@ -437,7 +451,8 @@ fn handle_insert_scope_key(state: &mut RimState, key: KeyEvent) -> Option<Contro
 			InsertCommand::Up,
 		))) => {
 			if state.is_block_insert_mode() {
-				state.status_bar.message = "block insert supports text, tab, backspace, esc only".to_string();
+				state.workbench.status_bar.message =
+					"block insert supports text, tab, backspace, esc only".to_string();
 				return Some(ControlFlow::Continue(()));
 			}
 			state.move_cursor_up();
@@ -447,7 +462,8 @@ fn handle_insert_scope_key(state: &mut RimState, key: KeyEvent) -> Option<Contro
 			InsertCommand::Right,
 		))) => {
 			if state.is_block_insert_mode() {
-				state.status_bar.message = "block insert supports text, tab, backspace, esc only".to_string();
+				state.workbench.status_bar.message =
+					"block insert supports text, tab, backspace, esc only".to_string();
 				return Some(ControlFlow::Continue(()));
 			}
 			state.move_cursor_right_for_insert();
@@ -475,47 +491,49 @@ fn handle_insert_scope_key(state: &mut RimState, key: KeyEvent) -> Option<Contro
 
 fn handle_notification_center_key(state: &mut RimState, key: KeyEvent) -> ControlFlow<()> {
 	if key.modifiers.contains(KeyModifiers::ALT) {
-		state.normal_sequence.clear();
-		state.status_bar.key_sequence.clear();
+		state.workbench.normal_sequence.clear();
+		state.workbench.status_bar.key_sequence.clear();
 		state.close_key_hints();
 		return ControlFlow::Continue(());
 	}
 
 	let Some(notification_key) = to_normal_key(state, key) else {
-		state.normal_sequence.clear();
-		state.status_bar.key_sequence.clear();
+		state.workbench.normal_sequence.clear();
+		state.workbench.status_bar.key_sequence.clear();
 		state.close_key_hints();
 		return ControlFlow::Continue(());
 	};
-	state.normal_sequence.push(notification_key);
+	state.workbench.normal_sequence.push(notification_key);
 
 	loop {
 		match state
+			.workbench
 			.command_registry
-			.resolve_scope_sequence(KeymapScope::OverlayNotificationCenter, &state.normal_sequence)
+			.resolve_scope_sequence(KeymapScope::OverlayNotificationCenter, &state.workbench.normal_sequence)
 		{
 			BindingMatch::Exact(target) => {
-				state.normal_sequence.clear();
-				state.status_bar.key_sequence.clear();
+				state.workbench.normal_sequence.clear();
+				state.workbench.status_bar.key_sequence.clear();
 				handle_notification_center_target(state, target);
 				return ControlFlow::Continue(());
 			}
 			BindingMatch::Pending => {
-				state.status_bar.key_sequence = render_normal_sequence(&state.normal_sequence);
+				state.workbench.status_bar.key_sequence = render_normal_sequence(&state.workbench.normal_sequence);
 				state.refresh_pending_key_hints();
 				return ControlFlow::Continue(());
 			}
 			BindingMatch::NoMatch => {
-				if state.normal_sequence.len() <= 1 {
-					state.normal_sequence.clear();
-					state.status_bar.key_sequence.clear();
+				if state.workbench.normal_sequence.len() <= 1 {
+					state.workbench.normal_sequence.clear();
+					state.workbench.status_bar.key_sequence.clear();
 					state.close_key_hints();
 					return ControlFlow::Continue(());
 				}
-				let last = *state.normal_sequence.last().expect("notification center sequence has at least one key");
-				state.normal_sequence.clear();
-				state.normal_sequence.push(last);
-				state.status_bar.key_sequence = render_normal_sequence(&state.normal_sequence);
+				let last =
+					*state.workbench.normal_sequence.last().expect("notification center sequence has at least one key");
+				state.workbench.normal_sequence.clear();
+				state.workbench.normal_sequence.push(last);
+				state.workbench.status_bar.key_sequence = render_normal_sequence(&state.workbench.normal_sequence);
 				state.refresh_pending_key_hints();
 			}
 		}

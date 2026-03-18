@@ -15,8 +15,9 @@ impl RimState {
 	fn active_buffer_and_window_mut(&mut self) -> Option<(&mut super::BufferState, &mut super::WindowState)> {
 		let buffer_id = self.active_buffer_id()?;
 		let window_id = self.active_window_id();
-		let buffer = self.buffers.get_mut(buffer_id)?;
-		let window = self.windows.get_mut(window_id)?;
+		let (buffers, windows) = (&mut self.editor.buffers, &mut self.editor.windows);
+		let buffer = buffers.get_mut(buffer_id)?;
+		let window = windows.get_mut(window_id)?;
 		Some((buffer, window))
 	}
 }

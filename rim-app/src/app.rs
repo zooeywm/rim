@@ -106,7 +106,7 @@ impl App {
 				AppPorts::new(&self.storage_io, &self.file_watcher, &self.terminal_session, &self.input_pump_service);
 			if let Err(err) = ports.enqueue_load_workspace_session() {
 				self.state.create_untitled_buffer();
-				self.state.status_bar.message = format!("session load failed: {}", err);
+				self.state.workbench.status_bar.message = format!("session load failed: {}", err);
 			}
 			return;
 		}
@@ -121,7 +121,7 @@ impl App {
 		self.open_startup_files(file_paths);
 
 		// Terminal session and input pump are pure runtime concerns.
-		let title = self.state.title.clone();
+		let title = self.state.workbench.title.clone();
 		let terminal_session = TerminalSession::enter(title.as_str()).context("enter terminal session failed")?;
 		self.terminal_session.replace(Some(terminal_session));
 		{
@@ -192,7 +192,7 @@ impl App {
 		self.state.refresh_key_hints_overlay_after_config_reload();
 		self.state.refresh_command_palette();
 		if config_errors.is_empty() {
-			self.state.status_bar.message = "config reloaded".to_string();
+			self.state.workbench.status_bar.message = "config reloaded".to_string();
 		} else {
 			application_config::apply_config_errors_to_status(&mut self.state, config_errors);
 		}
@@ -291,7 +291,7 @@ mod tests {
 		});
 		assert!(errors.is_empty());
 		assert_eq!(
-			state.command_registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[
+			state.workbench.command_registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[
 				NormalSequenceKey::Char('g'),
 				NormalSequenceKey::Char('g')
 			]),
@@ -301,14 +301,14 @@ mod tests {
 		application_config::reset_config_state_to_defaults(&mut state);
 
 		assert_eq!(
-			state.command_registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[
+			state.workbench.command_registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[
 				NormalSequenceKey::Char('g'),
 				NormalSequenceKey::Char('g')
 			]),
 			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::Cursor(CursorCommand::FileStart)))
 		);
 		assert_eq!(
-			state.command_registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[
+			state.workbench.command_registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[
 				NormalSequenceKey::Char('g'),
 				NormalSequenceKey::Char('o')
 			]),
@@ -334,14 +334,16 @@ mod tests {
 		});
 		assert!(errors.is_empty());
 		assert_eq!(
-			state.command_registry.key_hints(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('g')])[0].summary,
+			state.workbench.command_registry.key_hints(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('g')])[0]
+				.summary,
 			"Jump to beginning"
 		);
 
 		application_config::reset_config_state_to_defaults(&mut state);
 
 		assert_eq!(
-			state.command_registry.key_hints(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('g')])[0].summary,
+			state.workbench.command_registry.key_hints(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('g')])[0]
+				.summary,
 			"Move to file start"
 		);
 	}

@@ -135,18 +135,18 @@ impl RimState {
 
 	pub fn cut_current_char_to_slot(&mut self) {
 		let Some((buffer, window)) = self.active_buffer_and_window_mut() else {
-			self.status_bar.message = "cut failed: no active buffer".to_string();
+			self.workbench.status_bar.message = "cut failed: no active buffer".to_string();
 			return;
 		};
 		let row_idx = window.cursor.row.saturating_sub(1) as usize;
 		let col_idx = window.cursor.col.saturating_sub(1) as usize;
 		let Some(line_range) = rope_line_char_range_without_newline(&buffer.text, row_idx) else {
-			self.status_bar.message = "cut failed: out of range".to_string();
+			self.workbench.status_bar.message = "cut failed: out of range".to_string();
 			return;
 		};
 		let char_count = line_range.end.saturating_sub(line_range.start);
 		if col_idx >= char_count {
-			self.status_bar.message = "cut failed: no char".to_string();
+			self.workbench.status_bar.message = "cut failed: no char".to_string();
 			return;
 		}
 
@@ -159,24 +159,24 @@ impl RimState {
 		self.line_slot_line_wise = false;
 		self.line_slot_block_wise = false;
 		self.align_active_window_scroll_to_cursor();
-		self.status_bar.message = "char cut".to_string();
+		self.workbench.status_bar.message = "char cut".to_string();
 	}
 
 	pub fn paste_slot_at_cursor(&mut self) {
 		let Some(slot_text) = self.line_slot.clone() else {
-			self.status_bar.message = "paste failed: slot is empty".to_string();
+			self.workbench.status_bar.message = "paste failed: slot is empty".to_string();
 			return;
 		};
 		let line_wise_slot = self.line_slot_line_wise;
 		let block_wise_slot = self.line_slot_block_wise;
 		let Some((buffer, window)) = self.active_buffer_and_window_mut() else {
-			self.status_bar.message = "paste failed: no active buffer".to_string();
+			self.workbench.status_bar.message = "paste failed: no active buffer".to_string();
 			return;
 		};
 
 		let row_idx = window.cursor.row.saturating_sub(1) as usize;
 		if row_idx >= rope_editable_line_count(&buffer.text) {
-			self.status_bar.message = "paste failed: out of range".to_string();
+			self.workbench.status_bar.message = "paste failed: out of range".to_string();
 			return;
 		}
 		if line_wise_slot {
@@ -199,7 +199,7 @@ impl RimState {
 			window.cursor.col = 1;
 			self.mark_active_buffer_dirty();
 			self.align_active_window_scroll_to_cursor();
-			self.status_bar.message = "pasted".to_string();
+			self.workbench.status_bar.message = "pasted".to_string();
 			return;
 		}
 
@@ -224,7 +224,7 @@ impl RimState {
 				.saturating_add(slot_lines.first().map(|line| line.chars().count()).unwrap_or(0) as u16);
 			self.mark_active_buffer_dirty();
 			self.align_active_window_scroll_to_cursor();
-			self.status_bar.message = "pasted".to_string();
+			self.workbench.status_bar.message = "pasted".to_string();
 			return;
 		}
 
@@ -238,23 +238,23 @@ impl RimState {
 		window.cursor.col = window.cursor.col.saturating_add(slot_text.chars().count() as u16);
 		self.mark_active_buffer_dirty();
 		self.align_active_window_scroll_to_cursor();
-		self.status_bar.message = "pasted".to_string();
+		self.workbench.status_bar.message = "pasted".to_string();
 	}
 
 	pub fn delete_current_line_to_slot(&mut self) {
 		let Some((buffer, window)) = self.active_buffer_and_window_mut() else {
-			self.status_bar.message = "line delete failed: no active buffer".to_string();
+			self.workbench.status_bar.message = "line delete failed: no active buffer".to_string();
 			return;
 		};
 
 		let row_idx = window.cursor.row.saturating_sub(1) as usize;
 		if row_idx >= rope_editable_line_count(&buffer.text) {
-			self.status_bar.message = "line delete failed: out of range".to_string();
+			self.workbench.status_bar.message = "line delete failed: out of range".to_string();
 			return;
 		}
 
 		let Some(line_range) = rope_line_char_range_without_newline(&buffer.text, row_idx) else {
-			self.status_bar.message = "line delete failed: out of range".to_string();
+			self.workbench.status_bar.message = "line delete failed: out of range".to_string();
 			return;
 		};
 		let deleted = buffer.text.slice(line_range.clone()).to_string();
@@ -284,6 +284,6 @@ impl RimState {
 		self.line_slot_line_wise = true;
 		self.line_slot_block_wise = false;
 		self.align_active_window_scroll_to_cursor();
-		self.status_bar.message = "line deleted".to_string();
+		self.workbench.status_bar.message = "line deleted".to_string();
 	}
 }

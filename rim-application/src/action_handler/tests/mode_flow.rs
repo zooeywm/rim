@@ -6,7 +6,7 @@ use crate::{action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, K
 #[test]
 fn to_normal_key_should_map_leader_char_to_leader_token() {
 	let mut state = RimState::new();
-	state.leader_key = ' ';
+	state.workbench.leader_key = ' ';
 	let key = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
 
 	let mapped = map_normal_key(&state, key);
@@ -1089,14 +1089,14 @@ fn command_palette_key_hints_should_not_block_command_input() {
 	);
 
 	assert!(state.key_hints_open());
-	assert_eq!(state.command_line, "q");
+	assert_eq!(state.workbench.command_line, "q");
 	assert!(state.command_palette().is_some());
 }
 
 #[test]
 fn picker_key_hints_should_scroll_popup_before_moving_picker_selection() {
 	let mut state = RimState::new();
-	state.key_hints_max_height = 5;
+	state.workbench.key_hints_max_height = 5;
 
 	state.open_workspace_file_picker(vec![
 		WorkspaceFileEntry { absolute_path: PathBuf::from("/tmp/a.txt"), relative_path: "a.txt".to_string() },
@@ -1445,8 +1445,8 @@ fn key_hint_popup_should_use_taller_window_budget() {
 #[test]
 fn key_hint_popup_should_use_configured_size() {
 	let mut state = RimState::new();
-	state.key_hints_width = 64;
-	state.key_hints_max_height = 28;
+	state.workbench.key_hints_width = 64;
+	state.workbench.key_hints_max_height = 28;
 
 	let _ = dispatch_test_action(
 		&mut state,
@@ -1571,7 +1571,7 @@ fn command_mode_should_execute_selected_workspace_file_argument_on_enter() {
 	assert!(ports.open_requests.borrow().is_empty());
 	assert!(ports.file_loads.borrow().is_empty());
 	assert!(state.active_buffer_id().is_none());
-	assert_eq!(state.status_bar.message, "reload failed: no active buffer");
+	assert_eq!(state.workbench.status_bar.message, "reload failed: no active buffer");
 }
 
 #[test]
@@ -1795,7 +1795,10 @@ fn workspace_file_picker_should_open_selected_file_on_enter() {
 	let active = state.active_buffer_id().expect("active buffer should exist");
 	let buffer = state.buffers.get(active).expect("active buffer state should exist");
 	assert_eq!(buffer.path.as_ref(), Some(&workspace_root.join("src/main.rs")));
-	assert_eq!(state.status_bar.message, format!("new {}", workspace_root.join("src/main.rs").display()));
+	assert_eq!(
+		state.workbench.status_bar.message,
+		format!("new {}", workspace_root.join("src/main.rs").display())
+	);
 }
 
 #[test]
