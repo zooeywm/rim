@@ -1094,8 +1094,9 @@ fn command_palette_key_hints_should_not_block_command_input() {
 }
 
 #[test]
-fn picker_key_hints_should_not_block_picker_input_and_should_close_with_picker() {
+fn picker_key_hints_should_scroll_popup_before_moving_picker_selection() {
 	let mut state = RimState::new();
+	state.key_hints_max_height = 5;
 
 	state.open_workspace_file_picker(vec![
 		WorkspaceFileEntry { absolute_path: PathBuf::from("/tmp/a.txt"), relative_path: "a.txt".to_string() },
@@ -1111,7 +1112,8 @@ fn picker_key_hints_should_not_block_picker_input_and_should_close_with_picker()
 	);
 
 	assert!(state.key_hints_open());
-	assert_eq!(state.workspace_file_picker().expect("picker should stay open").selected, 1);
+	assert_eq!(state.floating_window().expect("key hint popup should stay open").scroll, 1);
+	assert_eq!(state.workspace_file_picker().expect("picker should stay open").selected, 0);
 
 	state.close_workspace_file_picker();
 	assert!(!state.key_hints_open());

@@ -363,7 +363,9 @@ fn should_keep_key_hints_open_for_action(action: &AppAction) -> bool {
 
 fn handle_overlay_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
 where P: StorageIo + FileWatcher + FilePicker {
-	if !state.key_hints_open() || state.command_palette().is_some() || state.workspace_file_picker_open() {
+	// When the key-hint popup is visible, let it handle its own navigation first.
+	// Unmatched keys still fall through to the underlying scope, so regular typing keeps working.
+	if !state.key_hints_open() {
 		return ControlFlow::Continue(());
 	}
 	let Some(normal_key) = to_normal_key(state, key) else {
