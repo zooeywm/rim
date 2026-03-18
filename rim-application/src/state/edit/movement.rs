@@ -1,7 +1,7 @@
 use ropey::Rope;
 
-use super::{CursorState, RimState, rope_ends_with_newline, rope_line_count, rope_line_len_chars, rope_line_without_newline};
-use crate::{display_geometry::{char_display_width as geom_char_display_width, cursor_col_for_display_slot as geom_cursor_col_for_display_slot, display_col_of_cursor_slot as geom_display_col_of_cursor_slot, display_width_of_char_prefix_with_virtual as geom_display_width_of_char_prefix_with_virtual, navigable_col_for_display_target as geom_navigable_col_for_display_target, wrapped_row_index_for_cursor as geom_wrapped_row_index_for_cursor, wrapped_total_rows_for_rope as geom_wrapped_total_rows_for_rope}, state::{WindowId, rope_is_empty}};
+use super::RimState;
+use crate::{display_geometry::{char_display_width as geom_char_display_width, cursor_col_for_display_slot as geom_cursor_col_for_display_slot, display_col_of_cursor_slot as geom_display_col_of_cursor_slot, display_width_of_char_prefix_with_virtual as geom_display_width_of_char_prefix_with_virtual, navigable_col_for_display_target as geom_navigable_col_for_display_target, wrapped_row_index_for_cursor as geom_wrapped_row_index_for_cursor, wrapped_total_rows_for_rope as geom_wrapped_total_rows_for_rope}, state::{CursorState, WindowId, rope_ends_with_newline, rope_is_empty, rope_line_count, rope_line_len_chars, rope_line_without_newline}};
 
 impl RimState {
 	pub fn move_cursor_up(&mut self) {

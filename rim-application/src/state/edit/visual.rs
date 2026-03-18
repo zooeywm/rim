@@ -1,5 +1,5 @@
-use super::{CursorState, PendingBlockInsert, RimState, clamp_cursor_col_for_line, pad_rope_line_to_char_len, rope_block_char_range, rope_cursor_char, rope_editable_line_count, rope_editable_line_len_chars, rope_join_rows_without_newline, rope_line_len_chars, rope_line_without_newline, rope_linewise_char_range, rope_linewise_insertion_text, split_lines_owned};
-use crate::display_geometry::{char_display_width as geom_char_display_width, cursor_col_for_display_slot as geom_cursor_col_for_display_slot, display_col_of_cursor_slot as geom_display_col_of_cursor_slot, previous_char_display_width_at_cursor as geom_previous_char_display_width_at_cursor};
+use super::{RimState, block_col_for_display_target, clamp_cursor_col_for_line, cursor_slot_display_col, expand_tab_padding_at_display_target, pad_rope_line_to_char_len, previous_char_display_width, rope_block_char_range, rope_cursor_char, rope_editable_line_count, rope_editable_line_len_chars, rope_join_rows_without_newline, rope_linewise_char_range, rope_linewise_insertion_text, split_lines_owned};
+use crate::{display_geometry::char_display_width as geom_char_display_width, state::{CursorState, PendingBlockInsert, rope_line_count, rope_line_len_chars, rope_line_without_newline}};
 
 impl RimState {
 	pub fn begin_visual_block_insert(&mut self, append: bool) {
@@ -218,7 +218,7 @@ impl RimState {
 				return false;
 			};
 			buffer.text.remove(delete_range);
-			let visible_rows = super::rope_line_count(&buffer.text);
+			let visible_rows = rope_line_count(&buffer.text);
 			let new_row = start_row.min(visible_rows.saturating_sub(1)).saturating_add(1) as u16;
 			window.cursor.row = new_row;
 			window.cursor.col = 1;
@@ -537,56 +537,4 @@ impl RimState {
 		}
 		Some((start, end))
 	}
-}
-
-// Preserve the visual slot by materializing tab padding into spaces before the
-// first mirrored insert.
-fn expand_tab_padding_at_display_target(text: &mut ropey::Rope, row: u16, target_display_col: u16) {
-	let Some((row_idx, tab_char_idx, tab_width)) =
-		tab_padding_span_at_display_target(text, row, target_display_col)
-	else {
-		return;
-	};
-	let tab_start = rope_cursor_char(text, row_idx, tab_char_idx).expect("tab start must exist");
-	let tab_end = rope_cursor_char(text, row_idx, tab_char_idx.saturating_add(1)).expect("tab end must exist");
-	text.remove(tab_start..tab_end);
-	text.insert(tab_start, &" ".repeat(tab_width as usize));
-}
-
-fn tab_padding_span_at_display_target(
-	text: &ropey::Rope,
-	row: u16,
-	target_display_col: u16,
-) -> Option<(usize, usize, u16)> {
-	let row_idx = row.saturating_sub(1) as usize;
-	let line = rope_line_without_newline(text, row_idx)?;
-	let mut consumed = 0u16;
-
-	for (char_idx, ch) in line.chars().enumerate() {
-		let width = geom_char_display_width(ch).max(1) as u16;
-		if ch == '\t' && consumed < target_display_col && target_display_col < consumed.saturating_add(width) {
-			return Some((row_idx, char_idx, width));
-		}
-		consumed = consumed.saturating_add(width);
-	}
-
-	None
-}
-
-fn block_col_for_display_target(text: &ropey::Rope, row: u16, target_display_col: u16) -> u16 {
-	let row_index = row.saturating_sub(1) as usize;
-	let line = rope_line_without_newline(text, row_index).unwrap_or_default();
-	geom_cursor_col_for_display_slot(line.as_str(), target_display_col)
-}
-
-fn cursor_slot_display_col(text: &ropey::Rope, row: u16, col: u16) -> u16 {
-	let row_index = row.saturating_sub(1) as usize;
-	let line = rope_line_without_newline(text, row_index).unwrap_or_default();
-	geom_display_col_of_cursor_slot(line.as_str(), col)
-}
-
-fn previous_char_display_width(text: &ropey::Rope, row: u16, col: u16) -> u16 {
-	let row_index = row.saturating_sub(1) as usize;
-	let line = rope_line_without_newline(text, row_index).unwrap_or_default();
-	geom_previous_char_display_width_at_cursor(line.as_str(), col)
 }

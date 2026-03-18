@@ -1,8 +1,25 @@
+mod buffer;
+mod core;
+mod edit;
+mod tab;
+mod window;
+
 use std::collections::{BTreeMap, HashMap};
 
 use slotmap::SlotMap;
 
 use crate::model::{BufferId, BufferState, CursorState, EditorMode, PendingBlockInsert, PendingInsertUndoGroup, TabId, TabState, WindowBufferViewState, WindowId, WindowState};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditorOperationError {
+	NoActiveBuffer,
+	ActiveBufferMissing,
+	OutOfRange,
+	NoChar,
+	SlotEmpty,
+	NothingToUndo,
+	NothingToRedo,
+}
 
 #[derive(Debug)]
 pub struct EditorState {
