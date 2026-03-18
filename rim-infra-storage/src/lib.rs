@@ -1,7 +1,9 @@
 use std::{path::PathBuf, sync::Mutex, thread, time::Duration};
 
 use anyhow::Result;
-use rim_kernel::{action::{AppAction, FileLoadSource}, ports::{StorageIo, StorageIoError, SwapEditOp}, state::{BufferId, PersistedBufferHistory, WorkspaceSessionSnapshot}};
+use rim_application::{action::{AppAction, FileLoadSource}, ports::SwapEditOp};
+use rim_domain::model::{BufferId, PersistedBufferHistory, WorkspaceSessionSnapshot};
+use rim_ports::{StorageIo, StorageIoError};
 use tracing::error;
 
 mod path_codec;
@@ -37,6 +39,11 @@ impl AsRef<StorageIoState> for StorageIoState {
 impl<Deps> StorageIo for StorageIoImpl<Deps>
 where Deps: AsRef<StorageIoState>
 {
+	type BufferId = BufferId;
+	type EditOp = SwapEditOp;
+	type PersistedBufferHistory = PersistedBufferHistory;
+	type WorkspaceSessionSnapshot = WorkspaceSessionSnapshot;
+
 	fn enqueue_load_workspace_session(&self) -> Result<(), StorageIoError> {
 		send_request(
 			&self.request_tx,

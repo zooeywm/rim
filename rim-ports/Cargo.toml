@@ -1,0 +1,8 @@
+[package]
+name              = "rim-ports"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+thiserror.workspace = true

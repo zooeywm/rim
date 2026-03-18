@@ -1,5 +1,5 @@
 use ratatui::{buffer::Buffer, layout::Rect, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Block, Borders, Clear, Paragraph, Widget}};
-use rim_kernel::state::{FloatingWindowLine, FloatingWindowPlacement, FloatingWindowState, RimState};
+use rim_application::state::{FloatingWindowLine, FloatingWindowPlacement, FloatingWindowState, RimState};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const KEY_COLUMN_WIDTH: usize = 10;

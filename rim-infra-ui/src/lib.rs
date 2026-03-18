@@ -13,7 +13,7 @@ use floating_window::FloatingWindowWidget;
 use notification_center::NotificationCenterWidget;
 use notification_preview::NotificationPreviewWidget;
 use ratatui::layout::{Constraint, Layout, Rect};
-use rim_kernel::state::RimState;
+use rim_application::state::RimState;
 use status_bar::StatusBarWidget;
 pub use terminal_session::{TerminalSession, TerminalSessionError};
 use top_bar::TopBarWidget;

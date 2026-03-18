@@ -2,7 +2,7 @@ use std::io;
 
 use crossterm::{cursor::SetCursorStyle, execute, terminal::{EnterAlternateScreen, LeaveAlternateScreen, SetTitle, disable_raw_mode, enable_raw_mode}};
 use ratatui::{Terminal, backend::CrosstermBackend};
-use rim_kernel::state::EditorMode;
+use rim_application::state::EditorMode;
 use thiserror::Error;
 
 #[derive(Debug, Error)]

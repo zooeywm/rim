@@ -1,5 +1,5 @@
 use ratatui::{buffer::Buffer, layout::Rect, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Paragraph, Widget}};
-use rim_kernel::state::{RimState, StatusBarMode};
+use rim_application::state::{RimState, StatusBarMode};
 
 pub(super) struct StatusBarWidget {
 	mode:        StatusBarMode,

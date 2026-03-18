@@ -1,0 +1,21 @@
+[package]
+name              = "rim-application"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace             = true
+frizbee.workspace            = true
+thiserror.workspace          = true
+tracing.workspace            = true
+slotmap.workspace            = true
+unicode-width.workspace      = true
+ropey.workspace              = true
+serde.workspace              = true
+rim-command-macros.workspace = true
+rim-ports.workspace          = true
+rim-domain.workspace         = true
+rim-paths.workspace          = true
+time.workspace               = true
+toml.workspace               = true

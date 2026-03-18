@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use rim_kernel::state::{BufferEditSnapshot, BufferHistoryEntry, CursorState, WorkspaceBufferHistorySnapshot, WorkspaceBufferSnapshot, WorkspaceSessionSnapshot, WorkspaceTabSnapshot, WorkspaceWindowBufferViewSnapshot, WorkspaceWindowSnapshot};
+use rim_domain::model::{BufferEditSnapshot, BufferHistoryEntry, CursorState, WorkspaceBufferHistorySnapshot, WorkspaceBufferSnapshot, WorkspaceSessionSnapshot, WorkspaceTabSnapshot, WorkspaceWindowBufferViewSnapshot, WorkspaceWindowSnapshot};
 
 use super::{create_dir_all, make_tmp_dir, path_exists, read_to_string, run_async};
 use crate::session::{load_workspace_session, save_workspace_session};

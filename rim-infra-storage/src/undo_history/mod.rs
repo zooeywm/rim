@@ -3,7 +3,7 @@ mod session_flow;
 
 use anyhow::{Result, bail};
 use protocol::{UndoEditSnapshot, UndoHistoryEntry};
-use rim_kernel::state::{CursorState, PersistedBufferHistory};
+use rim_domain::model::{CursorState, PersistedBufferHistory};
 use ropey::Rope;
 pub(crate) use session_flow::{load_undo_history, save_undo_history};
 

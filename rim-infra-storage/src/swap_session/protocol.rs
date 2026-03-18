@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
 use compio::{fs::OpenOptions, io::AsyncWriteAtExt};
-use rim_kernel::ports::SwapEditOp;
+use rim_application::ports::SwapEditOp;
 use ropey::Rope;
 
 use super::BufferedSwapOp;

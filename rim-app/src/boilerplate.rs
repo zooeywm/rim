@@ -1,12 +1,19 @@
 use std::path::PathBuf;
 
+use rim_application::ports::SwapEditOp;
+use rim_domain::model::{BufferId, PersistedBufferHistory, WorkspaceSessionSnapshot};
 use rim_infra_file_watcher::FileWatcherImpl;
 use rim_infra_storage::StorageIoImpl;
-use rim_kernel::{ports::{FileWatcher, FileWatcherError, StorageIo, StorageIoError, SwapEditOp}, state::{BufferId, PersistedBufferHistory, WorkspaceSessionSnapshot}};
+use rim_ports::{FileWatcher, FileWatcherError, StorageIo, StorageIoError};
 
 use crate::app::AppPorts;
 
 impl StorageIo for AppPorts<'_> {
+	type BufferId = BufferId;
+	type EditOp = SwapEditOp;
+	type PersistedBufferHistory = PersistedBufferHistory;
+	type WorkspaceSessionSnapshot = WorkspaceSessionSnapshot;
+
 	fn enqueue_load_workspace_session(&self) -> Result<(), StorageIoError> {
 		StorageIoImpl::inj_ref(self.storage_io).enqueue_load_workspace_session()
 	}
@@ -110,6 +117,8 @@ impl StorageIo for AppPorts<'_> {
 }
 
 impl FileWatcher for AppPorts<'_> {
+	type BufferId = BufferId;
+
 	fn enqueue_watch(&self, buffer_id: BufferId, path: PathBuf) -> Result<(), FileWatcherError> {
 		FileWatcherImpl::inj_ref(self.file_watcher).enqueue_watch(buffer_id, path)
 	}

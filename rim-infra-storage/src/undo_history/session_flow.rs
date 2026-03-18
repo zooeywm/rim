@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::{Path, PathBuf}};
 
 use anyhow::{Result, bail};
-use rim_kernel::state::PersistedBufferHistory;
+use rim_domain::model::PersistedBufferHistory;
 
 use super::{UndoHistorySession, derive_base_text_from_snapshot, is_base_text_consistent, linear_history_entries_from_snapshot, longest_common_undo_entry_prefix, protocol::{UndoMetaDocument, append_undo_log_entries_with_offsets, read_legacy_undo_document, read_undo_log_entries, read_undo_meta, remove_legacy_undo_file, remove_undo_history_files, rewrite_undo_log, truncate_undo_log, undo_log_truncate_offset, write_undo_meta}, replay_undo_entries};
 

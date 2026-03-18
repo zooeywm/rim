@@ -1,0 +1,1034 @@
+use super::common::{set_active_buffer_text, test_state};
+use crate::state::{BufferEditSnapshot, BufferHistoryEntry, CursorState, PendingBlockInsert};
+
+#[test]
+fn cursor_move_right_should_stop_at_line_end() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abc");
+	state.move_cursor_right();
+	state.move_cursor_right();
+	state.move_cursor_right();
+	state.move_cursor_right();
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 3);
+}
+
+#[test]
+fn cursor_move_down_should_clamp_column_to_target_line() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abcd\nx");
+	state.move_cursor_right();
+	state.move_cursor_right();
+	state.move_cursor_right();
+	state.move_cursor_down();
+	assert_eq!(state.active_cursor().row, 2);
+	assert_eq!(state.active_cursor().col, 1);
+}
+
+#[test]
+fn vertical_move_should_restore_preferred_col_when_line_has_enough_width() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abcd\nx\nabcd");
+	state.move_cursor_right();
+	state.move_cursor_right();
+	state.move_cursor_right();
+	assert_eq!(state.active_cursor().col, 4);
+
+	state.move_cursor_down();
+	assert_eq!(state.active_cursor().row, 2);
+	assert_eq!(state.active_cursor().col, 1);
+
+	state.move_cursor_down();
+	assert_eq!(state.active_cursor().row, 3);
+	assert_eq!(state.active_cursor().col, 4);
+
+	state.move_cursor_up();
+	assert_eq!(state.active_cursor().row, 2);
+	assert_eq!(state.active_cursor().col, 1);
+
+	state.move_cursor_up();
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 4);
+}
+
+#[test]
+fn vertical_move_should_preserve_display_column_with_tabs() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "ab\tX\nabcdefX");
+	state.move_cursor_right();
+	state.move_cursor_right();
+	state.move_cursor_right();
+	assert_eq!(state.active_cursor().col, 4);
+
+	state.move_cursor_down();
+	assert_eq!(state.active_cursor().row, 2);
+	assert_eq!(state.active_cursor().col, 7);
+
+	state.move_cursor_up();
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 4);
+}
+
+#[test]
+fn horizontal_move_should_reset_preferred_col_memory() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abcd\nx\nabcd");
+	state.move_cursor_right();
+	state.move_cursor_right();
+	state.move_cursor_right();
+	state.move_cursor_down();
+	assert_eq!(state.active_cursor().col, 1);
+
+	state.move_cursor_left();
+	assert_eq!(state.active_cursor().col, 1);
+
+	state.move_cursor_down();
+	assert_eq!(state.active_cursor().row, 3);
+	assert_eq!(state.active_cursor().col, 1);
+}
+
+#[test]
+fn line_start_should_reset_preferred_col_memory() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abcd\nx\nabcd");
+	state.move_cursor_right();
+	state.move_cursor_right();
+	state.move_cursor_right();
+	state.move_cursor_down();
+	assert_eq!(state.active_cursor().col, 1);
+
+	state.move_cursor_line_start();
+	assert_eq!(state.active_cursor().col, 1);
+
+	state.move_cursor_down();
+	assert_eq!(state.active_cursor().row, 3);
+	assert_eq!(state.active_cursor().col, 1);
+}
+
+#[test]
+fn line_end_should_reset_preferred_col_memory() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abcd\nx\nabcd");
+	state.move_cursor_right();
+	state.move_cursor_right();
+	state.move_cursor_right();
+	state.move_cursor_down();
+	assert_eq!(state.active_cursor().col, 1);
+
+	state.move_cursor_line_end();
+	assert_eq!(state.active_cursor().col, 1);
+
+	state.move_cursor_down();
+	assert_eq!(state.active_cursor().row, 3);
+	assert_eq!(state.active_cursor().col, 1);
+}
+
+#[test]
+fn move_cursor_file_start_should_jump_to_first_line() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "a\nb\nc");
+	state.move_cursor_down();
+	state.move_cursor_down();
+	state.move_cursor_right();
+	state.move_cursor_file_start();
+
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 1);
+}
+
+#[test]
+fn move_cursor_file_end_should_jump_to_last_line() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abcd\nx");
+	state.move_cursor_right();
+	state.move_cursor_right();
+	state.move_cursor_right();
+	state.move_cursor_file_end();
+
+	assert_eq!(state.active_cursor().row, 2);
+	assert_eq!(state.active_cursor().col, 1);
+}
+
+#[test]
+fn trailing_newline_should_not_create_extra_movable_row() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abc\n");
+
+	state.move_cursor_down();
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 1);
+}
+
+#[test]
+fn move_cursor_file_end_should_ignore_trailing_newline_row() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abc\n");
+	state.move_cursor_file_end();
+
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 1);
+}
+
+#[test]
+fn cursor_move_down_at_bottom_should_scroll_window() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "1\n2\n3\n4\n5\n6");
+	state.update_active_tab_layout(80, 3);
+
+	state.move_cursor_down();
+	state.move_cursor_down();
+	let active_window_id = state.active_window_id();
+	let before = state.windows.get(active_window_id).expect("window exists").scroll_y;
+	assert_eq!(before, 0);
+
+	state.move_cursor_down();
+	let after = state.windows.get(active_window_id).expect("window exists").scroll_y;
+	assert_eq!(state.active_cursor().row, 4);
+	assert_eq!(after, 1);
+}
+
+#[test]
+fn cursor_scroll_threshold_should_trigger_earlier() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "1\n2\n3\n4\n5\n6");
+	state.update_active_tab_layout(80, 4);
+	state.cursor_scroll_threshold = 1;
+
+	state.move_cursor_down();
+	state.move_cursor_down();
+	let active_window_id = state.active_window_id();
+	let before = state.windows.get(active_window_id).expect("window exists").scroll_y;
+	assert_eq!(before, 0);
+
+	state.move_cursor_down();
+	let after = state.windows.get(active_window_id).expect("window exists").scroll_y;
+	assert_eq!(state.active_cursor().row, 4);
+	assert_eq!(after, 1);
+}
+
+#[test]
+fn scroll_view_down_one_line_should_increase_scroll_and_keep_cursor_visible() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "1\n2\n3\n4\n5\n6");
+	state.update_active_tab_layout(80, 3);
+
+	state.scroll_view_down_one_line();
+
+	let active_window_id = state.active_window_id();
+	let window = state.windows.get(active_window_id).expect("window exists");
+	assert_eq!(window.scroll_y, 1);
+	assert_eq!(state.active_cursor().row, 2);
+}
+
+#[test]
+fn scroll_view_up_one_line_should_decrease_scroll_and_keep_cursor_visible() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "1\n2\n3\n4\n5\n6");
+	state.update_active_tab_layout(80, 3);
+	let active_window_id = state.active_window_id();
+	state.windows.get_mut(active_window_id).expect("window exists").scroll_y = 2;
+	state.move_cursor_down();
+	state.move_cursor_down();
+	state.move_cursor_down();
+	assert_eq!(state.active_cursor().row, 4);
+
+	state.scroll_view_up_one_line();
+
+	let window = state.windows.get(active_window_id).expect("window exists");
+	assert_eq!(window.scroll_y, 1);
+	assert_eq!(state.active_cursor().row, 4);
+}
+
+#[test]
+fn scroll_view_down_one_line_should_respect_cursor_scroll_threshold() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "1\n2\n3\n4\n5\n6");
+	state.update_active_tab_layout(80, 4);
+	state.cursor_scroll_threshold = 1;
+
+	state.scroll_view_down_one_line();
+
+	let active_window_id = state.active_window_id();
+	let window = state.windows.get(active_window_id).expect("window exists");
+	assert_eq!(window.scroll_y, 1);
+	assert_eq!(state.active_cursor().row, 3);
+}
+
+#[test]
+fn scroll_view_up_one_line_should_respect_cursor_scroll_threshold() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "1\n2\n3\n4\n5\n6");
+	state.update_active_tab_layout(80, 4);
+	state.cursor_scroll_threshold = 1;
+	let active_window_id = state.active_window_id();
+	let window = state.windows.get_mut(active_window_id).expect("window exists");
+	window.scroll_y = 2;
+	window.cursor = CursorState { row: 4, col: 1 };
+
+	state.scroll_view_up_one_line();
+
+	let window = state.windows.get(active_window_id).expect("window exists");
+	assert_eq!(window.scroll_y, 1);
+	assert_eq!(state.active_cursor().row, 4);
+}
+
+#[test]
+fn word_wrap_move_down_near_bottom_should_advance_scroll() {
+	let mut state = test_state();
+	let content = (1..=300).map(|idx| format!("line {idx}")).collect::<Vec<_>>().join("\n");
+	set_active_buffer_text(&mut state, content.as_str());
+	state.update_active_tab_layout(80, 5);
+	state.toggle_word_wrap();
+	for _ in 0..267 {
+		state.move_cursor_down();
+	}
+	let active_window_id = state.active_window_id();
+	let before_scroll = state.windows.get(active_window_id).expect("window exists").scroll_y;
+	assert_eq!(state.active_cursor().row, 268);
+	state.move_cursor_down();
+	let after_scroll = state.windows.get(active_window_id).expect("window exists").scroll_y;
+	assert_eq!(state.active_cursor().row, 269);
+	assert!(
+		after_scroll > before_scroll,
+		"expected wrapped scroll to advance, before={before_scroll}, after={after_scroll}"
+	);
+}
+
+#[test]
+fn word_wrap_layout_reconcile_should_not_rollback_scroll_after_move_down() {
+	let mut state = test_state();
+	let content = (1..=300).map(|idx| format!("line {idx}")).collect::<Vec<_>>().join("\n");
+	set_active_buffer_text(&mut state, content.as_str());
+	state.update_active_tab_layout(80, 5);
+	state.toggle_word_wrap();
+	for _ in 0..268 {
+		state.move_cursor_down();
+	}
+	let active_window_id = state.active_window_id();
+	let scroll_after_move = state.windows.get(active_window_id).expect("window exists").scroll_y;
+	assert_eq!(state.active_cursor().row, 269);
+
+	state.update_active_tab_layout(80, 5);
+
+	let scroll_after_layout = state.windows.get(active_window_id).expect("window exists").scroll_y;
+	assert!(
+		scroll_after_layout >= scroll_after_move,
+		"wrapped scroll should not rollback after layout reconcile, move={scroll_after_move}, \
+		 layout={scroll_after_layout}"
+	);
+}
+
+#[test]
+fn scroll_view_should_restore_preferred_col_when_row_changes_back() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abcd\nx\nabcd");
+	state.update_active_tab_layout(80, 1);
+	state.move_cursor_right();
+	state.move_cursor_right();
+	state.move_cursor_right();
+	assert_eq!(state.active_cursor().col, 4);
+
+	state.scroll_view_down_one_line();
+	assert_eq!(state.active_cursor().row, 2);
+	assert_eq!(state.active_cursor().col, 1);
+
+	state.scroll_view_down_one_line();
+	assert_eq!(state.active_cursor().row, 3);
+	assert_eq!(state.active_cursor().col, 4);
+
+	state.scroll_view_up_one_line();
+	assert_eq!(state.active_cursor().row, 2);
+	assert_eq!(state.active_cursor().col, 1);
+
+	state.scroll_view_up_one_line();
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 4);
+}
+
+#[test]
+fn scroll_view_down_half_page_should_move_cursor_and_preserve_relative_screen_row() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, &(1..=80).map(|n| n.to_string()).collect::<Vec<_>>().join("\n"));
+	state.update_active_tab_layout(80, 20);
+	let active_window_id = state.active_window_id();
+	let window = state.windows.get_mut(active_window_id).expect("window exists");
+	window.cursor = CursorState { row: 11, col: 1 };
+	window.scroll_y = 0;
+
+	state.scroll_view_down_half_page();
+
+	let window = state.windows.get(active_window_id).expect("window exists");
+	assert_eq!(window.cursor.row, 21);
+	assert_eq!(window.scroll_y, 10);
+}
+
+#[test]
+fn scroll_view_up_half_page_should_move_cursor_and_preserve_relative_screen_row() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, &(1..=80).map(|n| n.to_string()).collect::<Vec<_>>().join("\n"));
+	state.update_active_tab_layout(80, 20);
+	let active_window_id = state.active_window_id();
+	let window = state.windows.get_mut(active_window_id).expect("window exists");
+	window.cursor = CursorState { row: 31, col: 1 };
+	window.scroll_y = 20;
+
+	state.scroll_view_up_half_page();
+
+	let window = state.windows.get(active_window_id).expect("window exists");
+	assert_eq!(window.cursor.row, 21);
+	assert_eq!(window.scroll_y, 10);
+}
+
+#[test]
+fn scroll_view_down_half_page_at_bottom_should_clamp_cursor_to_last_line() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, &(1..=20).map(|n| n.to_string()).collect::<Vec<_>>().join("\n"));
+	state.update_active_tab_layout(80, 4);
+	let active_window_id = state.active_window_id();
+	let window = state.windows.get_mut(active_window_id).expect("window exists");
+	window.scroll_y = 16;
+	window.cursor = CursorState { row: 19, col: 1 };
+
+	state.scroll_view_down_half_page();
+
+	let window = state.windows.get(active_window_id).expect("window exists");
+	assert_eq!(window.scroll_y, 16);
+	assert_eq!(window.cursor.row, 20);
+}
+
+#[test]
+fn scroll_view_up_half_page_at_top_should_clamp_cursor_to_first_line() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, &(1..=20).map(|n| n.to_string()).collect::<Vec<_>>().join("\n"));
+	state.update_active_tab_layout(80, 4);
+	let active_window_id = state.active_window_id();
+	let window = state.windows.get_mut(active_window_id).expect("window exists");
+	window.scroll_y = 0;
+	window.cursor = CursorState { row: 2, col: 1 };
+
+	state.scroll_view_up_half_page();
+
+	let window = state.windows.get(active_window_id).expect("window exists");
+	assert_eq!(window.scroll_y, 0);
+	assert_eq!(window.cursor.row, 1);
+}
+
+#[test]
+fn visual_mode_should_set_anchor_and_status_mode() {
+	let mut state = test_state();
+	state.move_cursor_right();
+	state.move_cursor_down();
+	let cursor = state.active_cursor();
+	state.enter_visual_mode();
+
+	assert!(state.is_visual_mode());
+	assert_eq!(state.visual_anchor, Some(cursor));
+	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::Visual);
+}
+
+#[test]
+fn visual_mode_exit_should_clear_anchor_and_restore_normal_mode() {
+	let mut state = test_state();
+	state.enter_visual_mode();
+	state.exit_visual_mode();
+
+	assert!(!state.is_visual_mode());
+	assert_eq!(state.visual_anchor, None);
+	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::Normal);
+}
+
+#[test]
+fn visual_line_mode_should_set_line_anchor_and_status_mode() {
+	let mut state = test_state();
+	state.move_cursor_right();
+	state.enter_visual_mode();
+	state.enter_visual_line_mode();
+
+	assert!(state.is_visual_line_mode());
+	assert_eq!(state.visual_anchor, Some(CursorState { row: 1, col: 1 }));
+	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::VisualLine);
+}
+
+#[test]
+fn visual_block_mode_should_set_anchor_and_status_mode() {
+	let mut state = test_state();
+	state.move_cursor_right();
+	let cursor = state.active_cursor();
+	state.enter_visual_block_mode();
+
+	assert!(state.is_visual_block_mode());
+	assert_eq!(state.visual_anchor, Some(cursor));
+	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::VisualBlock);
+}
+
+#[test]
+fn visual_block_insert_should_enter_insert_block_mode_and_mirror_chars() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abc\ndef\nghi");
+	state.move_cursor_right();
+	state.enter_visual_block_mode();
+	state.move_cursor_down();
+	state.move_cursor_down();
+
+	state.begin_visual_block_insert(false);
+	state.insert_char_at_block_cursor('X');
+	state.insert_char_at_block_cursor('Y');
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "aXYbc\ndXYef\ngXYhi");
+	assert!(state.is_block_insert_mode());
+	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::InsertBlock);
+	assert_eq!(state.active_cursor(), CursorState { row: 1, col: 4 });
+}
+
+#[test]
+fn visual_block_backspace_should_remove_mirrored_inserted_chars() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abc\ndef\nghi");
+	state.move_cursor_right();
+	state.enter_visual_block_mode();
+	state.move_cursor_down();
+	state.move_cursor_down();
+	state.begin_visual_block_insert(false);
+	state.insert_char_at_block_cursor('X');
+	state.insert_char_at_block_cursor('Y');
+
+	state.backspace_at_block_cursor();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "aXbc\ndXef\ngXhi");
+	assert_eq!(state.active_cursor(), CursorState { row: 1, col: 3 });
+}
+
+#[test]
+fn visual_block_insert_should_keep_cursor_on_block_start_row() {
+	let mut insert_before = test_state();
+	set_active_buffer_text(
+		&mut insert_before,
+		"abcdef
+        StorageIoImpl::inj_ref",
+	);
+	for _ in 0..8 {
+		insert_before.move_cursor_right();
+	}
+	insert_before.enter_visual_block_mode();
+	insert_before.move_cursor_down();
+	insert_before.begin_visual_block_insert(false);
+	assert_eq!(insert_before.active_cursor().row, 1);
+
+	let mut append = test_state();
+	set_active_buffer_text(
+		&mut append,
+		"abcdef
+        StorageIoImpl::inj_ref",
+	);
+	for _ in 0..8 {
+		append.move_cursor_right();
+	}
+	append.enter_visual_block_mode();
+	append.move_cursor_down();
+	append.begin_visual_block_insert(true);
+	assert_eq!(append.active_cursor().row, 1);
+}
+
+#[test]
+fn visual_block_append_should_pad_short_lines_before_first_input() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abc\nx\nzzz");
+	state.move_cursor_right();
+	state.move_cursor_right();
+	state.enter_visual_block_mode();
+	state.move_cursor_down();
+	state.move_cursor_down();
+
+	state.begin_visual_block_insert(true);
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "abc\nx  \nzzz");
+	assert!(state.is_block_insert_mode());
+	assert_eq!(state.active_cursor(), CursorState { row: 1, col: 4 });
+}
+
+#[test]
+fn visual_block_insert_should_expand_tab_padding_before_first_input() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "\tfoo\n    foo");
+	let active_window_id = state.active_window_id();
+	state.windows.get_mut(active_window_id).expect("window exists").cursor = CursorState { row: 1, col: 1 };
+	state.enter_block_insert_mode(PendingBlockInsert {
+		start_row:          1,
+		end_row:            2,
+		base_display_col:   2,
+		cursor_display_col: 2,
+	});
+
+	state.insert_char_at_block_cursor('X');
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "  X  foo\n  X  foo");
+	assert_eq!(state.active_cursor(), CursorState { row: 1, col: 4 });
+}
+
+#[test]
+fn visual_block_vertical_move_should_keep_virtual_column_beyond_short_lines() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abcdef\nx\nzzz");
+	for _ in 0..4 {
+		state.move_cursor_right();
+	}
+	assert_eq!(state.active_cursor().col, 5);
+
+	state.enter_visual_block_mode();
+	state.move_cursor_down();
+	state.move_cursor_down();
+
+	assert_eq!(state.active_cursor().row, 3);
+	assert_eq!(state.active_cursor().col, 5);
+}
+
+#[test]
+fn visual_delete_should_remove_selected_chars_in_single_line() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abcdef");
+	state.move_cursor_right();
+	state.enter_visual_mode();
+	state.move_cursor_right();
+	state.move_cursor_right();
+	state.delete_visual_selection_to_slot();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "aef");
+	assert_eq!(state.line_slot, Some("bcd".to_string()));
+	assert!(!state.line_slot_block_wise);
+	assert!(!state.is_visual_mode());
+	assert_eq!(state.status_bar.mode, super::super::StatusBarMode::Normal);
+}
+
+#[test]
+fn visual_delete_should_remove_selected_chars_across_lines() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abc\ndef\nghi");
+	state.move_cursor_right();
+	state.enter_visual_mode();
+	state.move_cursor_down();
+	state.move_cursor_down();
+	state.move_cursor_right();
+	state.delete_visual_selection_to_slot();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "a");
+	assert_eq!(state.line_slot, Some("bc\ndef\nghi".to_string()));
+	assert!(!state.line_slot_block_wise);
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 2);
+}
+
+#[test]
+fn visual_paste_should_replace_selection_in_single_line() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abcdef");
+	state.line_slot = Some("XY".to_string());
+	state.move_cursor_right();
+	state.enter_visual_mode();
+	state.move_cursor_right();
+	state.move_cursor_right();
+	state.replace_visual_selection_with_slot();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "aXYef");
+	assert!(!state.is_visual_mode());
+}
+
+#[test]
+fn visual_paste_should_replace_selection_across_lines() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abc\ndef\nghi");
+	state.line_slot = Some("Z".to_string());
+	state.move_cursor_right();
+	state.enter_visual_mode();
+	state.move_cursor_down();
+	state.move_cursor_down();
+	state.move_cursor_right();
+	state.replace_visual_selection_with_slot();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "aZ");
+	assert!(!state.is_visual_mode());
+}
+
+#[test]
+fn visual_line_delete_should_remove_whole_lines() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "a\nb\nc");
+	state.enter_visual_mode();
+	state.enter_visual_line_mode();
+	state.move_cursor_down();
+	state.delete_visual_selection_to_slot();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "c");
+	assert_eq!(state.line_slot, Some("a\nb".to_string()));
+	assert!(!state.line_slot_block_wise);
+	assert!(!state.is_visual_mode());
+}
+
+#[test]
+fn visual_block_yank_should_store_rectangular_selection() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abcd\nefgh\nijkl");
+	state.move_cursor_right();
+	state.enter_visual_block_mode();
+	state.move_cursor_down();
+	state.move_cursor_down();
+	state.move_cursor_right();
+	state.yank_visual_selection_to_slot();
+
+	assert_eq!(state.line_slot, Some("bc\nfg\njk".to_string()));
+	assert!(state.line_slot_block_wise);
+	assert!(!state.line_slot_line_wise);
+	assert!(!state.is_visual_mode());
+}
+
+#[test]
+fn visual_block_delete_should_remove_rectangular_selection() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abcd\nefgh\nijkl");
+	state.move_cursor_right();
+	state.enter_visual_block_mode();
+	state.move_cursor_down();
+	state.move_cursor_down();
+	state.move_cursor_right();
+	state.delete_visual_selection_to_slot();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "ad\neh\nil");
+	assert_eq!(state.line_slot, Some("bc\nfg\njk".to_string()));
+	assert!(state.line_slot_block_wise);
+	assert_eq!(state.active_cursor(), CursorState { row: 1, col: 2 });
+}
+
+#[test]
+fn visual_block_paste_should_replace_rectangular_selection() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abcd\nefgh\nijkl");
+	state.line_slot = Some("XY\nZ\n12".to_string());
+	state.line_slot_line_wise = false;
+	state.line_slot_block_wise = true;
+	state.move_cursor_right();
+	state.enter_visual_block_mode();
+	state.move_cursor_down();
+	state.move_cursor_down();
+	state.move_cursor_right();
+	state.replace_visual_selection_with_slot();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "aXYd\neZh\ni12l");
+	assert!(!state.is_visual_mode());
+}
+
+#[test]
+fn open_line_below_at_cursor_should_insert_empty_line_and_move_cursor_to_line_start() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abc\ndef");
+	state.move_cursor_right();
+	state.open_line_below_at_cursor();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "abc\n\ndef");
+	assert_eq!(state.active_cursor().row, 2);
+	assert_eq!(state.active_cursor().col, 1);
+}
+
+#[test]
+fn open_line_above_at_cursor_should_insert_empty_line_and_keep_cursor_on_current_row_index() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abc\ndef");
+	state.move_cursor_down();
+	state.move_cursor_right();
+	state.open_line_above_at_cursor();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "abc\n\ndef");
+	assert_eq!(state.active_cursor().row, 2);
+	assert_eq!(state.active_cursor().col, 1);
+}
+
+#[test]
+fn backspace_at_line_start_should_join_with_previous_line() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abc\ndef");
+	state.move_cursor_down();
+	state.backspace_at_cursor();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "abcdef");
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 4);
+}
+
+#[test]
+fn join_line_below_at_cursor_should_merge_current_and_next_line() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abc\n  def\nghi");
+	state.move_cursor_right();
+	state.join_line_below_at_cursor();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "abc def\nghi");
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 2);
+}
+
+#[test]
+fn join_line_below_at_cursor_on_last_line_should_do_nothing() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abc\ndef");
+	state.move_cursor_down();
+
+	state.join_line_below_at_cursor();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "abc\ndef");
+	assert_eq!(state.active_cursor().row, 2);
+	assert_eq!(state.active_cursor().col, 1);
+}
+
+#[test]
+fn cursor_move_right_and_left_should_adjust_horizontal_scroll() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abcdefghijklmnopqrstuvwxyz");
+	state.update_active_tab_layout(12, 8);
+
+	for _ in 0..15 {
+		state.move_cursor_right();
+	}
+	let window_id = state.active_window_id();
+	let scrolled_right = state.windows.get(window_id).expect("window exists").scroll_x;
+	assert!(scrolled_right > 0);
+
+	for _ in 0..15 {
+		state.move_cursor_left();
+	}
+	let scrolled_left = state.windows.get(window_id).expect("window exists").scroll_x;
+	assert_eq!(scrolled_left, 0);
+}
+
+#[test]
+fn insert_char_should_adjust_horizontal_scroll() {
+	let mut state = test_state();
+	state.update_active_tab_layout(20, 8);
+	state.enter_insert_mode();
+
+	for _ in 0..20 {
+		state.insert_char_at_cursor('x');
+	}
+
+	let window_id = state.active_window_id();
+	let scroll_x = state.windows.get(window_id).expect("window exists").scroll_x;
+	assert!(scroll_x > 0);
+}
+
+#[test]
+fn cursor_move_line_start_and_end_should_jump_in_current_line() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abcd");
+	state.move_cursor_right();
+	state.move_cursor_right();
+	state.move_cursor_right();
+	assert_eq!(state.active_cursor().col, 4);
+
+	state.move_cursor_line_start();
+	assert_eq!(state.active_cursor().col, 1);
+
+	state.move_cursor_line_end();
+	assert_eq!(state.active_cursor().col, 4);
+}
+
+#[test]
+fn cut_current_char_to_slot_should_remove_char_and_store_it() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "abcd");
+	state.move_cursor_right();
+	state.cut_current_char_to_slot();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "acd");
+	assert_eq!(state.line_slot, Some("b".to_string()));
+}
+
+#[test]
+fn paste_slot_at_cursor_should_insert_slot_text_after_cursor() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "ad");
+	state.line_slot = Some("bc".to_string());
+	state.line_slot_line_wise = false;
+	state.move_cursor_right();
+	state.paste_slot_at_cursor();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "adbc");
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 4);
+}
+
+#[test]
+fn paste_slot_at_cursor_should_insert_line_wise_slot_as_new_line_below() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "a\nc");
+	state.line_slot = Some("b".to_string());
+	state.line_slot_line_wise = true;
+
+	state.paste_slot_at_cursor();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "a\nb\nc");
+	assert_eq!(state.active_cursor().row, 2);
+	assert_eq!(state.active_cursor().col, 1);
+}
+
+#[test]
+fn paste_slot_at_cursor_should_insert_block_wise_slot_on_successive_rows() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "ad\neh\nil");
+	state.line_slot = Some("bc\nfg\njk".to_string());
+	state.line_slot_line_wise = false;
+	state.line_slot_block_wise = true;
+	state.paste_slot_at_cursor();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "abcd\nefgh\nijkl");
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 3);
+}
+
+#[test]
+fn delete_current_line_to_slot_should_remove_line_and_store_it() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "a\nb\nc");
+	state.move_cursor_down();
+
+	state.delete_current_line_to_slot();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "a\nc");
+	assert_eq!(state.active_cursor().row, 2);
+	assert_eq!(state.active_cursor().col, 1);
+	assert_eq!(state.line_slot, Some("b".to_string()));
+}
+
+#[test]
+fn delete_current_line_to_slot_should_keep_one_empty_line_when_last_line_deleted() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "only");
+
+	state.delete_current_line_to_slot();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "");
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 1);
+	assert_eq!(state.line_slot, Some("only".to_string()));
+}
+
+#[test]
+fn delete_current_line_to_slot_should_clamp_cursor_when_text_has_trailing_newline() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "a\nb\n");
+	state.move_cursor_down();
+	assert_eq!(state.active_cursor().row, 2);
+
+	state.delete_current_line_to_slot();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "a\n");
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 1);
+}
+
+#[test]
+fn visual_char_move_right_should_stop_at_newline_slot_without_crossing_row() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "ab\ncd");
+	state.move_cursor_right();
+	state.enter_visual_mode();
+
+	state.move_cursor_right_for_visual_char();
+	state.move_cursor_right_for_visual_char();
+
+	assert_eq!(state.active_cursor().row, 1);
+	assert_eq!(state.active_cursor().col, 3);
+}
+
+#[test]
+fn undo_active_buffer_edit_should_restore_previous_text_and_cursor() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "ab");
+	state.move_cursor_right();
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	state.insert_char_at_cursor('x');
+	state.push_buffer_history_entry(buffer_id, BufferHistoryEntry {
+		edits:         vec![BufferEditSnapshot {
+			start_byte:    1,
+			deleted_text:  String::new(),
+			inserted_text: "x".to_string(),
+		}],
+		before_cursor: CursorState { row: 1, col: 2 },
+		after_cursor:  CursorState { row: 1, col: 3 },
+	});
+
+	state.undo_active_buffer_edit();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "ab");
+	assert_eq!(state.active_cursor(), CursorState { row: 1, col: 2 });
+}
+
+#[test]
+fn redo_active_buffer_edit_should_reapply_last_undone_change() {
+	let mut state = test_state();
+	set_active_buffer_text(&mut state, "ab");
+	state.move_cursor_right();
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	state.insert_char_at_cursor('x');
+	state.push_buffer_history_entry(buffer_id, BufferHistoryEntry {
+		edits:         vec![BufferEditSnapshot {
+			start_byte:    1,
+			deleted_text:  String::new(),
+			inserted_text: "x".to_string(),
+		}],
+		before_cursor: CursorState { row: 1, col: 2 },
+		after_cursor:  CursorState { row: 1, col: 3 },
+	});
+	state.undo_active_buffer_edit();
+
+	state.redo_active_buffer_edit();
+
+	let buffer_id = state.active_buffer_id().expect("buffer id exists");
+	let buffer = state.buffers.get(buffer_id).expect("buffer exists");
+	assert_eq!(buffer.text.to_string(), "axb");
+	assert_eq!(state.active_cursor(), CursorState { row: 1, col: 3 });
+}

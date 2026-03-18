@@ -1,14 +1,13 @@
 use std::{cell::RefCell, fs, ops::ControlFlow, path::{Path, PathBuf}, process::Command};
 
 use anyhow::{Context, Result};
+use rim_application::{action::{AppAction, FileAction, SystemAction}, config as application_config, state::RimState};
 use rim_infra_file_watcher::FileWatcherState;
 use rim_infra_input::InputPumpService;
 use rim_infra_storage::StorageIoState;
 use rim_infra_ui::{Renderer, TerminalSession};
-use rim_kernel::{action::{AppAction, FileAction, SystemAction}, command::CommandRegistry, ports::{FilePicker, FilePickerError, StorageIo}, state::{NotificationLevel, RimState}};
+use rim_ports::{FilePicker, FilePickerError, StorageIo};
 use tracing::trace;
-
-use crate::config::{commands_config_path, editor_config_path, format_command_config_error, initialize_config_files, keymaps_config_path, load_command_alias_config, load_editor_config, load_keymap_config};
 
 #[derive(derive_more::AsRef, derive_more::AsMut)]
 pub struct App {
@@ -49,11 +48,11 @@ impl App {
 	pub fn new(workspace_root: PathBuf) -> Result<Self> {
 		// One bounded queue coordinates input, IO callbacks, and kernel actions.
 		let (event_tx, event_rx) = flume::bounded(1024);
-		initialize_config_files()?;
+		application_config::initialize_config_files()?;
 		let mut state = RimState::new();
 		state.set_workspace_root(workspace_root);
-		let config_errors = Self::apply_all_configs(&mut state);
-		Self::apply_config_errors_to_status(&mut state, config_errors);
+		let config_errors = application_config::apply_all_configs(&mut state);
+		application_config::apply_config_errors_to_status(&mut state, config_errors);
 		Ok(Self {
 			state,
 			storage_io: StorageIoState::new(event_tx.clone()),
@@ -70,7 +69,11 @@ impl App {
 		// bus.
 		self.storage_io.start();
 		self.file_watcher.start();
-		for config_path in [keymaps_config_path(), commands_config_path(), editor_config_path()] {
+		for config_path in [
+			application_config::keymaps_config_path(),
+			application_config::commands_config_path(),
+			application_config::editor_config_path(),
+		] {
 			if let Err(err) = self.file_watcher.enqueue_watch_config(config_path.clone()) {
 				tracing::error!("watch config failed: path={} error={}", config_path.display(), err);
 			}
@@ -185,76 +188,15 @@ impl App {
 	}
 
 	fn reload_all_configs(&mut self) -> ControlFlow<()> {
-		let config_errors = Self::apply_all_configs(&mut self.state);
+		let config_errors = application_config::apply_all_configs(&mut self.state);
 		self.state.refresh_key_hints_overlay_after_config_reload();
 		self.state.refresh_command_palette();
 		if config_errors.is_empty() {
 			self.state.status_bar.message = "config reloaded".to_string();
 		} else {
-			Self::apply_config_errors_to_status(&mut self.state, config_errors);
+			application_config::apply_config_errors_to_status(&mut self.state, config_errors);
 		}
 		ControlFlow::Continue(())
-	}
-
-	fn apply_all_configs(state: &mut RimState) -> Vec<String> {
-		let mut errors = Vec::new();
-		Self::reset_config_state_to_defaults(state);
-		match load_editor_config() {
-			Ok(Some(config)) => {
-				state.leader_key = config.editor.leader_key;
-				state.cursor_scroll_threshold = config.editor.cursor_scroll_threshold;
-				state.key_hints_width = config.editor.key_hints_width;
-				state.key_hints_max_height = config.editor.key_hints_max_height;
-			}
-			Ok(None) => {}
-			Err(err) => {
-				tracing::error!("editor config load failed: {}", err);
-				errors.push(err.to_string());
-			}
-		}
-		match load_keymap_config() {
-			Ok(Some(loaded)) => {
-				for error in state.apply_command_config(&loaded.config) {
-					tracing::error!("keymaps config ignored entry: {}", error);
-					errors.push(format_command_config_error(&loaded, &error).to_string());
-				}
-			}
-			Ok(None) => {}
-			Err(err) => {
-				tracing::error!("keymaps config load failed: {}", err);
-				errors.push(err.to_string());
-			}
-		}
-		match load_command_alias_config() {
-			Ok(Some(loaded)) => {
-				for error in state.apply_command_config(&loaded.config) {
-					tracing::error!("commands config ignored entry: {}", error);
-					errors.push(format_command_config_error(&loaded, &error).to_string());
-				}
-			}
-			Ok(None) => {}
-			Err(err) => {
-				tracing::error!("commands config load failed: {}", err);
-				errors.push(err.to_string());
-			}
-		}
-		errors
-	}
-
-	fn apply_config_errors_to_status(state: &mut RimState, errors: Vec<String>) {
-		let Some(first) = errors.first() else {
-			return;
-		};
-		let suffix = if errors.len() > 1 { format!(" (+{} more)", errors.len() - 1) } else { String::new() };
-		state.push_notification(NotificationLevel::Error, format!("config error: {}{}", first, suffix));
-	}
-
-	fn reset_config_state_to_defaults(state: &mut RimState) {
-		state.leader_key = ' ';
-		state.cursor_scroll_threshold = 0;
-		state.key_hints_width = 42;
-		state.key_hints_max_height = 36;
-		state.command_registry = CommandRegistry::with_defaults();
 	}
 }
 
@@ -329,9 +271,7 @@ impl FilePicker for AppPorts<'_> {
 
 #[cfg(test)]
 mod tests {
-	use rim_kernel::{command::{BindingMatch, BuiltinCommand, CommandConfigFile, CommandKeymapSection, CommandTarget, CursorCommand, KeyBindingOn, KeymapBindingConfig, ModeKeymapSections}, state::{KeymapScope, NormalSequenceKey, RimState}};
-
-	use super::App;
+	use rim_application::{command::{BindingMatch, BuiltinCommand, CommandConfigFile, CommandKeymapSection, CommandTarget, CursorCommand, KeyBindingOn, KeymapBindingConfig, ModeKeymapSections}, config as application_config, state::{KeymapScope, NormalSequenceKey, RimState}};
 
 	#[test]
 	fn reset_config_state_to_defaults_should_restore_removed_user_keymap_override() {
@@ -358,7 +298,7 @@ mod tests {
 			BindingMatch::NoMatch
 		);
 
-		App::reset_config_state_to_defaults(&mut state);
+		application_config::reset_config_state_to_defaults(&mut state);
 
 		assert_eq!(
 			state.command_registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[
@@ -398,7 +338,7 @@ mod tests {
 			"Jump to beginning"
 		);
 
-		App::reset_config_state_to_defaults(&mut state);
+		application_config::reset_config_state_to_defaults(&mut state);
 
 		assert_eq!(
 			state.command_registry.key_hints(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('g')])[0].summary,

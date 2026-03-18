@@ -1,5 +1,5 @@
 use ratatui::{buffer::Buffer, layout::{Constraint, Layout, Rect}, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Block, Borders, Clear, Paragraph, Widget}};
-use rim_kernel::state::{NotificationLevel, NotificationPreviewState, RimState};
+use rim_application::state::{NotificationLevel, NotificationPreviewState, RimState};
 
 #[derive(Clone)]
 pub(super) struct NotificationPreviewWidget {

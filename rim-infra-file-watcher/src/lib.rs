@@ -1,7 +1,9 @@
 use std::{collections::{HashMap, HashSet, hash_map::DefaultHasher}, fs, hash::{Hash, Hasher}, path::{Path, PathBuf}, thread, time::{Duration, Instant, SystemTime}};
 
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher, event::{EventKind, ModifyKind}};
-use rim_kernel::{action::{AppAction, FileAction, SystemAction}, ports::{FileWatcher, FileWatcherError}, state::BufferId};
+use rim_application::action::{AppAction, FileAction, SystemAction};
+use rim_domain::model::BufferId;
+use rim_ports::{FileWatcher, FileWatcherError};
 use tracing::error;
 
 #[derive(dep_inj::DepInj)]
@@ -19,6 +21,8 @@ impl AsRef<FileWatcherState> for FileWatcherState {
 impl<Deps> FileWatcher for FileWatcherImpl<Deps>
 where Deps: AsRef<FileWatcherState>
 {
+	type BufferId = BufferId;
+
 	fn enqueue_watch(&self, buffer_id: BufferId, path: PathBuf) -> Result<(), FileWatcherError> {
 		self.worker_tx.send(WatchWorkerEvent::Command(WatchRequest::WatchBufferPath { buffer_id, path })).map_err(
 			|err| {
@@ -546,7 +550,7 @@ fn hash_bytes(bytes: &[u8]) -> u64 {
 mod tests {
 	use std::{collections::{HashMap, HashSet}, fs, path::{Path, PathBuf}, time::Instant};
 
-	use rim_kernel::action::{AppAction, SystemAction};
+	use rim_application::action::{AppAction, SystemAction};
 
 	use super::{FileWatcherState, PendingChanges, SemanticTracker};
 

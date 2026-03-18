@@ -10,4 +10,4 @@ ropey.workspace         = true
 ratatui.workspace       = true
 thiserror.workspace     = true
 unicode-width.workspace = true
-rim-kernel.workspace    = true
+rim-application.workspace = true

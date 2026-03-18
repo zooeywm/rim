@@ -1,6 +1,7 @@
 use std::{collections::HashMap, path::Path, time::Instant};
 
-use rim_kernel::{action::{AppAction, FileAction}, state::BufferId};
+use rim_application::action::{AppAction, FileAction};
+use rim_domain::model::BufferId;
 use tracing::error;
 
 use super::{FlushSchedule, StorageIoRequest, create_swap_session, get_or_create_swap_session, send_file_action};

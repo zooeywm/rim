@@ -1,7 +1,7 @@
 use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, time::Duration};
 
 use crossterm::{event, event::{Event, KeyCode as CrosstermKeyCode, KeyEvent as CrosstermKeyEvent, KeyEventKind as CrosstermKeyEventKind, KeyModifiers as CrosstermKeyModifiers}};
-use rim_kernel::action::{AppAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction};
+use rim_application::action::{AppAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction};
 use tracing::error;
 
 pub struct InputHandler;
@@ -120,7 +120,7 @@ impl Drop for InputPumpService {
 #[cfg(test)]
 mod tests {
 	use crossterm::event::{Event, KeyCode as CrosstermKeyCode, KeyEvent as CrosstermKeyEvent, KeyEventKind as CrosstermKeyEventKind, KeyEventState as CrosstermKeyEventState, KeyModifiers as CrosstermKeyModifiers};
-	use rim_kernel::action::{AppAction, EditorAction, KeyCode, KeyModifiers, LayoutAction};
+	use rim_application::action::{AppAction, EditorAction, KeyCode, KeyModifiers, LayoutAction};
 
 	use super::InputHandler;
 

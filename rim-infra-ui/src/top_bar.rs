@@ -1,5 +1,5 @@
 use ratatui::{buffer::Buffer, layout::{Constraint, Layout, Rect}, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Paragraph, Widget}};
-use rim_kernel::state::RimState;
+use rim_application::state::RimState;
 
 pub(super) struct TopBarWidget {
 	buffer_spans: Vec<Span<'static>>,
@@ -88,7 +88,7 @@ mod tests {
 	use std::path::PathBuf;
 
 	use ratatui::style::Modifier;
-	use rim_kernel::state::RimState;
+	use rim_application::state::RimState;
 
 	use super::TopBarWidget;
 

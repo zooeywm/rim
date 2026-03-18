@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rim_kernel::ports::SwapEditOp;
+use rim_application::ports::SwapEditOp;
 use ropey::Rope;
 
 use super::{BufferedSwapOp, SwapSession, protocol::{append_buffered_swap_ops, append_buffered_swap_ops_iter, apply_swap_op, truncate_swap_file}};

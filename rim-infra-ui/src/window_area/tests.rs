@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use ratatui::layout::Rect;
-use rim_kernel::state::{CursorState, RimState};
+use rim_application::state::{CursorState, RimState};
 
 use super::{DIR_DOWN, DIR_LEFT, DIR_RIGHT, DIR_UP, SelectionSegment, VisualSelectionSpec, WindowAreaWidget, collect_visual_selection_segments, dirs_from_symbol, display_width_of_char_prefix, render_line_for_display, symbol_from_dirs, visible_slice_by_display_width};
 

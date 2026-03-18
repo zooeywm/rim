@@ -9,4 +9,6 @@ flume.workspace      = true
 notify.workspace     = true
 tracing.workspace    = true
 dep-inj.workspace    = true
-rim-kernel.workspace = true
+rim-application.workspace = true
+rim-domain.workspace      = true
+rim-ports.workspace       = true

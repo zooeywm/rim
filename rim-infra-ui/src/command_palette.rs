@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use ratatui::{buffer::Buffer, layout::{Alignment, Constraint, Layout, Rect}, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap}};
-use rim_kernel::{command::{CommandPaletteItem, CommandPaletteMatch}, preview::preview_rows, state::{CommandPaletteState, RimState}};
+use rim_application::{command::{CommandPaletteFileMatch, CommandPaletteItem, CommandPaletteMatch}, preview::preview_rows, state::{CommandPaletteState, RimState}};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const COMMAND_INPUT_MAX_ROWS: usize = 4;
@@ -332,7 +332,7 @@ fn render_command_palette_command_item(
 }
 
 fn render_command_palette_file_item(
-	item: &rim_kernel::command::CommandPaletteFileMatch,
+	item: &CommandPaletteFileMatch,
 	selected: bool,
 	body_width: usize,
 ) -> Line<'static> {
@@ -406,7 +406,7 @@ fn wrap_command_input(query: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
 	use ratatui::layout::Rect;
-	use rim_kernel::state::RimState;
+	use rim_application::state::RimState;
 
 	use super::CommandPaletteWidgets;
 

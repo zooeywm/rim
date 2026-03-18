@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
 use compio::{fs::OpenOptions, io::AsyncWriteAtExt};
-use rim_kernel::state::{BufferEditSnapshot, BufferHistoryEntry, CursorState, PersistedBufferHistory};
+use rim_domain::model::{BufferEditSnapshot, BufferHistoryEntry, CursorState, PersistedBufferHistory};
 use serde::{Deserialize, Serialize};
 
 use crate::{UNDO_FILE_VERSION, path_codec::{undo_legacy_path_for_source, undo_log_path_for_source, undo_meta_path_for_source}};

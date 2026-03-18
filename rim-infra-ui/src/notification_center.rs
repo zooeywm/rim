@@ -1,5 +1,5 @@
 use ratatui::{buffer::Buffer, layout::{Constraint, Layout, Rect}, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap}};
-use rim_kernel::state::{NotificationCenterItem, NotificationCenterView, NotificationLevel, RimState};
+use rim_application::state::{NotificationCenterItem, NotificationCenterView, NotificationLevel, RimState};
 
 pub(super) struct NotificationCenterWidget {
 	view: NotificationCenterView,

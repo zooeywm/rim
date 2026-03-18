@@ -1,7 +1,8 @@
 use std::{collections::HashMap, future::Future, path::{Path, PathBuf}, time::{Instant, SystemTime, UNIX_EPOCH}};
 
 use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
-use rim_kernel::{action::{SwapConflictCheckResult, SwapConflictInfo}, state::{BufferEditSnapshot, BufferHistoryEntry, CursorState}};
+use rim_application::action::{SwapConflictCheckResult, SwapConflictInfo};
+use rim_domain::model::{BufferEditSnapshot, BufferHistoryEntry, CursorState};
 use ropey::Rope;
 
 use super::*;

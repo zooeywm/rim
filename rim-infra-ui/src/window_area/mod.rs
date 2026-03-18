@@ -1,5 +1,5 @@
 use ratatui::{buffer::{Buffer, Cell}, layout::Rect, style::{Color, Style}, widgets::{Paragraph, Widget, Wrap}};
-use rim_kernel::{display_geometry::{char_display_width as geom_char_display_width, display_width_of_char_prefix as geom_display_width_of_char_prefix, display_width_of_char_prefix_with_virtual as geom_display_width_of_char_prefix_with_virtual, wrap_line_with_display_span as geom_wrap_line_with_display_span, wrapped_row_index_for_row_display_col as geom_wrapped_row_index_for_row_display_col}, state::RimState};
+use rim_application::{display_geometry::{char_display_width as geom_char_display_width, display_width_of_char_prefix as geom_display_width_of_char_prefix, display_width_of_char_prefix_with_virtual as geom_display_width_of_char_prefix_with_virtual, wrap_line_with_display_span as geom_wrap_line_with_display_span, wrapped_row_index_for_row_display_col as geom_wrapped_row_index_for_row_display_col}, state::{CursorState, RimState}};
 use ropey::Rope;
 
 pub(super) struct WindowAreaWidget {
@@ -54,8 +54,8 @@ struct VisualSelectionSpec {
 	text_rect:  Rect,
 	scroll_x:   u16,
 	scroll_y:   u16,
-	anchor:     rim_kernel::state::CursorState,
-	cursor:     rim_kernel::state::CursorState,
+	anchor:     CursorState,
+	cursor:     CursorState,
 	line_wise:  bool,
 	block_wise: bool,
 }
@@ -548,14 +548,8 @@ fn collect_split_lines(state: &RimState, content_area: Rect) -> (Vec<VerticalLin
 fn collect_visual_selection_segments(content: &str, spec: VisualSelectionSpec) -> Vec<SelectionSegment> {
 	let (start, end) = if spec.block_wise {
 		(
-			rim_kernel::state::CursorState {
-				row: spec.anchor.row.min(spec.cursor.row),
-				col: spec.anchor.col.min(spec.cursor.col),
-			},
-			rim_kernel::state::CursorState {
-				row: spec.anchor.row.max(spec.cursor.row),
-				col: spec.anchor.col.max(spec.cursor.col),
-			},
+			CursorState { row: spec.anchor.row.min(spec.cursor.row), col: spec.anchor.col.min(spec.cursor.col) },
+			CursorState { row: spec.anchor.row.max(spec.cursor.row), col: spec.anchor.col.max(spec.cursor.col) },
 		)
 	} else if (spec.anchor.row, spec.anchor.col) <= (spec.cursor.row, spec.cursor.col) {
 		(spec.anchor, spec.cursor)
@@ -728,14 +722,8 @@ fn collect_visual_selection_segments_rope(
 ) -> Vec<SelectionSegment> {
 	let (start, end) = if spec.block_wise {
 		(
-			rim_kernel::state::CursorState {
-				row: spec.anchor.row.min(spec.cursor.row),
-				col: spec.anchor.col.min(spec.cursor.col),
-			},
-			rim_kernel::state::CursorState {
-				row: spec.anchor.row.max(spec.cursor.row),
-				col: spec.anchor.col.max(spec.cursor.col),
-			},
+			CursorState { row: spec.anchor.row.min(spec.cursor.row), col: spec.anchor.col.min(spec.cursor.col) },
+			CursorState { row: spec.anchor.row.max(spec.cursor.row), col: spec.anchor.col.max(spec.cursor.col) },
 		)
 	} else if (spec.anchor.row, spec.anchor.col) <= (spec.cursor.row, spec.cursor.col) {
 		(spec.anchor, spec.cursor)
@@ -833,14 +821,8 @@ fn collect_visual_selection_segments_rope_wrapped(
 ) -> Vec<SelectionSegment> {
 	let (start, end) = if spec.block_wise {
 		(
-			rim_kernel::state::CursorState {
-				row: spec.anchor.row.min(spec.cursor.row),
-				col: spec.anchor.col.min(spec.cursor.col),
-			},
-			rim_kernel::state::CursorState {
-				row: spec.anchor.row.max(spec.cursor.row),
-				col: spec.anchor.col.max(spec.cursor.col),
-			},
+			CursorState { row: spec.anchor.row.min(spec.cursor.row), col: spec.anchor.col.min(spec.cursor.col) },
+			CursorState { row: spec.anchor.row.max(spec.cursor.row), col: spec.anchor.col.max(spec.cursor.col) },
 		)
 	} else if (spec.anchor.row, spec.anchor.col) <= (spec.cursor.row, spec.cursor.col) {
 		(spec.anchor, spec.cursor)
@@ -926,11 +908,7 @@ fn collect_visual_selection_segments_rope_wrapped(
 }
 
 #[cfg(test)]
-fn block_display_bounds_plain(
-	content: &str,
-	anchor: rim_kernel::state::CursorState,
-	cursor: rim_kernel::state::CursorState,
-) -> Option<(u16, u16)> {
+fn block_display_bounds_plain(content: &str, anchor: CursorState, cursor: CursorState) -> Option<(u16, u16)> {
 	let logical_lines = logical_lines_with_newline_info(content);
 	let anchor_line = logical_lines.get(anchor.row.saturating_sub(1) as usize)?;
 	let cursor_line = logical_lines.get(cursor.row.saturating_sub(1) as usize)?;
@@ -945,11 +923,7 @@ fn block_display_bounds_plain(
 	Some((left, right))
 }
 
-fn block_display_bounds_rope(
-	content: &Rope,
-	anchor: rim_kernel::state::CursorState,
-	cursor: rim_kernel::state::CursorState,
-) -> Option<(u16, u16)> {
+fn block_display_bounds_rope(content: &Rope, anchor: CursorState, cursor: CursorState) -> Option<(u16, u16)> {
 	let anchor_line = rope_logical_line(content, anchor.row.saturating_sub(1) as usize)?;
 	let cursor_line = rope_logical_line(content, cursor.row.saturating_sub(1) as usize)?;
 	let anchor_start = display_width_of_char_prefix_with_virtual(

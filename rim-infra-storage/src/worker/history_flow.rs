@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::{Path, PathBuf}};
 
-use rim_kernel::action::{AppAction, FileAction};
+use rim_application::action::{AppAction, FileAction};
 
 use super::{StorageIoRequest, send_file_action};
 use crate::undo_history::{UndoHistorySession, load_undo_history, save_undo_history};

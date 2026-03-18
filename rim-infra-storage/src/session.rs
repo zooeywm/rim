@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use rim_kernel::state::WorkspaceSessionSnapshot;
+use rim_domain::model::WorkspaceSessionSnapshot;
 
 const WORKSPACE_SESSION_FILE_NAME: &str = "last-session.json";
 

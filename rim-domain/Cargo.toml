@@ -1,0 +1,11 @@
+[package]
+name              = "rim-domain"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+ropey.workspace         = true
+serde.workspace         = true
+slotmap.workspace       = true
+unicode-width.workspace = true

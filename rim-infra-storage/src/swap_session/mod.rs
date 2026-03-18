@@ -8,7 +8,8 @@ use compaction::{TailCompaction, compact_delete_against_insert_tail, compact_ins
 pub(crate) use protocol::append_swap_ops;
 use protocol::apply_swap_op;
 pub(crate) use protocol::{parse_swap_file, write_swap_snapshot};
-use rim_kernel::{action::{SwapConflictCheckResult, SwapConflictInfo}, ports::SwapEditOp, state::BufferId};
+use rim_application::{action::{SwapConflictCheckResult, SwapConflictInfo}, ports::SwapEditOp};
+use rim_domain::model::BufferId;
 use ropey::Rope;
 use tracing::{error, info};
 

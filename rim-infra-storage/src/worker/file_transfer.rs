@@ -1,4 +1,4 @@
-use rim_kernel::action::{AppAction, FileAction};
+use rim_application::action::{AppAction, FileAction};
 
 use super::{StorageIoRequest, list_workspace_files, load_file, load_workspace_file_preview, save_file, send_file_action_async};
 

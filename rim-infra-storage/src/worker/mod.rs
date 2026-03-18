@@ -1,7 +1,8 @@
 use std::{collections::HashMap, path::{Path, PathBuf}, time::Instant};
 
 use anyhow::{Context, Result, anyhow};
-use rim_kernel::{action::{AppAction, FileAction, FileLoadSource}, ports::SwapEditOp, state::{BufferId, PersistedBufferHistory, WorkspaceSessionSnapshot}};
+use rim_application::{action::{AppAction, FileAction, FileLoadSource}, ports::SwapEditOp};
+use rim_domain::model::{BufferId, PersistedBufferHistory, WorkspaceSessionSnapshot};
 use tracing::error;
 
 mod file_transfer;

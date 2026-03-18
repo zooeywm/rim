@@ -1,6 +1,9 @@
 [workspace]
 members = [
   "rim-command-macros",
+  "rim-ports",
+  "rim-application",
+  "rim-domain",
   "rim-paths",
   "rim-kernel",
   "rim-infra-storage",
@@ -40,6 +43,9 @@ toml                   = "1.0"
 unicode-width          = "0.2"
 rim-app                = { path = "rim-app" }
 rim-command-macros     = { path = "rim-command-macros" }
+rim-ports              = { path = "rim-ports" }
+rim-application        = { path = "rim-application" }
+rim-domain             = { path = "rim-domain" }
 rim-infra-storage      = { path = "rim-infra-storage" }
 rim-infra-file-watcher = { path = "rim-infra-file-watcher" }
 rim-infra-input        = { path = "rim-infra-input" }

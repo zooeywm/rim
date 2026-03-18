@@ -8,4 +8,4 @@ authors.workspace = true
 crossterm.workspace  = true
 flume.workspace      = true
 tracing.workspace    = true
-rim-kernel.workspace = true
+rim-application.workspace = true
