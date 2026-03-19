@@ -41,23 +41,47 @@ jobs:
         run: rustfmt +nightly --check --edition 2024 $(git ls-files '*.rs')
 
       - name: Check workspace
-        run: cargo check -q
+        run: cargo check -q --workspace --exclude rim-plugin-yazi
 
       - name: Check test targets compile
-        run: cargo test --workspace --no-run
+        run: cargo test --workspace --exclude rim-plugin-yazi --no-run
 
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --exclude rim-plugin-yazi --all-targets --all-features -- -D warnings
 
       - name: Check TOML formatting
         shell: bash
         run: taplo fmt --check $(git ls-files '*.toml')
 
+  validate-plugin:
+    name: Validate Plugin
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: wasm32-wasip2
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build plugin component
+        run: cargo build -p rim-plugin-yazi --target wasm32-wasip2
+
+      - name: Run plugin clippy
+        run: cargo clippy -p rim-plugin-yazi --target wasm32-wasip2 --all-targets -- -D warnings
+
   build-release-linux:
     name: Build Linux Release
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: validate
+    needs:
+      - validate
+      - validate-plugin
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -82,7 +106,9 @@ jobs:
     name: Build Windows Release
     runs-on: windows-latest
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: validate
+    needs:
+      - validate
+      - validate-plugin
     steps:
       - name: Checkout
         uses: actions/checkout@v4

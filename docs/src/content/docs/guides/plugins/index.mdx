@@ -1,0 +1,90 @@
+---
+title: Plugins
+description: Official rim plugins, plugin installation flow, and links to plugin-specific guides.
+---
+
+# Plugins
+
+This page is the plugin index for `rim`.
+
+Use it to:
+
+- understand how plugin installation works
+- see the current official plugin list
+- jump to the plugin-specific page you actually want
+
+## Current Plugin Model
+
+`rim` currently discovers plugin components from a `plugins` directory inside the user config directory.
+
+Typical locations are:
+
+- Linux and other Unix-like systems: `~/.config/rim/plugins/`
+- macOS: `~/Library/Application Support/rim/plugins/`
+- Windows: `%AppData%\\rim\\plugins\\`
+
+Current runtime expectations:
+
+- each plugin file must be a `.wasm` file
+- discovery scans only the top level of the `plugins` directory
+- non-`.wasm` files are ignored
+- duplicate plugin ids are rejected
+- plugins are discovered when `rim` starts
+
+## Installation Flow
+
+The default installation path is:
+
+1. Run `rim plugin install github ...`
+2. Let `rim` clone the GitHub repository and build the Wasm artifact
+3. Let `rim` install the `.wasm` artifact into your `rim/plugins/` directory
+4. Restart `rim`
+5. Invoke the plugin command from the command palette, command line, or your own keymap
+
+Before cloning and compiling, `rim` checks:
+
+- `git`
+- `cargo`
+- `rustup`
+- the Rust target `wasm32-wasip2`
+
+If one of them is missing, `rim` stops and tells you what to install.
+
+## Install A Plugin From Another Repository
+
+The GitHub installer is not limited to this repository.
+
+Use this command shape:
+
+```bash
+rim plugin install github owner/repo --package plugin-crate-name
+```
+
+Examples:
+
+```bash
+rim plugin install github someone/rim-plugins --package rim-plugin-fzf
+rim plugin install github https://github.com/example/tools --package rim-plugin-rg
+```
+
+When the repository name and crate name differ, `--package` must match the plugin crate's Cargo package name.
+
+## Official Plugins
+
+The current official plugin list is:
+
+1. [Yazi](/rim/guides/plugins/yazi/)
+
+## Plugin Pages
+
+Use the plugin-specific page when you need:
+
+- exact install commands
+- prerequisite tools
+- command names and key binding examples
+- troubleshooting for that plugin
+
+## Related Reading
+
+- [Configuration](/rim/guides/configuration/)
+- [Yazi Plugin](/rim/guides/plugins/yazi/)

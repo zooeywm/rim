@@ -827,6 +827,23 @@ struct CommandAlias {
 	error:               Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct DeferredKeymapBinding {
+	scope: KeymapScope,
+	keys:  Vec<Vec<NormalSequenceKey>>,
+	run:   RunDirective,
+	args:  Vec<String>,
+	desc:  Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedKeymapBinding {
+	keys:     Vec<Vec<NormalSequenceKey>>,
+	args:     Vec<String>,
+	desc:     Option<String>,
+	resolved: ResolvedCommand,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct CommandRegistry {
 	commands:                             HashMap<CommandId, CommandSpec>,
@@ -839,6 +856,7 @@ pub struct CommandRegistry {
 	overlay_picker_bindings:              Vec<ScopedKeyBinding>,
 	overlay_notification_center_bindings: Vec<ScopedKeyBinding>,
 	command_aliases:                      Vec<CommandAlias>,
+	deferred_keymap_bindings:             Vec<DeferredKeymapBinding>,
 }
 
 impl CommandRegistry {
@@ -949,6 +967,10 @@ impl CommandRegistry {
 				}
 			};
 			let Some(resolved) = self.resolve_or_register_run_directive(&binding.run) else {
+				if matches!(binding.run, RunDirective::PluginInvocation { .. }) {
+					self.defer_keymap_binding(scope, key_sets, binding);
+					continue;
+				}
 				errors.push(CommandConfigError::Keymap {
 					scope: scope_label.to_string(),
 					binding_index,
@@ -956,75 +978,18 @@ impl CommandRegistry {
 				});
 				continue;
 			};
-			let bindings = self.bindings_mut(scope);
-			let should_override = !overridden_commands.iter().any(|command_id| command_id == &resolved.command_id);
-			let mut staged = if should_override {
-				bindings
-					.iter()
-					.filter(|candidate| candidate.command_id != resolved.command_id)
-					.cloned()
-					.collect::<Vec<_>>()
-			} else {
-				bindings.clone()
-			};
-			let mut conflicted = false;
-			for keys in key_sets {
-				if let Some(existing) = staged.iter_mut().find(|candidate| candidate.keys == keys) {
-					if existing.command_id != resolved.command_id {
-						errors.push(CommandConfigError::Keymap {
-							scope: scope_label.to_string(),
-							binding_index,
-							reason: format!(
-								"conflicting key binding '{}' already mapped to '{:?}'",
-								render_normal_sequence(&keys),
-								existing.command_id
-							),
-						});
-						conflicted = true;
-						break;
-					}
-					existing.target = resolved.target.clone();
-					existing.args = binding.args.clone();
-					existing.desc = binding.desc.clone();
-					continue;
-				}
-				let mut has_prefix_conflict = false;
-				for candidate in staged.iter() {
-					if is_prefix_sequence(candidate.keys.as_slice(), &keys)
-						|| is_prefix_sequence(&keys, candidate.keys.as_slice())
-					{
-						errors.push(CommandConfigError::Keymap {
-							scope: scope_label.to_string(),
-							binding_index,
-							reason: format!(
-								"prefix conflict between '{}' and existing '{}'",
-								render_normal_sequence(&keys),
-								render_normal_sequence(candidate.keys.as_slice())
-							),
-						});
-						has_prefix_conflict = true;
-						break;
-					}
-				}
-				if has_prefix_conflict {
-					conflicted = true;
-					break;
-				}
-				staged.push(ScopedKeyBinding {
-					keys,
-					command_id: resolved.command_id.clone(),
-					target: resolved.target.clone(),
+			self.apply_resolved_keymap_binding(
+				scope,
+				binding_index,
+				ResolvedKeymapBinding {
+					keys: key_sets,
 					args: binding.args.clone(),
 					desc: binding.desc.clone(),
-				});
-			}
-			if conflicted {
-				continue;
-			}
-			if should_override {
-				overridden_commands.push(resolved.command_id.clone());
-			}
-			*bindings = staged;
+					resolved,
+				},
+				&mut overridden_commands,
+				errors,
+			);
 		}
 	}
 
@@ -1046,7 +1011,30 @@ impl CommandRegistry {
 		self.commands.insert(command_id.clone(), next_spec);
 		self.register_plugin_default_alias(command_id, default_name, plugin_id, plugin_command_id, description);
 		self.refresh_deferred_command_aliases();
+		self.refresh_deferred_keymap_bindings();
 		Ok(())
+	}
+
+	fn defer_keymap_binding(
+		&mut self,
+		scope: KeymapScope,
+		keys: Vec<Vec<NormalSequenceKey>>,
+		binding: &KeymapBindingConfig,
+	) {
+		self.deferred_keymap_bindings.retain(|candidate| {
+			candidate.scope != scope
+				|| candidate.keys != keys
+				|| candidate.run != binding.run
+				|| candidate.args != binding.args
+				|| candidate.desc != binding.desc
+		});
+		self.deferred_keymap_bindings.push(DeferredKeymapBinding {
+			scope,
+			keys,
+			run: binding.run.clone(),
+			args: binding.args.clone(),
+			desc: binding.desc.clone(),
+		});
 	}
 
 	fn register_plugin_default_alias(
@@ -1104,6 +1092,120 @@ impl CommandRegistry {
 			alias.target = Some(resolved.target);
 			alias.error = None;
 		}
+	}
+
+	fn refresh_deferred_keymap_bindings(&mut self) {
+		let deferred = self.deferred_keymap_bindings.clone();
+		let mut remaining = Vec::with_capacity(deferred.len());
+		let mut overridden_by_scope = HashMap::<KeymapScope, Vec<CommandId>>::new();
+		for binding in deferred {
+			let Some(resolved) = self.resolve_or_register_run_directive(&binding.run) else {
+				remaining.push(binding);
+				continue;
+			};
+			let errors = &mut Vec::new();
+			let overridden_commands = overridden_by_scope.entry(binding.scope).or_default();
+			self.apply_resolved_keymap_binding(
+				binding.scope,
+				0,
+				ResolvedKeymapBinding {
+					keys: binding.keys.clone(),
+					args: binding.args.clone(),
+					desc: binding.desc.clone(),
+					resolved,
+				},
+				overridden_commands,
+				errors,
+			);
+			if errors.is_empty() {
+				continue;
+			}
+			for error in errors {
+				tracing::warn!("deferred plugin keymap ignored entry: {}", error);
+			}
+		}
+		self.deferred_keymap_bindings = remaining;
+	}
+
+	fn apply_resolved_keymap_binding(
+		&mut self,
+		scope: KeymapScope,
+		binding_index: usize,
+		binding: ResolvedKeymapBinding,
+		overridden_commands: &mut Vec<CommandId>,
+		errors: &mut Vec<CommandConfigError>,
+	) {
+		let scope_label = keymap_scope_label(scope);
+		let ResolvedKeymapBinding { keys: key_sets, args, desc, resolved } = binding;
+		let bindings = self.bindings_mut(scope);
+		let should_override = !overridden_commands.iter().any(|command_id| command_id == &resolved.command_id);
+		let mut staged = if should_override {
+			bindings
+				.iter()
+				.filter(|candidate| candidate.command_id != resolved.command_id)
+				.cloned()
+				.collect::<Vec<_>>()
+		} else {
+			bindings.clone()
+		};
+		let mut conflicted = false;
+		for keys in key_sets {
+			if let Some(existing) = staged.iter_mut().find(|candidate| candidate.keys == keys) {
+				if existing.command_id != resolved.command_id {
+					errors.push(CommandConfigError::Keymap {
+						scope: scope_label.to_string(),
+						binding_index,
+						reason: format!(
+							"conflicting key binding '{}' already mapped to '{:?}'",
+							render_normal_sequence(&keys),
+							existing.command_id
+						),
+					});
+					conflicted = true;
+					break;
+				}
+				existing.target = resolved.target.clone();
+				existing.args = args.clone();
+				existing.desc = desc.clone();
+				continue;
+			}
+			let mut has_prefix_conflict = false;
+			for candidate in staged.iter() {
+				if is_prefix_sequence(candidate.keys.as_slice(), &keys)
+					|| is_prefix_sequence(&keys, candidate.keys.as_slice())
+				{
+					errors.push(CommandConfigError::Keymap {
+						scope: scope_label.to_string(),
+						binding_index,
+						reason: format!(
+							"prefix conflict between '{}' and existing '{}'",
+							render_normal_sequence(&keys),
+							render_normal_sequence(candidate.keys.as_slice())
+						),
+					});
+					has_prefix_conflict = true;
+					break;
+				}
+			}
+			if has_prefix_conflict {
+				conflicted = true;
+				break;
+			}
+			staged.push(ScopedKeyBinding {
+				keys,
+				command_id: resolved.command_id.clone(),
+				target: resolved.target.clone(),
+				args: args.clone(),
+				desc: desc.clone(),
+			});
+		}
+		if conflicted {
+			return;
+		}
+		if should_override {
+			overridden_commands.push(resolved.command_id);
+		}
+		*bindings = staged;
 	}
 
 	pub fn resolve_scope_sequence(
@@ -1531,12 +1633,9 @@ pub trait Picker {
 	fn suggestions(&self, input: &str) -> Vec<Suggestion>;
 }
 
+#[derive(Default)]
 pub struct PickerRegistry<'a> {
 	map: HashMap<CommandArgKind, Box<dyn Picker + 'a>>,
-}
-
-impl<'a> Default for PickerRegistry<'a> {
-	fn default() -> Self { Self { map: HashMap::new() } }
 }
 
 impl<'a> PickerRegistry<'a> {
@@ -1889,6 +1988,19 @@ fn normalize_pascal_case_name(name: &str) -> String {
 			rendered
 		})
 		.collect::<String>()
+}
+
+fn keymap_scope_label(scope: KeymapScope) -> &'static str {
+	match scope {
+		KeymapScope::ModeNormal => "mode.normal",
+		KeymapScope::ModeVisual => "mode.visual",
+		KeymapScope::ModeCommand => "mode.command",
+		KeymapScope::ModeInsert => "mode.insert",
+		KeymapScope::OverlayWhichKey => "overlay.whichkey",
+		KeymapScope::OverlayCommandPalette => "overlay.command_palette",
+		KeymapScope::OverlayPicker => "overlay.picker",
+		KeymapScope::OverlayNotificationCenter => "overlay.notification_center",
+	}
 }
 
 fn export_keymap_bindings<T>(
@@ -2348,6 +2460,67 @@ mod tests {
 			.expect("invalid plugin alias should still be visible");
 		assert!(item.is_error);
 		assert_eq!(item.description, "invalid command");
+	}
+
+	#[test]
+	fn keymap_should_defer_plugin_run_directive_until_plugin_registers() {
+		let mut registry = CommandRegistry::with_defaults();
+		let errors = registry.apply_config(&CommandConfigFile {
+			mode: ModeKeymapSections {
+				normal: CommandKeymapSection {
+					keymap: vec![KeymapBindingConfig {
+						on:   KeyBindingOn::single("<leader>e"),
+						run:  "plugin.demo.echo".into(),
+						args: vec!["configured".to_string()],
+						desc: Some("Deferred plugin".to_string()),
+					}],
+				},
+				..ModeKeymapSections::default()
+			},
+			..CommandConfigFile::default()
+		});
+
+		assert!(errors.is_empty());
+		assert_eq!(
+			registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[
+				NormalSequenceKey::Leader,
+				NormalSequenceKey::Char('e')
+			]),
+			BindingMatch::NoMatch
+		);
+
+		registry
+			.register_plugin_command(PluginCommandRegistration {
+				id:           "plugin.demo.echo".to_string(),
+				default_name: "Echo".to_string(),
+				plugin_id:    "demo".to_string(),
+				command_id:   "echo".to_string(),
+				category:     "Demo Plugin".to_string(),
+				description:  "Echo arguments".to_string(),
+				params:       vec![CommandParamSpec {
+					name:     "message".to_string(),
+					kind:     CommandArgKind::Text,
+					optional: false,
+				}],
+			})
+			.expect("plugin command should register");
+
+		assert_eq!(
+			registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[
+				NormalSequenceKey::Leader,
+				NormalSequenceKey::Char('e')
+			]),
+			BindingMatch::Exact(ResolvedCommand {
+				command_id: CommandId::Plugin("plugin.demo.echo".to_string()),
+				target:     CommandTarget::Plugin { plugin_id: "demo".to_string(), command_id: "echo".to_string() },
+				argv:       vec!["configured".to_string()],
+				params:     ResolvedParams(vec![ResolvedParam {
+					name:  "message".to_string(),
+					kind:  CommandArgKind::Text,
+					value: CommandValue::Text("configured".to_string()),
+				}]),
+			})
+		);
 	}
 
 	#[test]

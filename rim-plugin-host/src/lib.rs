@@ -246,7 +246,7 @@ fn load_plugin(engine: &Engine, entry_path: &Path) -> Result<LoadedPlugin, Plugi
 		});
 	}
 
-	let component = Component::from_file(engine, &entry_path).map_err(|err| PluginLoadFailure {
+	let component = Component::from_file(engine, entry_path).map_err(|err| PluginLoadFailure {
 		plugin_id: None,
 		location:  entry_path.display().to_string(),
 		message:   format!("compile plugin component failed: {}", err),

@@ -24,6 +24,7 @@ authors = ["zooeywm <zooeywm@gmail.com>"]
 [workspace.dependencies]
 anyhow                 = "1"
 base64                 = "0.22"
+clap                   = { version = "4.5", features = ["derive"] }
 compio                 = { version = "0.18", features = ["fs", "macros", "time"] }
 crossterm              = "0.29"
 dep-inj                = "0.1"
@@ -45,7 +46,7 @@ toml                   = "1.0"
 unicode-width          = "0.2"
 wasmtime               = "42.0.1"
 wasmtime-wasi          = "42.0.1"
-wit-bindgen            = "0.51.0"
+wit-bindgen            = "0.54.0"
 rim-app                = { path = "rim-app" }
 rim-command-macros     = { path = "rim-command-macros" }
 rim-ports              = { path = "rim-ports" }

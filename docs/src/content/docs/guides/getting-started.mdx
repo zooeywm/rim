@@ -1,41 +1,70 @@
 ---
 title: Getting Started
-description: Build and run the workspace locally.
+description: Install rim, launch it, open files, and move on to configuration and plugins.
 ---
 
 # Getting Started
 
-## Prerequisites
+## Install
 
-- Rust toolchain with Cargo
-- `rustfmt` nightly component for the repository formatting command
-- `pnpm` if you want to run the docs site
-- `yazi` if you want the external file picker flow
-
-## Build And Run
+The current installation path is:
 
 ```bash
-cargo check -q
-cargo run -p rim-app --
+cargo install --path rim-app --locked
 ```
 
-Open a file:
+If you are installing from a repository checkout, run the command at the workspace root.
+
+## Launch
 
 ```bash
-cargo run -p rim-app -- path/to/file.rs
+rim
 ```
 
-## Workspace Orientation
+Open a file directly:
 
-- app entry point: `rim-app/src/main.rs`
-- runtime shell: `rim-app/src/app.rs`
-- application dispatch: `rim-application/src/action_handler/`
-- pure editor logic: `rim-domain/src/editor/`
-- adapters: `rim-infra-*`
+```bash
+rim path/to/file.rs
+```
+
+Open multiple files:
+
+```bash
+rim README.md Cargo.toml src/main.rs
+```
+
+## Plugin Install Command
+
+`rim` can install plugins from GitHub and compile them for you:
+
+```bash
+rim plugin install github owner/repo --package plugin-crate-name
+```
+
+For the built-in Yazi plugin example:
+
+```bash
+rim plugin install github zooeywm/rim --package rim-plugin-yazi
+```
+
+## First Setup
+
+For most users, the practical order is:
+
+1. Install and launch `rim`
+2. Set your preferred `leader_key` in `editor.toml`
+3. Add a few personal key bindings in `keymaps.toml`
+4. Install optional plugins such as the Yazi picker
+
+## Optional Tools
+
+These are not required for basic editing, but they matter for specific workflows:
+
+- `yazi` if you want the external Yazi picker plugin
+- `git`, `cargo`, `rustup`, and `wasm32-wasip2` if you want `rim plugin install github ...`
 
 ## Read This Next
 
-1. Architecture overview
-2. Domain model
-3. Application layer
-4. Local development guide
+1. Configuration guide
+2. Plugins guide
+3. Reference pages if you need behavior details

@@ -46,7 +46,7 @@ mod tests {
 		assert_eq!(descriptor.commands.len(), 1);
 		assert_eq!(descriptor.commands[0].id, "yazi");
 		assert_eq!(descriptor.commands[0].name, "Yazi");
-		assert_eq!(descriptor.commands[0].description, "Open the host file picker");
+		assert_eq!(descriptor.commands[0].description, "Open yazi file picker");
 		assert!(descriptor.commands[0].params.is_empty());
 	}
 

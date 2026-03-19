@@ -1,0 +1,190 @@
+---
+title: Yazi
+description: Install and use the official Yazi plugin for rim.
+---
+
+# Yazi
+
+This page covers the official Yazi plugin for `rim`.
+
+Its job is simple:
+
+- expose one plugin command: `plugin.yazi.yazi`
+- call the external `yazi` program with `--chooser-file`
+- let Yazi return the selected path
+- ask `rim` to open that file
+
+So the plugin is a file picker bridge, not a file manager embedded inside `rim`.
+
+## Yazi Prerequisite
+
+Before using the Yazi plugin, install Yazi itself.
+
+Use the official Yazi installation guide:
+
+- [Yazi Installation](https://yazi-rs.github.io/docs/installation)
+
+The plugin runs the `yazi` command directly. If `yazi` is missing from `PATH`, the command will fail at runtime.
+
+## Install The Yazi Plugin
+
+### Step 1: Run the install command
+
+```bash
+rim plugin install github zooeywm/rim --package rim-plugin-yazi
+```
+
+You can also use a full GitHub URL:
+
+```bash
+rim plugin install github https://github.com/zooeywm/rim --package rim-plugin-yazi
+```
+
+By default, `rim` builds with the `release` profile. If you explicitly want a debug build:
+
+```bash
+rim plugin install github zooeywm/rim --package rim-plugin-yazi --profile debug
+```
+
+### Step 2: Let `rim` verify the toolchain
+
+Before cloning and compiling, `rim` checks:
+
+- `git`
+- `cargo`
+- `rustup`
+- the Rust target `wasm32-wasip2`
+
+If one of them is missing, `rim` stops and tells you what to install.
+
+If the Wasm target is missing, install it with:
+
+```bash
+rustup target add wasm32-wasip2
+```
+
+### Step 3: Let `rim` install the Wasm artifact
+
+On success, `rim` copies the built `.wasm` file into your user plugin directory:
+
+- Linux and other Unix-like systems: `~/.config/rim/plugins/`
+- macOS: `~/Library/Application Support/rim/plugins/`
+- Windows: `%AppData%\\rim\\plugins\\`
+
+### Step 4: Restart `rim`
+
+This step is required. Plugin discovery does not hot-reload.
+
+### Step 5: Invoke the command
+
+The full plugin run target is:
+
+```text
+plugin.yazi.yazi
+```
+
+The plugin also exposes a default human-facing command name based on the descriptor:
+
+```text
+Yazi
+```
+
+In practice, after startup you can use either:
+
+- `:Yazi`
+- a custom alias from `commands.toml`
+- a custom key binding from `keymaps.toml`
+
+## Manual Fallback
+
+If you are developing the plugin locally or do not want `rim` to clone from GitHub, you can still build and copy the artifact yourself:
+
+```bash
+rustup target add wasm32-wasip2
+cargo build -p rim-plugin-yazi --target wasm32-wasip2
+mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/rim/plugins"
+cp target/wasm32-wasip2/debug/rim_plugin_yazi.wasm "${XDG_CONFIG_HOME:-$HOME/.config}/rim/plugins/"
+```
+
+## Recommended User Setup
+
+### Command alias
+
+Add this to `commands.toml`:
+
+```toml
+[command]
+commands = [
+  { name = "y", run = "plugin.yazi.yazi", desc = "Open Yazi picker" },
+]
+```
+
+Then you can open the picker with:
+
+```text
+:y
+```
+
+### Key binding
+
+Add this to `keymaps.toml`:
+
+```toml
+[mode.normal]
+keymap = [
+  { on = "<leader>y", run = "plugin.yazi.yazi", desc = "Open Yazi picker" },
+]
+```
+
+That gives you a stable keyboard path even if you never use the command line.
+
+## What Happens When It Runs
+
+The Yazi plugin launches:
+
+```text
+yazi --chooser-file ""
+```
+
+`rim` reserves the empty third argument position and lets the file picker flow write the chooser path there.
+
+After you confirm a file in Yazi:
+
+1. Yazi writes the chosen file path to the chooser file
+2. `rim` reads that path
+3. `rim` opens the selected file in the editor
+
+If you cancel, `rim` keeps running and reports the open action as cancelled.
+
+## Failure Cases
+
+Typical failure cases are:
+
+- `git`, `cargo`, or `rustup` is not installed
+- the Rust target `wasm32-wasip2` is not installed
+- `yazi` is not installed
+- `yazi` is installed but not in `PATH`
+- the wrong Cargo package name was passed to `--package`
+- the plugin `.wasm` file was copied to the wrong directory
+- the plugin file exists, but `rim` was not restarted
+- the `.wasm` file is corrupted or not a valid plugin component
+- another plugin with the same plugin id is already loaded
+
+When plugin discovery fails, `rim` reports a warning instead of crashing.
+
+## Difference From Yazi Plugins
+
+This is the most important conceptual difference:
+
+- Yazi plugins are Lua-based and live in named plugin directories under the Yazi config directory
+- `rim` plugins are Wasm component files placed directly in `rim/plugins/`
+
+So while Yazi's docs are a good reference for end-user plugin expectations, do not copy Yazi's plugin folder structure into `rim`.
+
+## Related Reading
+
+- [Plugins](/rim/guides/plugins/)
+- [Configuration](/rim/guides/configuration/)
+- [plugins/README.md](https://github.com/zooeywm/rim/blob/main/plugins/README.md)
+- [Yazi Installation](https://yazi-rs.github.io/docs/installation)
+- [Yazi Plugins Overview](https://yazi-rs.github.io/docs/plugins/overview/)

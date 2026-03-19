@@ -1,0 +1,322 @@
+---
+title: Configuration
+description: Configure rim as an end user with editor, keymap, command, and plugin command examples.
+---
+
+# Configuration
+
+This page is for using `rim`, not for developing `rim`.
+
+If you have used Yazi before, the mental model is similar: start from the default behavior, create only the file you need, and override only the part you want to change.
+
+## Config Directory
+
+`rim` reads user configuration from the platform config directory returned by `rim_paths::user_config_root()`.
+
+Typical locations are:
+
+- Linux and other Unix-like systems: `~/.config/rim/`
+- macOS: `~/Library/Application Support/rim/`
+- Windows: `%AppData%\\rim\\`
+
+The active files are:
+
+- `editor.toml`
+- `keymaps.toml`
+- `commands.toml`
+
+`rim` does not create these files automatically. If a file is missing, the built-in preset stays active for that file.
+
+## Load Behavior
+
+On startup, `rim` loads the files in this order:
+
+1. `editor.toml`
+2. `keymaps.toml`
+3. `commands.toml`
+
+That order matters:
+
+- `editor.toml` changes editor-level UI and movement settings.
+- `keymaps.toml` changes keys in normal, insert, visual, command, and overlay scopes.
+- `commands.toml` adds or overrides command-line aliases such as `:w`, `:q`, or your own shortcuts.
+
+If one file fails to parse, the other files still continue to load.
+
+## Important Behavior
+
+### Missing files
+
+Missing files are normal. `rim` falls back to embedded defaults.
+
+### Live reload
+
+If a config file already exists when `rim` starts, `rim` watches it and reloads it after you save changes.
+
+If the file does not exist when `rim` starts, creating it later will not hot-load it in the current session. In that case, restart `rim`.
+
+### Unknown fields
+
+Config parsing is strict. Unknown fields are rejected instead of ignored.
+
+For example, this is invalid in `editor.toml` because `commands` does not belong there:
+
+```toml
+[editor]
+leader_key = ","
+
+[command]
+commands = []
+```
+
+### Partial override
+
+Each file only owns its own slice:
+
+- `editor.toml` does not affect keymaps or command aliases.
+- `keymaps.toml` does not affect editor settings.
+- `commands.toml` does not affect keymaps.
+
+This is the safest way to customize `rim`: keep each concern in its own file.
+
+## `editor.toml`
+
+Use `editor.toml` for high-level editor behavior.
+
+Current supported keys:
+
+- `leader_key`
+- `cursor_scroll_threshold`
+- `key_hints_width`
+- `key_hints_max_height`
+
+Example:
+
+```toml
+[editor]
+leader_key = ","
+cursor_scroll_threshold = 3
+key_hints_width = 64
+key_hints_max_height = 28
+```
+
+### What each setting does
+
+- `leader_key`: the key used by `<leader>` bindings in `keymaps.toml`. The default is space.
+- `cursor_scroll_threshold`: how early the viewport starts following the cursor near the edge of the visible area. `0` means the cursor can reach the edge before scrolling.
+- `key_hints_width`: width of help and plugin hint windows.
+- `key_hints_max_height`: maximum height of help and plugin hint windows.
+
+### Minimal example
+
+If you only want to change the leader key, keep the file minimal:
+
+```toml
+[editor]
+leader_key = ","
+```
+
+You do not need to copy every default into the file.
+
+## `keymaps.toml`
+
+Use `keymaps.toml` to add or replace key bindings.
+
+The supported top-level sections are:
+
+- `[mode.normal]`
+- `[mode.visual]`
+- `[mode.command]`
+- `[mode.insert]`
+- `[overlay.whichkey]`
+- `[overlay.command_palette]`
+- `[overlay.picker]`
+- `[overlay.notification_center]`
+
+Each section contains a `keymap` array.
+
+Example:
+
+```toml
+[mode.normal]
+keymap = [
+  { on = "<leader>ff", run = "core.picker.files", desc = "Find files" },
+  { on = "<leader>bn", run = "core.buffer.new_empty", desc = "New buffer" },
+]
+```
+
+### Binding fields
+
+Each keymap entry supports:
+
+- `on`: one key sequence as a string, or multiple alternative sequences as a string array
+- `run`: the command to execute
+- `args`: optional positional arguments passed to the command
+- `desc`: optional description shown in help-style UIs
+
+Example with multiple trigger sequences:
+
+```toml
+[mode.normal]
+keymap = [
+  { on = ["{", "H"], run = "core.buffer.prev", desc = "Previous buffer" },
+]
+```
+
+### Common key notation
+
+Examples already used by the built-in preset include:
+
+- `j`
+- `gg`
+- `<Esc>`
+- `<Enter>`
+- `<Backspace>`
+- `<Tab>`
+- `<C-h>`
+- `<C-v>`
+- `<leader>wv`
+- `<leader><Tab>n`
+
+The safest approach is to copy an existing built-in pattern and change only the command name.
+
+### Prefix conflicts
+
+`rim` validates normal-mode style sequences and rejects ambiguous prefixes.
+
+For example, a short binding can conflict with a longer binding that starts with the same sequence. When this happens, the conflicting entry is skipped and a config error is reported.
+
+### Built-in examples
+
+Useful built-in `run` targets from the current preset include:
+
+- `core.picker.files`
+- `core.notifications`
+- `core.save`
+- `core.quit`
+- `core.buffer.next`
+- `core.buffer.prev`
+- `core.window.split_vertical`
+- `core.window.split_horizontal`
+
+Example:
+
+```toml
+[mode.normal]
+keymap = [
+  { on = "<leader>e", run = "core.notifications", desc = "Notifications" },
+]
+```
+
+### Binding a plugin command
+
+Plugin commands can also be bound here after the plugin is discovered.
+
+Example for the Yazi plugin:
+
+```toml
+[mode.normal]
+keymap = [
+  { on = "<leader>y", run = "plugin.yazi.yazi", desc = "Open Yazi picker" },
+]
+```
+
+If the plugin is not installed, `rim` keeps running, but that plugin command will not work.
+
+## `commands.toml`
+
+Use `commands.toml` for command-line aliases.
+
+Example:
+
+```toml
+[command]
+commands = [
+  { name = "Q", run = "core.quit_all", desc = "Quit all" },
+  { name = "Files", run = "core.picker.files", desc = "Find files" },
+]
+```
+
+### Command fields
+
+Each command entry supports:
+
+- `name`: the command name you type
+- `run`: the actual target command
+- `args`: optional positional arguments
+- `desc`: optional human-readable description
+
+### Practical examples
+
+Create a shorter alias:
+
+```toml
+[command]
+commands = [
+  { name = "n", run = "core.notifications", desc = "Notifications" },
+]
+```
+
+Add a plugin alias:
+
+```toml
+[command]
+commands = [
+  { name = "Yazi", run = "plugin.yazi.yazi", desc = "Open Yazi picker" },
+  { name = "y", run = "plugin.yazi.yazi", desc = "Open Yazi picker" },
+]
+```
+
+This is useful when you want both:
+
+- a memorable full command such as `:Yazi`
+- a short personal alias such as `:y`
+
+## Default Presets
+
+If you want a known-good starting point, inspect the built-in preset files in this repository:
+
+- [Preset directory](https://github.com/zooeywm/rim/tree/main/rim-application/presets)
+- [editor.toml](https://github.com/zooeywm/rim/blob/main/rim-application/presets/editor.toml)
+- [keymaps.toml](https://github.com/zooeywm/rim/blob/main/rim-application/presets/keymaps.toml)
+- [commands.toml](https://github.com/zooeywm/rim/blob/main/rim-application/presets/commands.toml)
+
+The recommended workflow is:
+
+1. Copy only the relevant fragment from a preset.
+2. Save it into your user config directory.
+3. Change one thing at a time.
+4. Restart `rim` if the file did not exist when the session started.
+
+## Error Handling
+
+When a config error happens:
+
+- `rim` logs the error internally
+- the status area shows a config error summary
+- invalid entries are skipped instead of crashing the editor
+
+Typical causes:
+
+- wrong file for the section
+- unknown field
+- unknown `run` directive
+- invalid key sequence
+- conflicting key prefixes
+
+When debugging, keep the file minimal and re-add entries gradually.
+
+## User Workflow Recommendation
+
+For most users, this order is the least risky:
+
+1. Set `leader_key` in `editor.toml`
+2. Add a few personal bindings in `keymaps.toml`
+3. Add short command aliases in `commands.toml`
+4. Install plugin commands only after the base config is stable
+
+## Related Reading
+
+- [Plugins](/rim/guides/plugins/)
+- [Config Reference](/rim/reference/config/)
+- [Yazi `yazi.toml` Reference](https://yazi-rs.github.io/docs/configuration/yazi/)

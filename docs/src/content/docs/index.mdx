@@ -1,15 +1,15 @@
 ---
 title: rim Docs
-description: Architecture and contributor documentation for the rim editor workspace.
+description: User, architecture, and contributor documentation for the rim editor workspace.
 template: splash
 hero:
   tagline: A terminal-first, state-driven editor prototype with explicit domain, application, and adapter boundaries.
   actions:
-    - text: Architecture Overview
-      link: /rim/architecture/overview/
-      icon: right-arrow
     - text: Getting Started
       link: /rim/guides/getting-started/
+      icon: right-arrow
+    - text: Architecture Overview
+      link: /rim/architecture/overview/
       icon: right-arrow
     - text: Repository
       link: https://github.com/zooeywm/rim
@@ -29,12 +29,22 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 	</a>
 	<a class="rim-doc-card-link" href="./guides/getting-started/">
 		<Card title="Getting Started" icon="open-book">
-			Build the workspace, run the app, and orient yourself in the repository.
+			Install `rim`, launch it, open files, and move on to configuration.
 		</Card>
 	</a>
-	<a class="rim-doc-card-link" href="./guides/how-to-add-a-command/">
-		<Card title="Add A Command" icon="pencil">
-			Follow the current extension path for new commands and key bindings.
+	<a class="rim-doc-card-link" href="./guides/configuration/">
+		<Card title="Configuration" icon="setting">
+			Set up `editor.toml`, `keymaps.toml`, and `commands.toml` as a user.
+		</Card>
+	</a>
+	<a class="rim-doc-card-link" href="./guides/plugins/">
+		<Card title="Plugins" icon="document">
+			Install Wasm plugins with `rim plugin install ...` and wire them into commands and keymaps.
+		</Card>
+	</a>
+	<a class="rim-doc-card-link" href="./contributing/local-development/">
+		<Card title="Contributing" icon="pencil">
+			Follow the contributor workflow, testing expectations, and extension paths.
 		</Card>
 	</a>
 	<a class="rim-doc-card-link" href="./reference/config/">
@@ -56,9 +66,9 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 
 ## Reading order
 
-1. Architecture overview
-2. Domain model
-3. Application layer
-4. Ports and adapters
-5. Runtime event loop
-6. Guides and references
+1. Getting started
+2. Configuration
+3. Plugins
+4. Reference details
+5. Architecture if you need internals
+6. Contributing workflow if you are changing the codebase

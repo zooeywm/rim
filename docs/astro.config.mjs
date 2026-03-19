@@ -18,9 +18,22 @@ export default defineConfig({
 					label: 'Guides',
 					items: [
 						{ label: 'Getting Started', slug: 'guides/getting-started' },
-						{ label: 'Local Development', slug: 'guides/local-development' },
-						{ label: 'Testing Strategy', slug: 'guides/testing-strategy' },
-						{ label: 'How To Add A Command', slug: 'guides/how-to-add-a-command' },
+						{ label: 'Configuration', slug: 'guides/configuration' },
+						{
+							label: 'Plugins',
+							items: [
+								{ label: 'Overview', slug: 'guides/plugins' },
+								{ label: 'Yazi', slug: 'guides/plugins/yazi' },
+							],
+						},
+					],
+				},
+				{
+					label: 'Contributing',
+					items: [
+						{ label: 'Local Development', slug: 'contributing/local-development' },
+						{ label: 'Testing Strategy', slug: 'contributing/testing-strategy' },
+						{ label: 'How To Add A Command', slug: 'contributing/how-to-add-a-command' },
 					],
 				},
 				{
