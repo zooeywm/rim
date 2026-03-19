@@ -48,7 +48,6 @@ impl App {
 	pub fn new(workspace_root: PathBuf) -> Result<Self> {
 		// One bounded queue coordinates input, IO callbacks, and application actions.
 		let (event_tx, event_rx) = flume::bounded(1024);
-		application_config::initialize_config_files()?;
 		let mut state = RimState::new();
 		state.set_workspace_root(workspace_root);
 		let config_errors = application_config::apply_all_configs(&mut state);
@@ -74,6 +73,9 @@ impl App {
 			application_config::commands_config_path(),
 			application_config::editor_config_path(),
 		] {
+			if !config_path.is_file() {
+				continue;
+			}
 			if let Err(err) = self.file_watcher.enqueue_watch_config(config_path.clone()) {
 				tracing::error!("watch config failed: path={} error={}", config_path.display(), err);
 			}

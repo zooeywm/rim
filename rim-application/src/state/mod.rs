@@ -5,7 +5,7 @@ use rim_domain::preview::preview_max_scroll_with_mode;
 pub use rim_domain::{editor::{EditorOperationError, EditorState}, model::{BufferEditSnapshot, BufferHistoryEntry, BufferId, BufferState, BufferSwitchDirection, CursorState, EditorMode, FocusDirection, PendingBlockInsert, PendingInsertUndoGroup, PersistedBufferHistory, RopeTextDiff, SplitAxis, TabId, TabState, WindowBufferViewState, WindowId, WindowState, WorkspaceBufferHistorySnapshot, WorkspaceBufferSnapshot, WorkspaceSessionSnapshot, WorkspaceTabSnapshot, WorkspaceWindowBufferViewSnapshot, WorkspaceWindowSnapshot}};
 use time::{OffsetDateTime, format_description::FormatItem, macros::format_description};
 
-use crate::command::{BuiltinCommand, CommandArgKind, CommandCommand, CommandConfigError, CommandConfigFile, CommandPaletteFileMatch, CommandPaletteItem, CommandPaletteMatch, CommandRegistry, PluginCommandRegistration};
+use crate::{command::{BuiltinCommand, CommandArgKind, CommandCommand, CommandConfigError, CommandConfigFile, CommandPaletteFileMatch, CommandPaletteItem, CommandPaletteMatch, CommandRegistry, PluginCommandRegistration}, defaults};
 
 mod buffer;
 mod edit;
@@ -305,17 +305,18 @@ pub struct WorkbenchState {
 
 impl WorkbenchState {
 	pub fn new() -> Self {
+		let default_editor = defaults::default_editor_config();
 		Self {
 			title:                                 "Rim".to_string(),
 			workspace_root:                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-			leader_key:                            ' ',
+			leader_key:                            default_editor.editor.leader_key,
 			command_line:                          String::new(),
 			quit_after_save:                       false,
 			force_quit_trim_file_dirty_in_session: false,
 			pending_save_path:                     None,
-			cursor_scroll_threshold:               0,
-			key_hints_width:                       42,
-			key_hints_max_height:                  36,
+			cursor_scroll_threshold:               default_editor.editor.cursor_scroll_threshold,
+			key_hints_width:                       default_editor.editor.key_hints_width,
+			key_hints_max_height:                  default_editor.editor.key_hints_max_height,
 			word_wrap:                             false,
 			picker_preview_word_wrap:              true,
 			normal_sequence:                       Vec::new(),

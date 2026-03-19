@@ -4,7 +4,7 @@ use frizbee::{Config as FrizbeeConfig, match_list_indices};
 use rim_command_macros::{BuiltinCommandGroup, BuiltinCommandRoot};
 use serde::{Deserialize, Serialize};
 
-use crate::{action::{AppAction, BufferAction, EditorAction, LayoutAction, TabAction, WindowAction}, state::{FloatingWindowLine, KeymapScope, NormalSequenceKey}};
+use crate::{action::{AppAction, BufferAction, EditorAction, LayoutAction, TabAction, WindowAction}, defaults, state::{FloatingWindowLine, KeymapScope, NormalSequenceKey}};
 
 pub trait BuiltinCommandGroupMeta: Copy {
 	fn command_segment(self) -> &'static str;
@@ -705,7 +705,8 @@ impl CommandRegistry {
 	pub fn with_defaults() -> Self {
 		let mut registry = Self::default();
 		registry.register_builtin_specs();
-		registry.bind_default_builtins();
+		let errors = registry.apply_config(defaults::default_command_config());
+		assert!(errors.is_empty(), "embedded default command preset contains invalid entries: {:?}", errors);
 		registry
 	}
 
@@ -1169,235 +1170,6 @@ impl CommandRegistry {
 			self.commands.insert(CommandId::Builtin(command), CommandSpec::builtin(command));
 		}
 	}
-
-	fn bind_default_builtins(&mut self) {
-		self.bind_default_normal("h", BuiltinCommand::Cursor(CursorCommand::Left));
-		self.bind_default_normal("0", BuiltinCommand::Cursor(CursorCommand::LineStart));
-		self.bind_default_normal("$", BuiltinCommand::Cursor(CursorCommand::LineEnd));
-		self.bind_default_normal("j", BuiltinCommand::Cursor(CursorCommand::Down));
-		self.bind_default_normal("k", BuiltinCommand::Cursor(CursorCommand::Up));
-		self.bind_default_normal("l", BuiltinCommand::Cursor(CursorCommand::Right));
-		self.bind_default_normal("gg", BuiltinCommand::Cursor(CursorCommand::FileStart));
-		self.bind_default_normal("G", BuiltinCommand::Cursor(CursorCommand::FileEnd));
-		self.bind_default_normal("J", BuiltinCommand::Edit(EditCommand::JoinLineBelow));
-		self.bind_default_normal("x", BuiltinCommand::Edit(EditCommand::CutChar));
-		self.bind_default_normal("p", BuiltinCommand::Edit(EditCommand::Paste));
-		self.bind_default_normal("i", BuiltinCommand::Mode(ModeCommand::Insert));
-		self.bind_default_normal("a", BuiltinCommand::Mode(ModeCommand::Append));
-		self.bind_default_normal("o", BuiltinCommand::Mode(ModeCommand::OpenBelow));
-		self.bind_default_normal("O", BuiltinCommand::Mode(ModeCommand::OpenAbove));
-		self.bind_default_normal(":", BuiltinCommand::Mode(ModeCommand::Command));
-		self.bind_default_normal("v", BuiltinCommand::Mode(ModeCommand::Visual));
-		self.bind_default_normal("V", BuiltinCommand::Mode(ModeCommand::VisualLine));
-		self.bind_default_normal("<C-v>", BuiltinCommand::Mode(ModeCommand::VisualBlock));
-		self.bind_default_normal("u", BuiltinCommand::Edit(EditCommand::Undo));
-		self.bind_default_normal("dd", BuiltinCommand::Buffer(BufferCommand::DeleteLine));
-		self.bind_default_normal("H", BuiltinCommand::Buffer(BufferCommand::Prev));
-		self.bind_default_normal("L", BuiltinCommand::Buffer(BufferCommand::Next));
-		self.bind_default_normal("{", BuiltinCommand::Buffer(BufferCommand::Prev));
-		self.bind_default_normal("}", BuiltinCommand::Buffer(BufferCommand::Next));
-		self.bind_default_normal("<C-h>", BuiltinCommand::Window(WindowCommand::FocusLeft));
-		self.bind_default_normal("<C-j>", BuiltinCommand::Window(WindowCommand::FocusDown));
-		self.bind_default_normal("<C-k>", BuiltinCommand::Window(WindowCommand::FocusUp));
-		self.bind_default_normal("<C-l>", BuiltinCommand::Window(WindowCommand::FocusRight));
-		self.bind_default_normal("<C-e>", BuiltinCommand::View(ViewCommand::ScrollDown));
-		self.bind_default_normal("<C-y>", BuiltinCommand::View(ViewCommand::ScrollUp));
-		self.bind_default_normal("<C-d>", BuiltinCommand::View(ViewCommand::ScrollHalfPageDown));
-		self.bind_default_normal("<C-u>", BuiltinCommand::View(ViewCommand::ScrollHalfPageUp));
-		self.bind_default_normal("<leader>vw", BuiltinCommand::View(ViewCommand::ToggleWordWrap));
-		self.bind_default_normal("<leader>n", BuiltinCommand::Command(CommandCommand::Notifications));
-		self.bind_default_normal("<C-r>", BuiltinCommand::Edit(EditCommand::Redo));
-		self.bind_default_normal("<F1>", BuiltinCommand::Help(HelpCommand::Keymap));
-		self.bind_default_normal("<leader>wv", BuiltinCommand::Window(WindowCommand::SplitVertical));
-		self.bind_default_normal("<leader>wh", BuiltinCommand::Window(WindowCommand::SplitHorizontal));
-		self.bind_default_normal("<leader><Tab>n", BuiltinCommand::Tab(TabCommand::New));
-		self.bind_default_normal("<leader><Tab>d", BuiltinCommand::Tab(TabCommand::CloseCurrent));
-		self.bind_default_normal("<leader><Tab>[", BuiltinCommand::Tab(TabCommand::Prev));
-		self.bind_default_normal("<leader><Tab>]", BuiltinCommand::Tab(TabCommand::Next));
-		self.bind_default_normal("<leader>bd", BuiltinCommand::Buffer(BufferCommand::Close));
-		self.bind_default_normal("<leader>bn", BuiltinCommand::Buffer(BufferCommand::NewEmpty));
-		self.bind_default_visual("<Esc>", BuiltinCommand::Visual(VisualCommand::Exit));
-		self.bind_default_visual("v", BuiltinCommand::Mode(ModeCommand::Visual));
-		self.bind_default_visual("V", BuiltinCommand::Mode(ModeCommand::VisualLine));
-		self.bind_default_visual("<C-v>", BuiltinCommand::Mode(ModeCommand::VisualBlock));
-		self.bind_default_visual("c", BuiltinCommand::Visual(VisualCommand::Change));
-		self.bind_default_visual("d", BuiltinCommand::Visual(VisualCommand::Delete));
-		self.bind_default_visual("x", BuiltinCommand::Visual(VisualCommand::Delete));
-		self.bind_default_visual("y", BuiltinCommand::Visual(VisualCommand::Yank));
-		self.bind_default_visual("p", BuiltinCommand::Visual(VisualCommand::Paste));
-		self.bind_default_visual("I", BuiltinCommand::Visual(VisualCommand::BlockInsertBefore));
-		self.bind_default_visual("A", BuiltinCommand::Visual(VisualCommand::BlockInsertAfter));
-		self.bind_default_visual("h", BuiltinCommand::Visual(VisualCommand::Left));
-		self.bind_default_visual("j", BuiltinCommand::Cursor(CursorCommand::Down));
-		self.bind_default_visual("k", BuiltinCommand::Cursor(CursorCommand::Up));
-		self.bind_default_visual("l", BuiltinCommand::Visual(VisualCommand::Right));
-		self.bind_default_visual("0", BuiltinCommand::Cursor(CursorCommand::LineStart));
-		self.bind_default_visual("$", BuiltinCommand::Cursor(CursorCommand::LineEnd));
-		self.bind_default_visual("gg", BuiltinCommand::Cursor(CursorCommand::FileStart));
-		self.bind_default_visual("G", BuiltinCommand::Cursor(CursorCommand::FileEnd));
-		self.bind_default_visual("<C-e>", BuiltinCommand::View(ViewCommand::ScrollDown));
-		self.bind_default_visual("<C-y>", BuiltinCommand::View(ViewCommand::ScrollUp));
-		self.bind_default_visual("<C-d>", BuiltinCommand::View(ViewCommand::ScrollHalfPageDown));
-		self.bind_default_visual("<C-u>", BuiltinCommand::View(ViewCommand::ScrollHalfPageUp));
-		self.bind_default_visual("<F1>", BuiltinCommand::Help(HelpCommand::Keymap));
-		self.bind_default_command_mode("<Esc>", BuiltinCommand::Mode(ModeCommand::Normal));
-		self.bind_default_command_mode("<Enter>", BuiltinCommand::Command(CommandCommand::Submit));
-		self.bind_default_command_mode("<Backspace>", BuiltinCommand::Command(CommandCommand::Backspace));
-		self.bind_default_insert_mode("<Esc>", BuiltinCommand::Mode(ModeCommand::Normal));
-		self.bind_default_insert_mode("<Enter>", BuiltinCommand::Insert(InsertCommand::Newline));
-		self.bind_default_insert_mode("<Backspace>", BuiltinCommand::Insert(InsertCommand::Backspace));
-		self.bind_default_insert_mode("<Left>", BuiltinCommand::Insert(InsertCommand::Left));
-		self.bind_default_insert_mode("<Down>", BuiltinCommand::Insert(InsertCommand::Down));
-		self.bind_default_insert_mode("<Up>", BuiltinCommand::Insert(InsertCommand::Up));
-		self.bind_default_insert_mode("<Right>", BuiltinCommand::Insert(InsertCommand::Right));
-		self.bind_default_insert_mode("<Tab>", BuiltinCommand::Insert(InsertCommand::Tab));
-		self.bind_default_insert_mode("<F1>", BuiltinCommand::Help(HelpCommand::Keymap));
-		self.bind_default_overlay_whichkey("<F1>", BuiltinCommand::Help(HelpCommand::Keymap));
-		self.bind_default_overlay_whichkey("<Esc>", BuiltinCommand::Overlay(OverlayCommand::Close));
-		self.bind_default_overlay_whichkey("<Backspace>", BuiltinCommand::Overlay(OverlayCommand::Back));
-		self.bind_default_overlay_whichkey("<Up>", BuiltinCommand::Help(HelpCommand::KeymapScrollUp));
-		self.bind_default_overlay_whichkey("<Down>", BuiltinCommand::Help(HelpCommand::KeymapScrollDown));
-		self.bind_default_overlay_whichkey("<C-p>", BuiltinCommand::Help(HelpCommand::KeymapScrollUp));
-		self.bind_default_overlay_whichkey("<C-n>", BuiltinCommand::Help(HelpCommand::KeymapScrollDown));
-		self.bind_default_overlay_whichkey("<C-u>", BuiltinCommand::Help(HelpCommand::KeymapHalfPageUp));
-		self.bind_default_overlay_whichkey("<C-d>", BuiltinCommand::Help(HelpCommand::KeymapHalfPageDown));
-		self.bind_default_overlay_command_palette("<F1>", BuiltinCommand::Help(HelpCommand::Keymap));
-		self.bind_default_overlay_command_palette(
-			"<Up>",
-			BuiltinCommand::CommandPalette(CommandPaletteCommand::Prev),
-		);
-		self.bind_default_overlay_command_palette(
-			"<Down>",
-			BuiltinCommand::CommandPalette(CommandPaletteCommand::Next),
-		);
-		self.bind_default_overlay_command_palette(
-			"<C-p>",
-			BuiltinCommand::CommandPalette(CommandPaletteCommand::Prev),
-		);
-		self.bind_default_overlay_command_palette(
-			"<C-n>",
-			BuiltinCommand::CommandPalette(CommandPaletteCommand::Next),
-		);
-		self.bind_default_overlay_command_palette(
-			"<C-u>",
-			BuiltinCommand::CommandPalette(CommandPaletteCommand::PageUp),
-		);
-		self.bind_default_overlay_command_palette(
-			"<C-d>",
-			BuiltinCommand::CommandPalette(CommandPaletteCommand::PageDown),
-		);
-		self.bind_default_overlay_command_palette(
-			"<C-e>",
-			BuiltinCommand::CommandPalette(CommandPaletteCommand::PreviewScrollDown),
-		);
-		self.bind_default_overlay_command_palette(
-			"<C-y>",
-			BuiltinCommand::CommandPalette(CommandPaletteCommand::PreviewScrollUp),
-		);
-		self.bind_default_overlay_command_palette(
-			"<C-w>",
-			BuiltinCommand::Picker(PickerCommand::TogglePreviewWordWrap),
-		);
-		self.bind_default_overlay_picker("<F1>", BuiltinCommand::Help(HelpCommand::Keymap));
-		self.bind_default_overlay_picker("<Esc>", BuiltinCommand::Overlay(OverlayCommand::Close));
-		self.bind_default_overlay_picker("<Enter>", BuiltinCommand::Picker(PickerCommand::Confirm));
-		self.bind_default_overlay_picker("<Up>", BuiltinCommand::Picker(PickerCommand::Prev));
-		self.bind_default_overlay_picker("<Down>", BuiltinCommand::Picker(PickerCommand::Next));
-		self.bind_default_overlay_picker("<C-p>", BuiltinCommand::Picker(PickerCommand::Prev));
-		self.bind_default_overlay_picker("<C-n>", BuiltinCommand::Picker(PickerCommand::Next));
-		self.bind_default_overlay_picker("<C-e>", BuiltinCommand::Picker(PickerCommand::PreviewScrollDown));
-		self.bind_default_overlay_picker("<C-y>", BuiltinCommand::Picker(PickerCommand::PreviewScrollUp));
-		self.bind_default_overlay_picker("<C-w>", BuiltinCommand::Picker(PickerCommand::TogglePreviewWordWrap));
-		self.bind_default_overlay_notification_center("<F1>", BuiltinCommand::Help(HelpCommand::Keymap));
-		self.bind_default_overlay_notification_center("<Esc>", BuiltinCommand::Overlay(OverlayCommand::Close));
-		self.bind_default_overlay_notification_center(
-			"<Up>",
-			BuiltinCommand::Notification(NotificationCommand::Prev),
-		);
-		self.bind_default_overlay_notification_center(
-			"<Down>",
-			BuiltinCommand::Notification(NotificationCommand::Next),
-		);
-		self
-			.bind_default_overlay_notification_center("k", BuiltinCommand::Notification(NotificationCommand::Prev));
-		self
-			.bind_default_overlay_notification_center("j", BuiltinCommand::Notification(NotificationCommand::Next));
-		self.bind_default_overlay_notification_center(
-			"d",
-			BuiltinCommand::Notification(NotificationCommand::Delete),
-		);
-		self.bind_default_command("q", BuiltinCommand::Command(CommandCommand::Quit));
-		self.bind_default_command("quit", BuiltinCommand::Command(CommandCommand::Quit));
-		self.bind_default_command("q!", BuiltinCommand::Command(CommandCommand::QuitForce));
-		self.bind_default_command("quit!", BuiltinCommand::Command(CommandCommand::QuitForce));
-		self.bind_default_command("qa", BuiltinCommand::Command(CommandCommand::QuitAll));
-		self.bind_default_command("qa!", BuiltinCommand::Command(CommandCommand::QuitAllForce));
-		self.bind_default_command("w", BuiltinCommand::Command(CommandCommand::Save));
-		self.bind_default_command("w!", BuiltinCommand::Command(CommandCommand::SaveForce));
-		self.bind_default_command("wa", BuiltinCommand::Command(CommandCommand::SaveAll));
-		self.bind_default_command("wq", BuiltinCommand::Command(CommandCommand::SaveAndQuit));
-		self.bind_default_command("wq!", BuiltinCommand::Command(CommandCommand::SaveAndQuitForce));
-		self.bind_default_command("wqa", BuiltinCommand::Command(CommandCommand::SaveAllAndQuit));
-		self.bind_default_command("wqa!", BuiltinCommand::Command(CommandCommand::SaveAllAndQuitForce));
-		self.bind_default_command("e", BuiltinCommand::Command(CommandCommand::Reload));
-		self.bind_default_command("e!", BuiltinCommand::Command(CommandCommand::ReloadForce));
-		self.bind_default_command("files", BuiltinCommand::Picker(PickerCommand::Files));
-		self.bind_default_command("find", BuiltinCommand::Picker(PickerCommand::Files));
-		self.bind_default_command("yazi", BuiltinCommand::Picker(PickerCommand::Yazi));
-		self.bind_default_command("notifications", BuiltinCommand::Command(CommandCommand::Notifications));
-		self.bind_default_command("noti", BuiltinCommand::Command(CommandCommand::Notifications));
-	}
-
-	fn bind_default_normal(&mut self, on: &str, command: BuiltinCommand) {
-		self.bind_default(KeymapScope::ModeNormal, on, command);
-	}
-
-	fn bind_default_visual(&mut self, on: &str, command: BuiltinCommand) {
-		self.bind_default(KeymapScope::ModeVisual, on, command);
-	}
-
-	fn bind_default_command_mode(&mut self, on: &str, command: BuiltinCommand) {
-		self.bind_default(KeymapScope::ModeCommand, on, command);
-	}
-
-	fn bind_default_insert_mode(&mut self, on: &str, command: BuiltinCommand) {
-		self.bind_default(KeymapScope::ModeInsert, on, command);
-	}
-
-	fn bind_default_overlay_whichkey(&mut self, on: &str, command: BuiltinCommand) {
-		self.bind_default(KeymapScope::OverlayWhichKey, on, command);
-	}
-
-	fn bind_default_overlay_command_palette(&mut self, on: &str, command: BuiltinCommand) {
-		self.bind_default(KeymapScope::OverlayCommandPalette, on, command);
-	}
-
-	fn bind_default_overlay_picker(&mut self, on: &str, command: BuiltinCommand) {
-		self.bind_default(KeymapScope::OverlayPicker, on, command);
-	}
-
-	fn bind_default_overlay_notification_center(&mut self, on: &str, command: BuiltinCommand) {
-		self.bind_default(KeymapScope::OverlayNotificationCenter, on, command);
-	}
-
-	fn bind_default(&mut self, scope: KeymapScope, on: &str, command: BuiltinCommand) {
-		let keys = parse_normal_sequence(on).expect("default key binding should be valid");
-		self.bindings_mut(scope).push(ScopedKeyBinding {
-			keys,
-			command_id: CommandId::Builtin(command),
-			desc: None,
-		});
-	}
-
-	fn bind_default_command(&mut self, name: &str, command: BuiltinCommand) {
-		self.command_aliases.push(CommandAlias {
-			name:                name.to_string(),
-			resolved_command_id: Some(CommandId::Builtin(command)),
-			run:                 RunDirective::Builtin(command),
-			desc:                None,
-			error:               None,
-		});
-	}
 }
 
 fn frizbee_match(query: &str, haystack: &str) -> Option<(u16, Vec<usize>)> {
@@ -1420,7 +1192,7 @@ pub struct CommandConfigFile {
 }
 
 impl CommandConfigFile {
-	pub fn with_defaults() -> Self { CommandRegistry::with_defaults().export_config() }
+	pub fn with_defaults() -> Self { defaults::default_command_config().clone() }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,0 +1,148 @@
+[mode.normal]
+keymap = [
+  { on = "h", run = "core.cursor.left" },
+  { on = "0", run = "core.cursor.line_start" },
+  { on = "$", run = "core.cursor.line_end" },
+  { on = "j", run = "core.cursor.down" },
+  { on = "k", run = "core.cursor.up" },
+  { on = "l", run = "core.cursor.right" },
+  { on = "gg", run = "core.cursor.file_start" },
+  { on = "G", run = "core.cursor.file_end" },
+  { on = "J", run = "core.edit.join_line_below" },
+  { on = "x", run = "core.edit.cut_char" },
+  { on = "p", run = "core.edit.paste" },
+  { on = "i", run = "core.mode.insert" },
+  { on = "a", run = "core.mode.append" },
+  { on = "o", run = "core.mode.open_below" },
+  { on = "O", run = "core.mode.open_above" },
+  { on = ":", run = "core.mode.command" },
+  { on = "v", run = "core.mode.visual" },
+  { on = "V", run = "core.mode.visual_line" },
+  { on = "<C-v>", run = "core.mode.visual_block" },
+  { on = "u", run = "core.edit.undo" },
+  { on = "dd", run = "core.buffer.delete_line" },
+  { on = "H", run = "core.buffer.prev" },
+  { on = "L", run = "core.buffer.next" },
+  { on = "{", run = "core.buffer.prev" },
+  { on = "}", run = "core.buffer.next" },
+  { on = "<C-h>", run = "core.window.focus_left" },
+  { on = "<C-j>", run = "core.window.focus_down" },
+  { on = "<C-k>", run = "core.window.focus_up" },
+  { on = "<C-l>", run = "core.window.focus_right" },
+  { on = "<C-e>", run = "core.view.scroll_down" },
+  { on = "<C-y>", run = "core.view.scroll_up" },
+  { on = "<C-d>", run = "core.view.scroll_half_page_down" },
+  { on = "<C-u>", run = "core.view.scroll_half_page_up" },
+  { on = "<leader>vw", run = "core.view.toggle_word_wrap" },
+  { on = "<leader>n", run = "core.notifications" },
+  { on = "<C-r>", run = "core.edit.redo" },
+  { on = "<F1>", run = "core.help.keymap" },
+  { on = "<leader>wv", run = "core.window.split_vertical" },
+  { on = "<leader>wh", run = "core.window.split_horizontal" },
+  { on = "<leader><Tab>n", run = "core.tab.new" },
+  { on = "<leader><Tab>d", run = "core.tab.close_current" },
+  { on = "<leader><Tab>[", run = "core.tab.prev" },
+  { on = "<leader><Tab>]", run = "core.tab.next" },
+  { on = "<leader>bd", run = "core.buffer.close" },
+  { on = "<leader>bn", run = "core.buffer.new_empty" },
+]
+
+[mode.visual]
+keymap = [
+  { on = "<Esc>", run = "core.visual.exit" },
+  { on = "v", run = "core.mode.visual" },
+  { on = "V", run = "core.mode.visual_line" },
+  { on = "<C-v>", run = "core.mode.visual_block" },
+  { on = "c", run = "core.visual.change" },
+  { on = "d", run = "core.visual.delete" },
+  { on = "x", run = "core.visual.delete" },
+  { on = "y", run = "core.visual.yank" },
+  { on = "p", run = "core.visual.paste" },
+  { on = "I", run = "core.visual.block_insert_before" },
+  { on = "A", run = "core.visual.block_insert_after" },
+  { on = "h", run = "core.visual.left" },
+  { on = "j", run = "core.cursor.down" },
+  { on = "k", run = "core.cursor.up" },
+  { on = "l", run = "core.visual.right" },
+  { on = "0", run = "core.cursor.line_start" },
+  { on = "$", run = "core.cursor.line_end" },
+  { on = "gg", run = "core.cursor.file_start" },
+  { on = "G", run = "core.cursor.file_end" },
+  { on = "<C-e>", run = "core.view.scroll_down" },
+  { on = "<C-y>", run = "core.view.scroll_up" },
+  { on = "<C-d>", run = "core.view.scroll_half_page_down" },
+  { on = "<C-u>", run = "core.view.scroll_half_page_up" },
+  { on = "<F1>", run = "core.help.keymap" },
+]
+
+[mode.command]
+keymap = [
+  { on = "<Esc>", run = "core.mode.normal" },
+  { on = "<Enter>", run = "core.submit" },
+  { on = "<Backspace>", run = "core.backspace" },
+]
+
+[mode.insert]
+keymap = [
+  { on = "<Esc>", run = "core.mode.normal" },
+  { on = "<Enter>", run = "core.insert.newline" },
+  { on = "<Backspace>", run = "core.insert.backspace" },
+  { on = "<Left>", run = "core.insert.left" },
+  { on = "<Down>", run = "core.insert.down" },
+  { on = "<Up>", run = "core.insert.up" },
+  { on = "<Right>", run = "core.insert.right" },
+  { on = "<Tab>", run = "core.insert.tab" },
+  { on = "<F1>", run = "core.help.keymap" },
+]
+
+[overlay.whichkey]
+keymap = [
+  { on = "<F1>", run = "core.help.keymap" },
+  { on = "<Esc>", run = "core.overlay.close" },
+  { on = "<Backspace>", run = "core.overlay.back" },
+  { on = "<Up>", run = "core.help.keymap_scroll_up" },
+  { on = "<Down>", run = "core.help.keymap_scroll_down" },
+  { on = "<C-p>", run = "core.help.keymap_scroll_up" },
+  { on = "<C-n>", run = "core.help.keymap_scroll_down" },
+  { on = "<C-u>", run = "core.help.keymap_half_page_up" },
+  { on = "<C-d>", run = "core.help.keymap_half_page_down" },
+]
+
+[overlay.command_palette]
+keymap = [
+  { on = "<F1>", run = "core.help.keymap" },
+  { on = "<Up>", run = "core.command_palette.prev" },
+  { on = "<Down>", run = "core.command_palette.next" },
+  { on = "<C-p>", run = "core.command_palette.prev" },
+  { on = "<C-n>", run = "core.command_palette.next" },
+  { on = "<C-u>", run = "core.command_palette.page_up" },
+  { on = "<C-d>", run = "core.command_palette.page_down" },
+  { on = "<C-e>", run = "core.command_palette.preview_scroll_down" },
+  { on = "<C-y>", run = "core.command_palette.preview_scroll_up" },
+  { on = "<C-w>", run = "core.picker.toggle_preview_word_wrap" },
+]
+
+[overlay.picker]
+keymap = [
+  { on = "<F1>", run = "core.help.keymap" },
+  { on = "<Esc>", run = "core.overlay.close" },
+  { on = "<Enter>", run = "core.picker.confirm" },
+  { on = "<Up>", run = "core.picker.prev" },
+  { on = "<Down>", run = "core.picker.next" },
+  { on = "<C-p>", run = "core.picker.prev" },
+  { on = "<C-n>", run = "core.picker.next" },
+  { on = "<C-e>", run = "core.picker.preview_scroll_down" },
+  { on = "<C-y>", run = "core.picker.preview_scroll_up" },
+  { on = "<C-w>", run = "core.picker.toggle_preview_word_wrap" },
+]
+
+[overlay.notification_center]
+keymap = [
+  { on = "<F1>", run = "core.help.keymap" },
+  { on = "<Esc>", run = "core.overlay.close" },
+  { on = "<Up>", run = "core.notification.prev" },
+  { on = "<Down>", run = "core.notification.next" },
+  { on = "k", run = "core.notification.prev" },
+  { on = "j", run = "core.notification.next" },
+  { on = "d", run = "core.notification.delete" },
+]

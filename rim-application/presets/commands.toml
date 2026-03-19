@@ -1,0 +1,23 @@
+[command]
+commands = [
+  { name = "q", run = "core.quit" },
+  { name = "quit", run = "core.quit" },
+  { name = "q!", run = "core.quit_force" },
+  { name = "quit!", run = "core.quit_force" },
+  { name = "qa", run = "core.quit_all" },
+  { name = "qa!", run = "core.quit_all_force" },
+  { name = "w", run = "core.save" },
+  { name = "w!", run = "core.save_force" },
+  { name = "wa", run = "core.save_all" },
+  { name = "wq", run = "core.save_and_quit" },
+  { name = "wq!", run = "core.save_and_quit_force" },
+  { name = "wqa", run = "core.save_all_and_quit" },
+  { name = "wqa!", run = "core.save_all_and_quit_force" },
+  { name = "e", run = "core.reload" },
+  { name = "e!", run = "core.reload_force" },
+  { name = "files", run = "core.picker.files" },
+  { name = "find", run = "core.picker.files" },
+  { name = "yazi", run = "core.picker.yazi" },
+  { name = "notifications", run = "core.notifications" },
+  { name = "noti", run = "core.notifications" },
+]
