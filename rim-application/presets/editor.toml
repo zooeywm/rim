@@ -1,5 +1,5 @@
 [editor]
-leader_key = " "
+leader_key              = " "
 cursor_scroll_threshold = 0
-key_hints_width = 42
-key_hints_max_height = 36
+key_hints_width         = 42
+key_hints_max_height    = 36

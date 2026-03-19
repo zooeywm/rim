@@ -1,6 +1,75 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [0.0.4] - 2026-03-19
+
+### Bug Fixes
+
+- **plugin:** Resolve CI build issues, enable dynamic keymap loading, and enhance docs
+
+
+### Chore
+
+- Clean migration leftovers and add architecture documentation
+
+- Finalize CI and repository validation workflow
+
+- Move config defaults to embedded presets
+
+
+### Documentation
+
+- Add starlight site and pages deploy
+
+- Use pages base only in github actions
+
+- Keep fixed pages base
+
+- Add inline terminal demo player
+
+- Fix homepage links and add demo cast
+
+- Update docs
+
+
+### Features
+
+- Add wasm plugin framework skeleton
+
+- Realize plugin and example
+
+- **command:** Add structured runtime params and plugin-side command decoding
+
+- **plugin:** Load plugins from user config wasm directory
+
+- **plugin:** Add yazi plugin with host pick-file action
+
+
+### Other
+
+- F1 scroll focus
+
+
+### Refactor
+
+- Extract ports and application layers, reduce rim-kernel to facade
+
+- Introduce EditorState and WorkbenchState, reduce rim-kernel to facade
+
+- Extract domain-owned editor operations from rim-application
+
+- Stabilize domain/application boundary for editor logic
+
+- Remove rim-kernel and finalize layered hexagonal architecture
+
+- Refactor command params into picker-driven structured specs
+
+- Replace builtin yazi with official plugin
+
+- Remove yazi references from application layer
+
+- Optimize file picker wit
+
 ## [0.0.3] - 2026-03-13
 
 ### Bug Fixes

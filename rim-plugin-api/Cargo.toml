@@ -5,5 +5,5 @@ edition.workspace = true
 authors.workspace = true
 
 [dependencies]
-wit-bindgen.workspace = true
+wit-bindgen.workspace        = true
 rim-command-macros.workspace = true
