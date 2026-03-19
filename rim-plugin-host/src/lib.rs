@@ -494,7 +494,7 @@ fn plugin_panel_from_wit(panel: wit::PluginPanel) -> PluginPanel {
 fn plugin_action_from_wit(action: wit::PluginAction) -> PluginAction {
 	match action {
 		wit::PluginAction::OpenFile(payload) => PluginAction::OpenFile { path: payload.path },
-		wit::PluginAction::PickFile(_) => PluginAction::PickFile,
+		wit::PluginAction::PickFile => PluginAction::PickFile,
 		wit::PluginAction::InsertText(payload) => PluginAction::InsertText { text: payload.text },
 		wit::PluginAction::RunCommand(payload) => {
 			PluginAction::RunCommand { command_id: payload.command_id, argument: payload.argument }
@@ -533,26 +533,25 @@ mod tests {
 	}
 
 	#[test]
-	fn example_plugin_can_be_discovered_and_invoked() {
+	fn yazi_plugin_can_be_discovered_and_invoked() {
 		let workspace_root = workspace_root();
 		let status = Command::new("cargo")
 			.arg("build")
 			.arg("-p")
-			.arg("rim-plugin-example")
+			.arg("rim-plugin-yazi")
 			.arg("--target")
 			.arg("wasm32-wasip2")
 			.current_dir(&workspace_root)
 			.status()
-			.expect("cargo build for example plugin should start");
-		assert!(status.success(), "example plugin component build should succeed");
+			.expect("cargo build for yazi plugin should start");
+		assert!(status.success(), "yazi plugin component build should succeed");
 
 		let config_root = unique_test_config_root();
 		let plugins_root = config_root.join("rim").join("plugins");
 		fs::create_dir_all(&plugins_root).expect("plugin config directory should be created");
-		let wasm_source = workspace_root.join("target/wasm32-wasip2/debug/rim_plugin_example.wasm");
-		let wasm_target = plugins_root.join("rim_plugin_example.wasm");
-		fs::copy(&wasm_source, &wasm_target)
-			.expect("example plugin wasm should be copied into config plugin dir");
+		let wasm_source = workspace_root.join("target/wasm32-wasip2/debug/rim_plugin_yazi.wasm");
+		let wasm_target = plugins_root.join("rim_plugin_yazi.wasm");
+		fs::copy(&wasm_source, &wasm_target).expect("yazi plugin wasm should be copied into config plugin dir");
 		unsafe {
 			std::env::set_var("XDG_CONFIG_HOME", &config_root);
 		}
@@ -568,31 +567,19 @@ mod tests {
 			.map(|plugin| (plugin.registration.metadata.id.clone(), plugin))
 			.collect::<HashMap<_, _>>();
 		let request = PluginCommandRequest {
-			command_id:     "plugin.example.inspect".to_string(),
-			argument:       Some("hello".to_string()),
-			params:         vec![PluginResolvedParam {
-				name:  "message".to_string(),
-				kind:  PluginCommandParamKind::Text,
-				value: "hello".to_string(),
-			}],
+			command_id:     "plugin.yazi.yazi".to_string(),
+			argument:       None,
+			params:         Vec::new(),
 			workspace_root: workspace_root.display().to_string(),
 		};
 
 		let response = invoke_command(&plugins, &request).expect("plugin invocation should succeed");
 		assert!(
-			response.effects.iter().any(|effect| {
-				matches!(
-					effect,
-					PluginEffect::Notify(notification) if notification.message == "example.inspect completed"
-				)
-			}),
-			"example plugin should emit a notification"
-		);
-		assert!(
-			response.effects.iter().any(|effect| {
-				matches!(effect, PluginEffect::ShowPanel(panel) if panel.title == "Example Plugin")
-			}),
-			"example plugin should emit a panel"
+			response
+				.effects
+				.iter()
+				.any(|effect| { matches!(effect, PluginEffect::RequestAction(PluginAction::PickFile)) }),
+			"yazi plugin should request the host file picker"
 		);
 	}
 }

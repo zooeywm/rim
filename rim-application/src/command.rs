@@ -236,8 +236,6 @@ pub enum PickerCommand {
 	Confirm,
 	/// Open the workspace file picker
 	Files,
-	/// Open the yazi picker
-	Yazi,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandGroup)]
@@ -848,7 +846,13 @@ impl CommandRegistry {
 		let mut registry = Self::default();
 		registry.register_builtin_specs();
 		let errors = registry.apply_config(defaults::default_command_config());
-		assert!(errors.is_empty(), "embedded default command preset contains invalid entries: {:?}", errors);
+		let blocking_errors =
+			errors.into_iter().filter(|error| !is_deferred_plugin_alias_error(error)).collect::<Vec<_>>();
+		assert!(
+			blocking_errors.is_empty(),
+			"embedded default command preset contains invalid entries: {:?}",
+			blocking_errors
+		);
 		registry
 	}
 
@@ -1041,6 +1045,7 @@ impl CommandRegistry {
 		}
 		self.commands.insert(command_id.clone(), next_spec);
 		self.register_plugin_default_alias(command_id, default_name, plugin_id, plugin_command_id, description);
+		self.refresh_deferred_command_aliases();
 		Ok(())
 	}
 
@@ -1059,7 +1064,8 @@ impl CommandRegistry {
 		if self.command_aliases.iter().any(|alias| alias.resolved_command_id.as_ref() == Some(&command_id)) {
 			return;
 		}
-		if self.command_aliases.iter().any(|alias| alias.name == default_name) {
+		if self.command_aliases.iter().any(|alias| normalize_pascal_case_name(alias.name.trim()) == default_name)
+		{
 			return;
 		}
 		self.command_aliases.push(CommandAlias {
@@ -1076,6 +1082,28 @@ impl CommandRegistry {
 			desc:                Some(description),
 			error:               None,
 		});
+	}
+
+	fn refresh_deferred_command_aliases(&mut self) {
+		let deferred = self
+			.command_aliases
+			.iter()
+			.enumerate()
+			.filter_map(|(index, alias)| {
+				(alias.resolved_command_id.is_none()).then_some((index, alias.run.clone()))
+			})
+			.collect::<Vec<_>>();
+		for (index, run) in deferred {
+			let Some(resolved) = self.resolve_or_register_run_directive(&run) else {
+				continue;
+			};
+			let Some(alias) = self.command_aliases.get_mut(index) else {
+				continue;
+			};
+			alias.resolved_command_id = Some(resolved.command_id);
+			alias.target = Some(resolved.target);
+			alias.error = None;
+		}
 	}
 
 	pub fn resolve_scope_sequence(
@@ -1670,6 +1698,13 @@ impl std::fmt::Display for CommandConfigError {
 	}
 }
 
+fn is_deferred_plugin_alias_error(error: &CommandConfigError) -> bool {
+	matches!(
+		error,
+		CommandConfigError::CommandAlias { reason, .. } if reason.starts_with("unknown run directive: plugin.")
+	)
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct CommandKeymapSection {
@@ -2052,6 +2087,20 @@ mod tests {
 		Search { query: Text, path: Option<File> },
 	}
 
+	fn register_yazi_plugin_command(registry: &mut CommandRegistry) {
+		registry
+			.register_plugin_command(PluginCommandRegistration {
+				id:           "plugin.yazi.yazi".to_string(),
+				default_name: "Yazi".to_string(),
+				plugin_id:    "yazi".to_string(),
+				command_id:   "yazi".to_string(),
+				category:     "Yazi Plugin".to_string(),
+				description:  "Open the host file picker".to_string(),
+				params:       Vec::new(),
+			})
+			.expect("yazi plugin command should register");
+	}
+
 	#[test]
 	fn parse_normal_sequence_should_support_leader_and_ctrl_tokens() {
 		let keys = parse_normal_sequence("<leader><Tab><C-h>").expect("sequence should parse");
@@ -2381,42 +2430,38 @@ mod tests {
 
 	#[test]
 	fn command_palette_should_match_command_ids_and_descriptions() {
-		let registry = CommandRegistry::with_defaults();
+		let mut registry = CommandRegistry::with_defaults();
+		register_yazi_plugin_command(&mut registry);
 
 		let id_matches = registry.command_palette_matches("yazi", 12);
-		let desc_matches = registry.command_palette_matches("yazi picker", 12);
+		let desc_matches = registry.command_palette_matches("host file picker", 12);
 
 		assert!(
-			id_matches
-				.iter()
-				.any(|item| item.command_id == CommandId::Builtin(BuiltinCommand::Picker(PickerCommand::Yazi)))
+			id_matches.iter().any(|item| item.command_id == CommandId::Plugin("plugin.yazi.yazi".to_string()))
 		);
 		assert!(
-			desc_matches
-				.iter()
-				.any(|item| item.command_id == CommandId::Builtin(BuiltinCommand::Picker(PickerCommand::Yazi)))
+			desc_matches.iter().any(|item| item.command_id == CommandId::Plugin("plugin.yazi.yazi".to_string()))
 		);
 		assert!(id_matches.iter().any(|item| {
-			item.name == "yazi"
-				&& item.command_id == CommandId::Builtin(BuiltinCommand::Picker(PickerCommand::Yazi))
+			item.name == "yazi" && item.command_id == CommandId::Plugin("plugin.yazi.yazi".to_string())
 		}));
 		assert!(
 			id_matches
 				.iter()
-				.find(|item| item.command_id == CommandId::Builtin(BuiltinCommand::Picker(PickerCommand::Yazi)))
+				.find(|item| item.command_id == CommandId::Plugin("plugin.yazi.yazi".to_string()))
 				.is_some_and(|item| !item.name_match_indices.is_empty())
 		);
 	}
 
 	#[test]
 	fn empty_command_palette_should_include_derived_display_names_for_unaliased_commands() {
-		let registry = CommandRegistry::with_defaults();
+		let mut registry = CommandRegistry::with_defaults();
+		register_yazi_plugin_command(&mut registry);
 
 		let matches = registry.command_palette_matches("", 128);
 
 		assert!(matches.iter().any(|item| {
-			item.name == "yazi"
-				&& item.command_id == CommandId::Builtin(BuiltinCommand::Picker(PickerCommand::Yazi))
+			item.name == "yazi" && item.command_id == CommandId::Plugin("plugin.yazi.yazi".to_string())
 		}));
 		assert!(matches.iter().any(|item| {
 			item.name == "SplitVertical"

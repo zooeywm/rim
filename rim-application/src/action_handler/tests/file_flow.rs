@@ -1,7 +1,23 @@
 use std::{ops::ControlFlow, path::PathBuf, time::{Duration, Instant}};
 
+use rim_ports::{PluginAction as RequestedPluginAction, PluginCommandResponse, PluginEffect};
+
 use super::support::{FilePickerPorts, RecordingPorts, SwapDecisionPorts, dispatch_test_action, normalize_test_path};
-use crate::{action::{AppAction, EditorAction, FileAction, KeyCode, KeyEvent, KeyModifiers, SwapConflictCheckResult, SwapConflictInfo, SystemAction}, command::{CommandAliasConfig, CommandAliasSection, CommandConfigFile}, state::{BufferEditSnapshot, BufferHistoryEntry, CursorState, PendingSwapDecision, PersistedBufferHistory, RimState, WorkspaceBufferHistorySnapshot, WorkspaceBufferSnapshot, WorkspaceSessionSnapshot, WorkspaceTabSnapshot, WorkspaceWindowBufferViewSnapshot, WorkspaceWindowSnapshot}};
+use crate::{action::{AppAction, EditorAction, FileAction, KeyCode, KeyEvent, KeyModifiers, PluginRuntimeAction, SwapConflictCheckResult, SwapConflictInfo, SystemAction}, command::{CommandAliasConfig, CommandAliasSection, CommandConfigFile, PluginCommandRegistration}, state::{BufferEditSnapshot, BufferHistoryEntry, CursorState, PendingSwapDecision, PersistedBufferHistory, RimState, WorkspaceBufferHistorySnapshot, WorkspaceBufferSnapshot, WorkspaceSessionSnapshot, WorkspaceTabSnapshot, WorkspaceWindowBufferViewSnapshot, WorkspaceWindowSnapshot}};
+
+fn register_yazi_plugin_command(state: &mut RimState) {
+	state
+		.register_plugin_command(PluginCommandRegistration {
+			id:           "plugin.yazi.yazi".to_string(),
+			default_name: "Yazi".to_string(),
+			plugin_id:    "yazi".to_string(),
+			command_id:   "yazi".to_string(),
+			category:     "Yazi Plugin".to_string(),
+			description:  "Open the host file picker".to_string(),
+			params:       Vec::new(),
+		})
+		.expect("yazi plugin command should register");
+}
 
 #[test]
 fn file_load_completed_should_mark_buffer_clean() {
@@ -565,6 +581,7 @@ fn command_q_should_quit_when_all_buffers_are_clean() {
 #[test]
 fn command_yazi_should_open_selected_file() {
 	let mut state = RimState::new();
+	register_yazi_plugin_command(&mut state);
 	let ports = FilePickerPorts::default();
 	ports.picked_path.replace(Some(PathBuf::from("Cargo.toml")));
 	state.enter_command_mode();
@@ -579,6 +596,16 @@ fn command_yazi_should_open_selected_file() {
 	);
 
 	assert!(matches!(flow, ControlFlow::Continue(())));
+	let flow = state.apply_action(
+		&ports,
+		AppAction::Plugin(PluginRuntimeAction::CommandCompleted {
+			command_id: "plugin.yazi.yazi".to_string(),
+			result:     Ok(PluginCommandResponse {
+				effects: vec![PluginEffect::RequestAction(RequestedPluginAction::PickFile)],
+			}),
+		}),
+	);
+	assert!(matches!(flow, ControlFlow::Continue(())));
 	assert_eq!(ports.file_loads.borrow().len(), 1);
 	assert_eq!(ports.file_loads.borrow()[0].1, normalize_test_path("Cargo.toml"));
 }
@@ -586,17 +613,29 @@ fn command_yazi_should_open_selected_file() {
 #[test]
 fn command_yazi_should_report_cancelled_when_no_file_is_selected() {
 	let mut state = RimState::new();
+	register_yazi_plugin_command(&mut state);
+	let ports = FilePickerPorts::default();
 	state.enter_command_mode();
 	state.push_command_char('y');
 	state.push_command_char('a');
 	state.push_command_char('z');
 	state.push_command_char('i');
 
-	let flow = dispatch_test_action(
-		&mut state,
+	let flow = state.apply_action(
+		&ports,
 		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))),
 	);
 
+	assert!(matches!(flow, ControlFlow::Continue(())));
+	let flow = state.apply_action(
+		&ports,
+		AppAction::Plugin(PluginRuntimeAction::CommandCompleted {
+			command_id: "plugin.yazi.yazi".to_string(),
+			result:     Ok(PluginCommandResponse {
+				effects: vec![PluginEffect::RequestAction(RequestedPluginAction::PickFile)],
+			}),
+		}),
+	);
 	assert!(matches!(flow, ControlFlow::Continue(())));
 	assert_eq!(state.workbench.status_bar.message, "open cancelled");
 }

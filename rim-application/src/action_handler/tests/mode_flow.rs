@@ -5,6 +5,20 @@ use rim_domain::display_geometry::display_width_of_char_prefix_with_virtual as g
 use super::{super::mode_flow::SequenceMatch, support::{FilePickerPorts, RecordingPorts, dispatch_test_action, map_normal_key, resolve_keys}};
 use crate::{action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction}, command::{BuiltinCommand, CommandAliasConfig, CommandAliasSection, CommandArgKind, CommandConfigFile, CommandKeymapSection, CommandTarget, KeyBindingOn, KeymapBindingConfig, PluginCommandRegistration, ViewCommand}, state::{FloatingWindowPlacement, NormalSequenceKey, RimState, WorkspaceFileEntry}};
 
+fn register_yazi_plugin_command(state: &mut RimState) {
+	state
+		.register_plugin_command(PluginCommandRegistration {
+			id:           "plugin.yazi.yazi".to_string(),
+			default_name: "Yazi".to_string(),
+			plugin_id:    "yazi".to_string(),
+			command_id:   "yazi".to_string(),
+			category:     "Yazi Plugin".to_string(),
+			description:  "Open the host file picker".to_string(),
+			params:       Vec::new(),
+		})
+		.expect("yazi plugin command should register");
+}
+
 #[test]
 fn to_normal_key_should_map_leader_char_to_leader_token() {
 	let mut state = RimState::new();
@@ -1003,19 +1017,20 @@ fn open_key_hint_popup_should_refresh_after_config_reload() {
 #[test]
 fn open_command_palette_should_refresh_after_config_reload() {
 	let mut state = RimState::new();
+	register_yazi_plugin_command(&mut state);
 
 	state.enter_command_mode();
 	state.push_command_char('y');
 	let initial_item = state.command_palette().expect("command palette should open").items[0]
 		.as_command()
 		.expect("palette should show command items");
-	assert_eq!(initial_item.description, "Open the yazi picker");
+	assert_eq!(initial_item.description, "Open the host file picker");
 
 	let errors = state.apply_command_config(&CommandConfigFile {
 		command: CommandAliasSection {
 			commands: vec![CommandAliasConfig {
 				name: "y".to_string(),
-				run:  "core.picker.yazi".into(),
+				run:  "plugin.yazi.yazi".into(),
 				args: Vec::new(),
 				desc: Some("Open custom picker".to_string()),
 			}],
@@ -1491,6 +1506,7 @@ fn key_hint_popup_should_scroll_one_line_with_ctrl_n_and_ctrl_p() {
 #[test]
 fn command_mode_should_show_palette_matches_for_command_ids() {
 	let mut state = RimState::new();
+	register_yazi_plugin_command(&mut state);
 
 	state.enter_command_mode();
 	for ch in "yazi".chars() {
@@ -1504,12 +1520,7 @@ fn command_mode_should_show_palette_matches_for_command_ids() {
 	assert!(!palette.items.is_empty());
 	let item = palette.items[0].as_command().expect("palette should show command items");
 	assert_eq!(item.name, "yazi");
-	assert_eq!(
-		item.command_id,
-		crate::command::CommandId::Builtin(crate::command::BuiltinCommand::Picker(
-			crate::command::PickerCommand::Yazi,
-		))
-	);
+	assert_eq!(item.command_id, crate::command::CommandId::Plugin("plugin.yazi.yazi".to_string()));
 }
 
 #[test]

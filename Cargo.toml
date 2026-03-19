@@ -3,8 +3,7 @@ members = [
   "rim-command-macros",
   "rim-ports",
   "rim-plugin-api",
-  "rim-plugin-example",
-  "rim-plugin-yazi",
+  "plugins/rim-plugin-yazi",
   "rim-plugin-host",
   "rim-application",
   "rim-domain",
@@ -51,8 +50,7 @@ rim-app                = { path = "rim-app" }
 rim-command-macros     = { path = "rim-command-macros" }
 rim-ports              = { path = "rim-ports" }
 rim-plugin-api         = { path = "rim-plugin-api" }
-rim-plugin-example     = { path = "rim-plugin-example" }
-rim-plugin-yazi        = { path = "rim-plugin-yazi" }
+rim-plugin-yazi        = { path = "plugins/rim-plugin-yazi" }
 rim-plugin-host        = { path = "rim-plugin-host" }
 rim-application        = { path = "rim-application" }
 rim-domain             = { path = "rim-domain" }

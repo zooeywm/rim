@@ -2553,13 +2553,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rim-plugin-example"
-version = "0.0.3"
-dependencies = [
- "rim-plugin-api",
-]
-
-[[package]]
 name = "rim-plugin-host"
 version = "0.0.3"
 dependencies = [

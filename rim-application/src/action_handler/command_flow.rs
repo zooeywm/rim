@@ -194,10 +194,6 @@ where
 			open_workspace_file_picker(ports, state);
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::Picker(PickerCommand::Yazi) => {
-			enqueue_open_with_picker(ports, state);
-			ControlFlow::Continue(())
-		}
 		BuiltinCommand::Mode(ModeCommand::Normal) => {
 			if state.is_command_mode() {
 				state.exit_command_mode();
@@ -509,22 +505,6 @@ where P: RuntimePorts {
 		return;
 	}
 	state.workbench.status_bar.message = format!("loading {}", path.display());
-}
-
-fn enqueue_open_with_picker<P>(ports: &P, state: &mut RimState)
-where P: ActionPorts {
-	match ports.pick_open_path() {
-		Ok(Some(path)) => {
-			let _ = RimState::dispatch_internal(ports, state, AppAction::File(FileAction::OpenRequested { path }));
-		}
-		Ok(None) => {
-			state.workbench.status_bar.message = "open cancelled".to_string();
-		}
-		Err(err) => {
-			error!("file picker failed: {}", err);
-			state.workbench.status_bar.message = format!("open failed: {}", err);
-		}
-	}
 }
 
 fn enqueue_save_all_buffers<P>(
