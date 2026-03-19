@@ -126,7 +126,7 @@ fn command_completed_should_apply_pick_file_requested_action() {
 	let flow = state.apply_action(
 		&ports,
 		AppAction::Plugin(PluginRuntimeAction::CommandCompleted {
-			command_id: "plugin.yazi.yazi".to_string(),
+			command_id: "plugin.demo.pick".to_string(),
 			result:     Ok(PluginCommandResponse {
 				effects: vec![PluginEffect::RequestAction(RequestedPluginAction::PickFile)],
 			}),

@@ -2087,18 +2087,18 @@ mod tests {
 		Search { query: Text, path: Option<File> },
 	}
 
-	fn register_yazi_plugin_command(registry: &mut CommandRegistry) {
+	fn register_demo_pick_plugin_command(registry: &mut CommandRegistry) {
 		registry
 			.register_plugin_command(PluginCommandRegistration {
-				id:           "plugin.yazi.yazi".to_string(),
-				default_name: "Yazi".to_string(),
-				plugin_id:    "yazi".to_string(),
-				command_id:   "yazi".to_string(),
-				category:     "Yazi Plugin".to_string(),
+				id:           "plugin.demo.pick".to_string(),
+				default_name: "Pick".to_string(),
+				plugin_id:    "demo".to_string(),
+				command_id:   "pick".to_string(),
+				category:     "Demo Plugin".to_string(),
 				description:  "Open the host file picker".to_string(),
 				params:       Vec::new(),
 			})
-			.expect("yazi plugin command should register");
+			.expect("demo pick plugin command should register");
 	}
 
 	#[test]
@@ -2431,24 +2431,24 @@ mod tests {
 	#[test]
 	fn command_palette_should_match_command_ids_and_descriptions() {
 		let mut registry = CommandRegistry::with_defaults();
-		register_yazi_plugin_command(&mut registry);
+		register_demo_pick_plugin_command(&mut registry);
 
-		let id_matches = registry.command_palette_matches("yazi", 12);
+		let id_matches = registry.command_palette_matches("pick", 12);
 		let desc_matches = registry.command_palette_matches("host file picker", 12);
 
 		assert!(
-			id_matches.iter().any(|item| item.command_id == CommandId::Plugin("plugin.yazi.yazi".to_string()))
+			id_matches.iter().any(|item| item.command_id == CommandId::Plugin("plugin.demo.pick".to_string()))
 		);
 		assert!(
-			desc_matches.iter().any(|item| item.command_id == CommandId::Plugin("plugin.yazi.yazi".to_string()))
+			desc_matches.iter().any(|item| item.command_id == CommandId::Plugin("plugin.demo.pick".to_string()))
 		);
 		assert!(id_matches.iter().any(|item| {
-			item.name == "yazi" && item.command_id == CommandId::Plugin("plugin.yazi.yazi".to_string())
+			item.name == "Pick" && item.command_id == CommandId::Plugin("plugin.demo.pick".to_string())
 		}));
 		assert!(
 			id_matches
 				.iter()
-				.find(|item| item.command_id == CommandId::Plugin("plugin.yazi.yazi".to_string()))
+				.find(|item| item.command_id == CommandId::Plugin("plugin.demo.pick".to_string()))
 				.is_some_and(|item| !item.name_match_indices.is_empty())
 		);
 	}
@@ -2456,12 +2456,12 @@ mod tests {
 	#[test]
 	fn empty_command_palette_should_include_derived_display_names_for_unaliased_commands() {
 		let mut registry = CommandRegistry::with_defaults();
-		register_yazi_plugin_command(&mut registry);
+		register_demo_pick_plugin_command(&mut registry);
 
 		let matches = registry.command_palette_matches("", 128);
 
 		assert!(matches.iter().any(|item| {
-			item.name == "yazi" && item.command_id == CommandId::Plugin("plugin.yazi.yazi".to_string())
+			item.name == "Pick" && item.command_id == CommandId::Plugin("plugin.demo.pick".to_string())
 		}));
 		assert!(matches.iter().any(|item| {
 			item.name == "SplitVertical"

@@ -17,7 +17,6 @@ commands = [
   { name = "e!", run = "core.reload_force" },
   { name = "files", run = "core.picker.files" },
   { name = "find", run = "core.picker.files" },
-  { name = "yazi", run = "plugin.yazi.yazi" },
   { name = "notifications", run = "core.notifications" },
   { name = "noti", run = "core.notifications" },
 ]
