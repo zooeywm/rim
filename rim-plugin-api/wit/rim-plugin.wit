@@ -1,0 +1,102 @@
+package rim:plugin@1.0.0;
+
+interface command-provider {
+    enum plugin-capability {
+        command-provider,
+    }
+
+    record plugin-metadata {
+        id: string,
+        name: string,
+        version: string,
+        declared-capabilities: list<plugin-capability>,
+    }
+
+    record plugin-command-metadata {
+        id: string,
+        name: string,
+        description: string,
+    }
+
+    record plugin-command-request {
+        command-id: string,
+        argument: option<string>,
+        workspace-root: string,
+    }
+
+    enum plugin-notification-level {
+        info,
+        warn,
+        error,
+    }
+
+    record plugin-notification {
+        level: plugin-notification-level,
+        message: string,
+    }
+
+    record plugin-panel {
+        title: string,
+        lines: list<string>,
+        footer: option<string>,
+    }
+
+    record open-file-action {
+        path: string,
+    }
+
+    record insert-text-action {
+        text: string,
+    }
+
+    record run-command-action {
+        command-id: string,
+        argument: option<string>,
+    }
+
+    variant plugin-action {
+        open-file(open-file-action),
+        insert-text(insert-text-action),
+        run-command(run-command-action),
+    }
+
+    variant plugin-effect {
+        notify(plugin-notification),
+        show-panel(plugin-panel),
+        request-action(plugin-action),
+    }
+
+    record plugin-command-response {
+        effects: list<plugin-effect>,
+    }
+
+    record invalid-request-error {
+        message: string,
+    }
+
+    record command-unavailable-error {
+        command-id: string,
+    }
+
+    record execution-failed-error {
+        message: string,
+    }
+
+    variant plugin-command-error {
+        invalid-request(invalid-request-error),
+        command-unavailable(command-unavailable-error),
+        execution-failed(execution-failed-error),
+    }
+
+    record plugin-descriptor {
+        metadata: plugin-metadata,
+        commands: list<plugin-command-metadata>,
+    }
+
+    describe: func() -> plugin-descriptor;
+    run-command: func(request: plugin-command-request) -> result<plugin-command-response, plugin-command-error>;
+}
+
+world command-plugin {
+    export command-provider;
+}

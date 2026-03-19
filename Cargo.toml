@@ -3,6 +3,7 @@ members = [
   "rim-command-macros",
   "rim-ports",
   "rim-plugin-api",
+  "rim-plugin-example",
   "rim-plugin-host",
   "rim-application",
   "rim-domain",
@@ -42,10 +43,14 @@ tracing-appender       = "0.2"
 tracing-subscriber     = { version = "0.3", features = ["env-filter", "fmt", "time", "local-time"] }
 toml                   = "1.0"
 unicode-width          = "0.2"
+wasmtime               = "42.0.1"
+wasmtime-wasi          = "42.0.1"
+wit-bindgen            = "0.51.0"
 rim-app                = { path = "rim-app" }
 rim-command-macros     = { path = "rim-command-macros" }
 rim-ports              = { path = "rim-ports" }
 rim-plugin-api         = { path = "rim-plugin-api" }
+rim-plugin-example     = { path = "rim-plugin-example" }
 rim-plugin-host        = { path = "rim-plugin-host" }
 rim-application        = { path = "rim-application" }
 rim-domain             = { path = "rim-domain" }

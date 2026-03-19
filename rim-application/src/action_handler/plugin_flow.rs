@@ -1,10 +1,10 @@
 use std::{ops::ControlFlow, path::PathBuf};
 
-use rim_ports::{PluginAction as RequestedPluginAction, PluginCommandResponse, PluginEffect, PluginNotificationLevel};
+use rim_ports::{PluginAction as RequestedPluginAction, PluginCommandError, PluginCommandResponse, PluginEffect, PluginInvocationError, PluginNotificationLevel};
 use tracing::error;
 
 use super::{ActionHandlerError, ActionPorts, PluginPorts, RimState};
-use crate::{action::{AppAction, FileAction, PluginRuntimeAction}, command::{CommandArgKind, PluginCommandRegistration}, state::NotificationLevel};
+use crate::{action::{AppAction, FileAction, PluginRuntimeAction}, state::NotificationLevel};
 
 pub(super) fn enqueue_plugin_discovery<P>(ports: &P, state: &RimState)
 where P: PluginPorts {
@@ -25,7 +25,7 @@ where
 	P: ActionPorts,
 {
 	let request = state.build_plugin_command_request(plugin_id.clone(), command_id.clone(), argument);
-	let title = request.command.title.clone();
+	let request_command_id = request.command_id.clone();
 	if let Err(source) = ports.enqueue_invoke_command(request) {
 		let err = ActionHandlerError::PluginInvoke { source };
 		error!("plugin command enqueue failed: {}", err);
@@ -34,7 +34,7 @@ where
 		state.workbench.status_bar.message = format!("plugin command failed: {}", plugin_id);
 		return ControlFlow::Continue(());
 	}
-	state.workbench.status_bar.message = format!("plugin command running: {}", title);
+	state.workbench.status_bar.message = format!("plugin command running: {}", request_command_id);
 	ControlFlow::Continue(())
 }
 
@@ -54,32 +54,21 @@ where
 			Ok(discovery) => {
 				state.set_plugin_registrations(discovery.plugins.clone());
 				let mut registered_commands = 0usize;
-				for plugin in &discovery.plugins {
-					for command in &plugin.commands {
-						let registration = PluginCommandRegistration {
-							id:          format!("plugin.{}.{}", plugin.metadata.id, command.id),
-							plugin_id:   plugin.metadata.id.clone(),
-							command_id:  command.id.clone(),
-							title:       command.title.clone(),
-							category:    plugin.metadata.name.clone(),
-							description: command.description.clone(),
-							arg_kind:    CommandArgKind::RawTail,
-						};
-						match state.register_plugin_command(registration) {
-							Ok(()) => registered_commands = registered_commands.saturating_add(1),
-							Err(err) => {
-								error!(
-									"plugin command registration failed: plugin={} command={} error={}",
-									plugin.metadata.id, command.id, err
-								);
-								state.push_notification(
-									NotificationLevel::Warn,
-									format!(
-										"plugin command registration skipped: {}:{} ({})",
-										plugin.metadata.id, command.id, err
-									),
-								);
-							}
+				for registration in state.plugin_command_registrations() {
+					match state.register_plugin_command(registration.clone()) {
+						Ok(()) => registered_commands = registered_commands.saturating_add(1),
+						Err(err) => {
+							error!(
+								"plugin command registration failed: plugin={} command={} error={}",
+								registration.plugin_id, registration.command_id, err
+							);
+							state.push_notification(
+								NotificationLevel::Warn,
+								format!(
+									"plugin command registration skipped: {}:{} ({})",
+									registration.plugin_id, registration.command_id, err
+								),
+							);
 						}
 					}
 				}
@@ -99,17 +88,26 @@ where
 				state.workbench.status_bar.message = "plugin discovery failed".to_string();
 			}
 		},
-		PluginRuntimeAction::CommandCompleted { context, result } => match result {
+		PluginRuntimeAction::CommandCompleted { command_id, result } => match result {
 			Ok(response) => {
 				apply_plugin_response(ports, state, response)?;
 				if state.workbench.status_bar.message.is_empty() {
-					state.workbench.status_bar.message = format!("plugin command completed: {}", context.plugin_id);
+					state.workbench.status_bar.message = format!("plugin command completed: {}", command_id);
 				}
 			}
 			Err(failure) => {
-				error!("plugin command failed: {}", failure);
-				state.push_notification(NotificationLevel::Error, failure.to_string());
-				state.workbench.status_bar.message = format!("plugin command failed: {}", context.plugin_id);
+				match failure {
+					PluginInvocationError::Guest(PluginCommandError::CommandUnavailable { .. })
+					| PluginInvocationError::Guest(PluginCommandError::InvalidRequest { .. }) => {
+						state.push_notification(NotificationLevel::Warn, failure.to_string());
+					}
+					PluginInvocationError::Guest(PluginCommandError::ExecutionFailed { .. })
+					| PluginInvocationError::Runtime(_) => {
+						error!("plugin command failed: {}", failure);
+						state.push_notification(NotificationLevel::Error, failure.to_string());
+					}
+				}
+				state.workbench.status_bar.message = format!("plugin command failed: {}", command_id);
 			}
 		},
 	}

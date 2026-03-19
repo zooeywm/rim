@@ -1,6 +1,6 @@
 use std::{ops::{BitOr, BitOrAssign}, path::PathBuf};
 
-use rim_ports::{PluginCommandResponse, PluginContext, PluginDiscoveryResult, PluginRuntimeFailure};
+use rim_ports::{PluginCommandResponse, PluginDiscoveryResult, PluginInvocationError, PluginRuntimeFailure};
 
 use crate::state::{BufferId, PersistedBufferHistory, WorkspaceSessionSnapshot};
 
@@ -203,7 +203,7 @@ pub enum FileAction {
 pub enum PluginRuntimeAction {
 	DiscoverRequested,
 	DiscoveryCompleted { result: Result<PluginDiscoveryResult, PluginRuntimeFailure> },
-	CommandCompleted { context: PluginContext, result: Result<PluginCommandResponse, PluginRuntimeFailure> },
+	CommandCompleted { command_id: String, result: Result<PluginCommandResponse, PluginInvocationError> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

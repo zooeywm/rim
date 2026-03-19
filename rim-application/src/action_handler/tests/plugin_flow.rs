@@ -1,6 +1,6 @@
 use std::ops::ControlFlow;
 
-use rim_ports::{PluginAction as RequestedPluginAction, PluginCapability, PluginCommandMetadata, PluginCommandResponse, PluginContext, PluginDiscoveryResult, PluginEffect, PluginMetadata, PluginNotification, PluginNotificationLevel, PluginPanel, PluginRegistration};
+use rim_ports::{PluginAction as RequestedPluginAction, PluginCapability, PluginCommandMetadata, PluginCommandResponse, PluginDiscoveryResult, PluginEffect, PluginMetadata, PluginNotification, PluginNotificationLevel, PluginPanel, PluginRegistration};
 
 use super::support::RecordingPorts;
 use crate::{action::{AppAction, PluginRuntimeAction}, state::RimState};
@@ -11,23 +11,13 @@ fn sample_plugin() -> PluginRegistration {
 			id:                    "demo".to_string(),
 			name:                  "Demo Plugin".to_string(),
 			version:               "0.1.0".to_string(),
-			abi_version:           1,
 			declared_capabilities: vec![PluginCapability::CommandProvider],
 		},
 		commands: vec![PluginCommandMetadata {
 			id:          "echo".to_string(),
-			title:       "Echo".to_string(),
+			name:        "echo".to_string(),
 			description: "Echo command".to_string(),
 		}],
-	}
-}
-
-fn sample_context() -> PluginContext {
-	PluginContext {
-		plugin_id:         "demo".to_string(),
-		invocation_id:     1,
-		time_budget_ms:    250,
-		issued_at_unix_ms: 1,
 	}
 }
 
@@ -48,9 +38,9 @@ fn discovery_completed_should_register_plugin_commands() {
 	let resolved = state
 		.workbench
 		.command_registry
-		.resolve_command_input("plugin.demo.echo")
-		.expect("plugin command should register");
-	assert_eq!(resolved.spec.display_name.as_deref(), Some("Echo"));
+		.resolve_command_input("echo")
+		.expect("plugin default command name should resolve");
+	assert!(resolved.spec.display_name.is_none());
 }
 
 #[test]
@@ -67,16 +57,15 @@ fn executing_plugin_command_should_enqueue_runtime_request() {
 	let resolved = state
 		.workbench
 		.command_registry
-		.resolve_command_input("plugin.demo.echo hello")
+		.resolve_command_input("echo hello")
 		.expect("registered plugin command should resolve");
 	let flow = super::super::command_flow::execute_resolved_command(&ports, &mut state, resolved);
 
 	assert!(matches!(flow, ControlFlow::Continue(())));
 	let invocations = ports.plugin_invocations.borrow();
 	assert_eq!(invocations.len(), 1);
-	assert_eq!(invocations[0].context.plugin_id, "demo");
-	assert_eq!(invocations[0].command.id, "echo");
-	assert_eq!(invocations[0].argument_tail.as_deref(), Some("hello"));
+	assert_eq!(invocations[0].command_id, "plugin.demo.echo");
+	assert_eq!(invocations[0].argument.as_deref(), Some("hello"));
 }
 
 #[test]
@@ -88,8 +77,8 @@ fn command_completed_should_apply_effects_and_requested_actions() {
 	let flow = state.apply_action(
 		&ports,
 		AppAction::Plugin(PluginRuntimeAction::CommandCompleted {
-			context: sample_context(),
-			result:  Ok(PluginCommandResponse {
+			command_id: "plugin.demo.echo".to_string(),
+			result:     Ok(PluginCommandResponse {
 				effects: vec![
 					PluginEffect::Notify(PluginNotification {
 						level:   PluginNotificationLevel::Info,

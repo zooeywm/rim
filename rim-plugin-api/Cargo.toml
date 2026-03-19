@@ -5,4 +5,4 @@ edition.workspace = true
 authors.workspace = true
 
 [dependencies]
-rim-ports.workspace = true
+wit-bindgen.workspace = true

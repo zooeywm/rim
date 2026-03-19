@@ -4,7 +4,7 @@ use thiserror::Error;
 
 mod plugin;
 
-pub use plugin::{PluginAction, PluginBufferSnapshot, PluginCapability, PluginCommandError, PluginCommandMetadata, PluginCommandRequest, PluginCommandResponse, PluginContext, PluginDiscoveryResult, PluginEffect, PluginLoadFailure, PluginMetadata, PluginNotification, PluginNotificationLevel, PluginPanel, PluginRegistration, PluginRuntime, PluginRuntimeError, PluginRuntimeFailure, PluginSelectionSnapshot};
+pub use plugin::{PluginAction, PluginCapability, PluginCommandError, PluginCommandMetadata, PluginCommandRequest, PluginCommandResponse, PluginDiscoveryResult, PluginEffect, PluginInvocationError, PluginLoadFailure, PluginMetadata, PluginNotification, PluginNotificationLevel, PluginPanel, PluginRegistration, PluginRuntime, PluginRuntimeError, PluginRuntimeFailure};
 
 /// Error contract for the storage I/O port.
 #[derive(Debug, Error)]

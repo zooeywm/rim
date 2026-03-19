@@ -609,7 +609,7 @@ impl CommandSpec {
 				plugin_id:  registration.plugin_id,
 				command_id: registration.command_id,
 			},
-			display_name: Some(registration.title),
+			display_name: None,
 		}
 	}
 }
@@ -617,6 +617,7 @@ impl CommandSpec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandPaletteMatch {
 	pub name:                      String,
+	pub completion:                String,
 	pub command_id:                CommandId,
 	pub command_id_label:          String,
 	pub description:               String,
@@ -658,6 +659,7 @@ impl CommandPaletteItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CommandPaletteCandidate {
 	name:             String,
+	completion:       String,
 	command_id:       CommandId,
 	command_id_label: String,
 	description:      String,
@@ -879,11 +881,49 @@ impl CommandRegistry {
 			return Err(format!("duplicate command id: {}", registration.id));
 		}
 		let command_id = CommandId::Plugin(registration.id.clone());
-		if self.commands.contains_key(&command_id) {
-			return Err(format!("duplicate command id: {}", registration.id));
+		let default_name = registration.default_name.clone();
+		let plugin_id = registration.plugin_id.clone();
+		let plugin_command_id = registration.command_id.clone();
+		let description = registration.description.clone();
+		let next_spec = CommandSpec::plugin(registration);
+		if let Some(existing) = self.commands.get(&command_id)
+			&& existing.target != next_spec.target
+		{
+			return Err(format!("duplicate command id: {}", command_id.display_text()));
 		}
-		self.commands.insert(command_id, CommandSpec::plugin(registration));
+		self.commands.insert(command_id.clone(), next_spec);
+		self.register_plugin_default_alias(command_id, default_name, plugin_id, plugin_command_id, description);
 		Ok(())
+	}
+
+	fn register_plugin_default_alias(
+		&mut self,
+		command_id: CommandId,
+		default_name: String,
+		plugin_id: String,
+		plugin_command_id: String,
+		description: String,
+	) {
+		let default_name = default_name.trim().to_string();
+		if default_name.is_empty() {
+			return;
+		}
+		if self.command_aliases.iter().any(|alias| alias.resolved_command_id.as_ref() == Some(&command_id)) {
+			return;
+		}
+		if self.command_aliases.iter().any(|alias| alias.name == default_name) {
+			return;
+		}
+		self.command_aliases.push(CommandAlias {
+			name:                default_name,
+			resolved_command_id: Some(command_id),
+			run:                 RunDirective::PluginInvocation {
+				plugin_name: format!("{}.{}", plugin_id, plugin_command_id),
+				argument:    None,
+			},
+			desc:                Some(description),
+			error:               None,
+		});
 	}
 
 	pub fn resolve_scope_sequence(
@@ -949,6 +989,7 @@ impl CommandRegistry {
 				if query.is_empty() {
 					return Some((0u16, CommandPaletteMatch {
 						name:                      candidate.name,
+						completion:                candidate.completion,
 						command_id:                candidate.command_id,
 						command_id_label:          candidate.command_id_label,
 						description:               candidate.description,
@@ -973,6 +1014,7 @@ impl CommandRegistry {
 
 				Some((score, CommandPaletteMatch {
 					name: candidate.name,
+					completion: candidate.completion,
 					command_id: candidate.command_id,
 					command_id_label: candidate.command_id_label,
 					description: candidate.description,
@@ -1008,6 +1050,7 @@ impl CommandRegistry {
 			}
 			candidates.push(CommandPaletteCandidate {
 				name:             alias.name.clone(),
+				completion:       alias.name.clone(),
 				command_id:       alias
 					.resolved_command_id
 					.clone()
@@ -1044,6 +1087,7 @@ impl CommandRegistry {
 		for spec in unaliased_specs {
 			candidates.push(CommandPaletteCandidate {
 				name:             spec.display_name.clone().unwrap_or_default(),
+				completion:       spec.id.display_text(),
 				command_id_label: spec.id.display_text(),
 				command_id:       spec.id,
 				description:      spec.description,
@@ -1075,17 +1119,15 @@ impl CommandRegistry {
 		let RunDirective::PluginInvocation { plugin_name, argument } = run else {
 			return None;
 		};
+		let (plugin_id, plugin_command_id) = parse_plugin_command_name(plugin_name)?;
 		let command_id = CommandId::Plugin(format!("plugin.{}", plugin_name));
 		if !self.commands.contains_key(&command_id) {
 			self.commands.insert(command_id.clone(), CommandSpec {
 				id:           command_id.clone(),
-				category:     CommandCategoryInfo::plugin("plugin"),
+				category:     CommandCategoryInfo::plugin(plugin_id.as_str()),
 				description:  format!("Plugin command '{}'", plugin_name),
 				arg_kind:     CommandArgKind::RawTail,
-				target:       CommandTarget::Plugin {
-					plugin_id:  plugin_name.clone(),
-					command_id: plugin_name.clone(),
-				},
+				target:       CommandTarget::Plugin { plugin_id, command_id: plugin_command_id },
 				display_name: None,
 			});
 		}
@@ -1328,13 +1370,13 @@ impl KeyBindingView for ScopedKeyBinding {
 
 #[derive(Debug, Clone)]
 pub struct PluginCommandRegistration {
-	pub id:          String,
-	pub plugin_id:   String,
-	pub command_id:  String,
-	pub title:       String,
-	pub category:    String,
-	pub description: String,
-	pub arg_kind:    CommandArgKind,
+	pub id:           String,
+	pub default_name: String,
+	pub plugin_id:    String,
+	pub command_id:   String,
+	pub category:     String,
+	pub description:  String,
+	pub arg_kind:     CommandArgKind,
 }
 
 fn resolve_key_binding_set<T>(
@@ -1357,6 +1399,16 @@ where
 		}
 	}
 	if has_prefix { BindingMatch::Pending } else { BindingMatch::NoMatch }
+}
+
+fn parse_plugin_command_name(name: &str) -> Option<(String, String)> {
+	let (plugin_id, command_id) = name.split_once('.')?;
+	let plugin_id = plugin_id.trim();
+	let command_id = command_id.trim();
+	if plugin_id.is_empty() || command_id.is_empty() {
+		return None;
+	}
+	Some((plugin_id.to_string(), command_id.to_string()))
 }
 
 fn export_keymap_bindings<T>(

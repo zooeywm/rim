@@ -301,7 +301,6 @@ pub struct WorkbenchState {
 	notification_preview_active:               Vec<ActiveNotification>,
 	notification_preview_queue:                VecDeque<u64>,
 	next_notification_id:                      u64,
-	next_plugin_invocation_id:                 u64,
 	pub workspace_file_cache:                  Vec<WorkspaceFileEntry>,
 	pub workspace_file_cache_loading:          bool,
 	pub status_bar:                            StatusBarState,
@@ -338,7 +337,6 @@ impl WorkbenchState {
 			notification_preview_active:           Vec::new(),
 			notification_preview_queue:            VecDeque::new(),
 			next_notification_id:                  1,
-			next_plugin_invocation_id:             1,
 			workspace_file_cache:                  Vec::new(),
 			workspace_file_cache_loading:          false,
 			status_bar:                            StatusBarState::default(),
@@ -430,7 +428,9 @@ impl RimState {
 	pub fn new() -> Self { Self { editor: EditorState::new(), workbench: WorkbenchState::new() } }
 
 	pub fn apply_command_config(&mut self, config: &CommandConfigFile) -> Vec<CommandConfigError> {
-		self.workbench.command_registry.apply_config(config)
+		let errors = self.workbench.command_registry.apply_config(config);
+		self.rebuild_plugin_command_registry_entries();
+		errors
 	}
 
 	pub fn push_notification(&mut self, level: NotificationLevel, message: impl Into<String>) {
@@ -1172,8 +1172,7 @@ impl RimState {
 		};
 		match item {
 			CommandPaletteItem::Command(item) => {
-				let completion = if item.name.is_empty() { item.command_id_label.clone() } else { item.name.clone() };
-				self.workbench.command_line = completion;
+				self.workbench.command_line = item.completion.clone();
 				self.refresh_command_palette();
 				true
 			}

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use rim_domain::display_geometry::display_width_of_char_prefix_with_virtual as geom_display_width_of_char_prefix_with_virtual;
 
 use super::{super::mode_flow::SequenceMatch, support::{FilePickerPorts, RecordingPorts, dispatch_test_action, map_normal_key, resolve_keys}};
-use crate::{action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction}, command::{BuiltinCommand, CommandAliasConfig, CommandAliasSection, CommandConfigFile, CommandKeymapSection, CommandTarget, KeyBindingOn, KeymapBindingConfig, ViewCommand}, state::{FloatingWindowPlacement, NormalSequenceKey, RimState, WorkspaceFileEntry}};
+use crate::{action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction}, command::{BuiltinCommand, CommandAliasConfig, CommandAliasSection, CommandArgKind, CommandConfigFile, CommandKeymapSection, CommandTarget, KeyBindingOn, KeymapBindingConfig, PluginCommandRegistration, ViewCommand}, state::{FloatingWindowPlacement, NormalSequenceKey, RimState, WorkspaceFileEntry}};
 
 #[test]
 fn to_normal_key_should_map_leader_char_to_leader_token() {
@@ -1504,6 +1504,37 @@ fn command_mode_should_show_palette_matches_for_command_ids() {
 			crate::command::PickerCommand::Yazi,
 		))
 	);
+}
+
+#[test]
+fn command_mode_tab_completion_should_use_plugin_default_name() {
+	let mut state = RimState::new();
+	state
+		.register_plugin_command(PluginCommandRegistration {
+			id:           "plugin.demo.echo".to_string(),
+			default_name: "echo".to_string(),
+			plugin_id:    "demo".to_string(),
+			command_id:   "echo".to_string(),
+			category:     "Demo Plugin".to_string(),
+			description:  "Echo through plugin runtime".to_string(),
+			arg_kind:     CommandArgKind::RawTail,
+		})
+		.expect("plugin command should register");
+
+	state.enter_command_mode();
+	for ch in "ec".chars() {
+		let _ = dispatch_test_action(
+			&mut state,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))),
+		);
+	}
+
+	let _ = dispatch_test_action(
+		&mut state,
+		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))),
+	);
+
+	assert_eq!(state.workbench.command_line, "echo");
 }
 
 #[test]

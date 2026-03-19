@@ -1,28 +1,27 @@
 # Plugins
 
-This directory is the placeholder workspace plugin root used by the v1 WASM plugin skeleton.
+This directory is the workspace plugin root used by the v1 WASM CommandProvider implementation.
 
-Expected layout for a future plugin:
+Development layout:
 
 ```text
 plugins/
-  my-plugin/
+  example/
     plugin.toml
-    plugin.wasm
 ```
 
-Minimal manifest shape consumed by the current discovery skeleton:
+The checked-in example manifest points to the workspace example plugin crate build output:
 
 ```toml
-id = "my-plugin"
-name = "My Plugin"
-version = "0.1.0"
-abi_version = 1
-entry = "plugin.wasm"
-declared_capabilities = ["command_provider"]
-
-[[commands]]
-id = "echo"
-title = "Echo"
-description = "Placeholder command metadata"
+id = "example"
+entry = "../../target/wasm32-wasip2/debug/rim_plugin_example.wasm"
 ```
+
+Build the example plugin artifact with:
+
+```bash
+rustup target add wasm32-wasip2
+cargo build -p rim-plugin-example --target wasm32-wasip2
+```
+
+After that, startup discovery will load the example plugin through the normal application/runtime path.

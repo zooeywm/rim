@@ -13,7 +13,6 @@ pub struct PluginMetadata {
 	pub id:                    String,
 	pub name:                  String,
 	pub version:               String,
-	pub abi_version:           u32,
 	pub declared_capabilities: Vec<PluginCapability>,
 }
 
@@ -21,46 +20,16 @@ pub struct PluginMetadata {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PluginCommandMetadata {
 	pub id:          String,
-	pub title:       String,
+	pub name:        String,
 	pub description: String,
-}
-
-/// Minimal invocation context supplied by the runtime for tracing and budget
-/// enforcement.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct PluginContext {
-	pub plugin_id:         String,
-	pub invocation_id:     u64,
-	pub time_budget_ms:    u64,
-	pub issued_at_unix_ms: u64,
-}
-
-/// Read-only snapshot of the active buffer exposed to plugin commands.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct PluginBufferSnapshot {
-	pub path:              Option<String>,
-	pub is_dirty:          bool,
-	pub cursor_row:        u16,
-	pub cursor_col:        u16,
-	pub current_line_text: String,
-}
-
-/// Read-only selection snapshot for future visual-aware commands.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct PluginSelectionSnapshot {
-	pub text:         String,
-	pub is_multiline: bool,
 }
 
 /// Request contract for the v1 CommandProvider capability.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PluginCommandRequest {
-	pub context:        PluginContext,
-	pub command:        PluginCommandMetadata,
-	pub argument_tail:  Option<String>,
+	pub command_id:     String,
+	pub argument:       Option<String>,
 	pub workspace_root: String,
-	pub active_buffer:  Option<PluginBufferSnapshot>,
-	pub selection:      Option<PluginSelectionSnapshot>,
 }
 
 /// Notification effect emitted by a plugin.
@@ -149,6 +118,15 @@ pub enum PluginRuntimeFailure {
 	Discovery { message: String },
 	#[error("plugin invocation failed for {plugin_id}:{command_id}: {message}")]
 	Invocation { plugin_id: String, command_id: String, message: String },
+}
+
+/// Typed failure returned for a command invocation callback.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum PluginInvocationError {
+	#[error("{0}")]
+	Guest(PluginCommandError),
+	#[error("{0}")]
+	Runtime(PluginRuntimeFailure),
 }
 
 /// Runtime-facing error contract for queueing plugin work.

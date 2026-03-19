@@ -1,0 +1,11 @@
+[package]
+name              = "rim-plugin-example"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rim-plugin-api.workspace = true

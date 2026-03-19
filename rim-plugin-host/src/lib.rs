@@ -1,16 +1,22 @@
-use std::{
-	collections::HashMap,
-	fs,
-	path::{Path, PathBuf},
-	sync::Mutex,
-	thread,
-};
+#[cfg(test)]
+use std::process::Command;
+use std::{collections::{HashMap, HashSet}, fs, path::{Path, PathBuf}, sync::Mutex, thread};
 
 use rim_application::action::{AppAction, PluginRuntimeAction};
-use rim_plugin_api::{PluginCapability, PluginCommandMetadata, PluginCommandRequest, PluginMetadata};
-use rim_ports::{PluginDiscoveryResult, PluginLoadFailure, PluginRegistration, PluginRuntime, PluginRuntimeError, PluginRuntimeFailure};
+use rim_ports::{PluginAction, PluginCapability, PluginCommandError, PluginCommandMetadata, PluginCommandRequest, PluginCommandResponse, PluginDiscoveryResult, PluginEffect, PluginInvocationError, PluginLoadFailure, PluginMetadata, PluginNotification, PluginNotificationLevel, PluginPanel, PluginRegistration, PluginRuntime, PluginRuntimeError, PluginRuntimeFailure};
 use serde::Deserialize;
 use tracing::error;
+use wasmtime::{Config, Engine, Store, component::{Component, Linker}};
+use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+
+mod component_bindings {
+	wasmtime::component::bindgen!({
+		path: "../rim-plugin-api/wit",
+		world: "command-plugin",
+	});
+}
+
+use component_bindings::exports::rim::plugin::command_provider as wit;
 
 #[derive(dep_inj::DepInj)]
 #[target(PluginRuntimeImpl)]
@@ -43,8 +49,7 @@ impl PluginHostState {
 }
 
 impl<Deps> PluginRuntime for PluginRuntimeImpl<Deps>
-where
-	Deps: AsRef<PluginHostState>,
+where Deps: AsRef<PluginHostState>
 {
 	fn enqueue_discover_plugins(&self, workspace_root: String) -> Result<(), PluginRuntimeError> {
 		send_request(
@@ -79,54 +84,73 @@ fn send_request(
 
 #[derive(Debug)]
 enum PluginHostRequest {
-	Discover {
-		workspace_root: String,
-	},
-	InvokeCommand {
-		request: PluginCommandRequest,
-	},
+	Discover { workspace_root: String },
+	InvokeCommand { request: PluginCommandRequest },
 }
 
-#[derive(Debug, Clone)]
 struct LoadedPlugin {
 	registration: PluginRegistration,
-	wasm_path:    PathBuf,
+	component:    Component,
+}
+
+struct DiscoverySnapshot {
+	plugins:  Vec<LoadedPlugin>,
+	failures: Vec<PluginLoadFailure>,
+}
+
+struct PluginStoreState {
+	table: ResourceTable,
+	wasi:  WasiCtx,
+}
+
+impl PluginStoreState {
+	fn new() -> Self { Self { table: ResourceTable::new(), wasi: WasiCtxBuilder::new().build() } }
+}
+
+impl WasiView for PluginStoreState {
+	fn ctx(&mut self) -> WasiCtxView<'_> { WasiCtxView { ctx: &mut self.wasi, table: &mut self.table } }
 }
 
 fn run_worker(request_rx: flume::Receiver<PluginHostRequest>, app_event_tx: flume::Sender<AppAction>) {
+	let engine = build_engine();
 	let mut loaded_plugins = HashMap::<String, LoadedPlugin>::new();
 
 	while let Ok(request) = request_rx.recv() {
 		match request {
 			PluginHostRequest::Discover { workspace_root } => {
-				let result = discover_plugins(workspace_root.as_str()).map(|discovery| {
-					let action_result = PluginDiscoveryResult {
-						plugins:  discovery.plugins.iter().map(|plugin| plugin.registration.clone()).collect(),
-						failures: discovery.failures.clone(),
-					};
-					(discovery.plugins, action_result)
-				});
-				if let Ok((plugins, _)) = &result {
-					loaded_plugins.clear();
-					for plugin in plugins {
-						loaded_plugins.insert(plugin.registration.metadata.id.clone(), plugin.clone());
+				let result = discover_plugins(&engine, workspace_root.as_str());
+				match result {
+					Ok(discovery) => {
+						let action_result = PluginDiscoveryResult {
+							plugins:  discovery.plugins.iter().map(|plugin| plugin.registration.clone()).collect(),
+							failures: discovery.failures.clone(),
+						};
+						loaded_plugins.clear();
+						for plugin in discovery.plugins {
+							loaded_plugins.insert(plugin.registration.metadata.id.clone(), plugin);
+						}
+						if app_event_tx
+							.send(AppAction::Plugin(PluginRuntimeAction::DiscoveryCompleted { result: Ok(action_result) }))
+							.is_err()
+						{
+							break;
+						}
 					}
-				}
-				let action_result = result.map(|(_, result)| result);
-				if app_event_tx
-					.send(AppAction::Plugin(PluginRuntimeAction::DiscoveryCompleted { result: action_result }))
-					.is_err()
-				{
-					break;
+					Err(failure) => {
+						if app_event_tx
+							.send(AppAction::Plugin(PluginRuntimeAction::DiscoveryCompleted { result: Err(failure) }))
+							.is_err()
+						{
+							break;
+						}
+					}
 				}
 			}
 			PluginHostRequest::InvokeCommand { request } => {
+				let command_id = request.command_id.clone();
 				let result = invoke_command(&loaded_plugins, &request);
 				if app_event_tx
-					.send(AppAction::Plugin(PluginRuntimeAction::CommandCompleted {
-						context: request.context,
-						result,
-					}))
+					.send(AppAction::Plugin(PluginRuntimeAction::CommandCompleted { command_id, result }))
 					.is_err()
 				{
 					break;
@@ -136,13 +160,25 @@ fn run_worker(request_rx: flume::Receiver<PluginHostRequest>, app_event_tx: flum
 	}
 }
 
-#[derive(Debug)]
-struct DiscoverySnapshot {
-	plugins:  Vec<LoadedPlugin>,
-	failures: Vec<PluginLoadFailure>,
+fn build_engine() -> Engine {
+	let mut config = Config::new();
+	config.wasm_component_model(true);
+	Engine::new(&config).expect("wasmtime engine should enable the component model")
 }
 
-fn discover_plugins(workspace_root: &str) -> Result<DiscoverySnapshot, PluginRuntimeFailure> {
+fn build_linker(engine: &Engine) -> Result<Linker<PluginStoreState>, String> {
+	let mut linker = Linker::new(engine);
+	wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
+		.map_err(|err| format!("link preview2 WASI imports failed: {}", err))?;
+	Ok(linker)
+}
+
+fn build_store(engine: &Engine) -> Store<PluginStoreState> { Store::new(engine, PluginStoreState::new()) }
+
+fn discover_plugins(
+	engine: &Engine,
+	workspace_root: &str,
+) -> Result<DiscoverySnapshot, PluginRuntimeFailure> {
 	let plugins_root = Path::new(workspace_root).join("plugins");
 	if !plugins_root.exists() {
 		return Ok(DiscoverySnapshot { plugins: Vec::new(), failures: Vec::new() });
@@ -170,7 +206,7 @@ fn discover_plugins(workspace_root: &str) -> Result<DiscoverySnapshot, PluginRun
 		if !path.is_dir() {
 			continue;
 		}
-		match load_manifest(path.as_path()) {
+		match load_plugin(engine, path.as_path()) {
 			Ok(plugin) => plugins.push(plugin),
 			Err(failure) => failures.push(failure),
 		}
@@ -179,20 +215,21 @@ fn discover_plugins(workspace_root: &str) -> Result<DiscoverySnapshot, PluginRun
 	Ok(DiscoverySnapshot { plugins, failures })
 }
 
-fn load_manifest(plugin_dir: &Path) -> Result<LoadedPlugin, PluginLoadFailure> {
+fn load_plugin(engine: &Engine, plugin_dir: &Path) -> Result<LoadedPlugin, PluginLoadFailure> {
 	let manifest_path = plugin_dir.join("plugin.toml");
 	let manifest_text = fs::read_to_string(&manifest_path).map_err(|err| PluginLoadFailure {
 		plugin_id: None,
 		location:  manifest_path.display().to_string(),
 		message:   format!("read plugin manifest failed: {}", err),
 	})?;
-	let manifest = toml::from_str::<PluginManifest>(manifest_text.as_str()).map_err(|err| PluginLoadFailure {
-		plugin_id: None,
-		location:  manifest_path.display().to_string(),
-		message:   format!("parse plugin manifest failed: {}", err),
-	})?;
+	let manifest =
+		toml::from_str::<PluginManifest>(manifest_text.as_str()).map_err(|err| PluginLoadFailure {
+			plugin_id: None,
+			location:  manifest_path.display().to_string(),
+			message:   format!("parse plugin manifest failed: {}", err),
+		})?;
 
-	let entry_path = plugin_dir.join(&manifest.entry);
+	let entry_path = resolve_entry_path(plugin_dir, manifest.entry.as_str());
 	if entry_path.extension().and_then(|ext| ext.to_str()) != Some("wasm") {
 		return Err(PluginLoadFailure {
 			plugin_id: Some(manifest.id.clone()),
@@ -204,65 +241,317 @@ fn load_manifest(plugin_dir: &Path) -> Result<LoadedPlugin, PluginLoadFailure> {
 		return Err(PluginLoadFailure {
 			plugin_id: Some(manifest.id.clone()),
 			location:  entry_path.display().to_string(),
-			message:   "plugin wasm file is missing".to_string(),
+			message:   format!(
+				"plugin wasm file is missing; build it with `cargo build -p rim-plugin-example --target \
+				 wasm32-wasip2`"
+			),
 		});
 	}
 
-	Ok(LoadedPlugin {
-		registration: PluginRegistration {
-			metadata: PluginMetadata {
-				id:                    manifest.id,
-				name:                  manifest.name,
-				version:               manifest.version,
-				abi_version:           manifest.abi_version,
-				declared_capabilities: manifest.declared_capabilities,
-			},
-			commands: manifest.commands,
-		},
-		wasm_path: entry_path,
-	})
+	let component = Component::from_file(engine, &entry_path).map_err(|err| PluginLoadFailure {
+		plugin_id: Some(manifest.id.clone()),
+		location:  entry_path.display().to_string(),
+		message:   format!("compile plugin component failed: {}", err),
+	})?;
+	let descriptor = read_descriptor(&component).map_err(|message| PluginLoadFailure {
+		plugin_id: Some(manifest.id.clone()),
+		location: entry_path.display().to_string(),
+		message,
+	})?;
+
+	validate_descriptor(&manifest, &descriptor, &entry_path)?;
+	let registration = registration_from_descriptor(descriptor);
+
+	Ok(LoadedPlugin { registration, component })
+}
+
+fn resolve_entry_path(plugin_dir: &Path, entry: &str) -> PathBuf {
+	let entry_path = PathBuf::from(entry);
+	if entry_path.is_absolute() { entry_path } else { plugin_dir.join(entry_path) }
+}
+
+fn validate_descriptor(
+	manifest: &PluginManifest,
+	descriptor: &wit::PluginDescriptor,
+	entry_path: &Path,
+) -> Result<(), PluginLoadFailure> {
+	if descriptor.metadata.id != manifest.id {
+		return Err(PluginLoadFailure {
+			plugin_id: Some(manifest.id.clone()),
+			location:  entry_path.display().to_string(),
+			message:   format!(
+				"plugin descriptor id '{}' does not match manifest id '{}'",
+				descriptor.metadata.id, manifest.id
+			),
+		});
+	}
+	if !descriptor
+		.metadata
+		.declared_capabilities
+		.iter()
+		.any(|capability| matches!(capability, wit::PluginCapability::CommandProvider))
+	{
+		return Err(PluginLoadFailure {
+			plugin_id: Some(manifest.id.clone()),
+			location:  entry_path.display().to_string(),
+			message:   "plugin does not declare the command-provider capability".to_string(),
+		});
+	}
+
+	let mut seen_commands = HashSet::new();
+	for command in &descriptor.commands {
+		if !seen_commands.insert(command.id.clone()) {
+			return Err(PluginLoadFailure {
+				plugin_id: Some(manifest.id.clone()),
+				location:  entry_path.display().to_string(),
+				message:   format!("duplicate plugin command id '{}'", command.id),
+			});
+		}
+	}
+	Ok(())
+}
+
+fn read_descriptor(component: &Component) -> Result<wit::PluginDescriptor, String> {
+	let linker = build_linker(component.engine())?;
+	let mut store = build_store(component.engine());
+	let bindings = component_bindings::CommandPlugin::instantiate(&mut store, component, &linker)
+		.map_err(|err| format!("instantiate plugin component failed: {}", err))?;
+	bindings
+		.rim_plugin_command_provider()
+		.call_describe(&mut store)
+		.map_err(|err| format!("call command-provider.describe failed: {}", err))
+}
+
+fn registration_from_descriptor(descriptor: wit::PluginDescriptor) -> PluginRegistration {
+	PluginRegistration {
+		metadata: plugin_metadata_from_wit(descriptor.metadata),
+		commands: descriptor.commands.into_iter().map(plugin_command_metadata_from_wit).collect(),
+	}
 }
 
 fn invoke_command(
 	loaded_plugins: &HashMap<String, LoadedPlugin>,
 	request: &PluginCommandRequest,
-) -> Result<rim_plugin_api::PluginCommandResponse, PluginRuntimeFailure> {
-	let Some(plugin) = loaded_plugins.get(&request.context.plugin_id) else {
-		return Err(PluginRuntimeFailure::Invocation {
-			plugin_id:  request.context.plugin_id.clone(),
-			command_id: request.command.id.clone(),
+) -> Result<PluginCommandResponse, PluginInvocationError> {
+	let (plugin_id, local_command_id) = parse_plugin_command_id(&request.command_id).ok_or_else(|| {
+		PluginInvocationError::Runtime(PluginRuntimeFailure::Invocation {
+			plugin_id:  "<unknown>".to_string(),
+			command_id: request.command_id.clone(),
+			message:    "plugin command id must be formatted as plugin.<plugin-id>.<command-id>".to_string(),
+		})
+	})?;
+	let Some(plugin) = loaded_plugins.get(plugin_id) else {
+		return Err(PluginInvocationError::Runtime(PluginRuntimeFailure::Invocation {
+			plugin_id:  plugin_id.to_string(),
+			command_id: local_command_id.to_string(),
 			message:    "plugin is not loaded".to_string(),
-		});
+		}));
 	};
-	let declared = plugin.registration.commands.iter().any(|command| command.id == request.command.id);
-	if !declared {
-		return Err(PluginRuntimeFailure::Invocation {
-			plugin_id:  request.context.plugin_id.clone(),
-			command_id: request.command.id.clone(),
-			message:    "plugin command is not declared by the manifest".to_string(),
-		});
+	if !plugin.registration.commands.iter().any(|command| command.id == local_command_id) {
+		return Err(PluginInvocationError::Runtime(PluginRuntimeFailure::Invocation {
+			plugin_id:  plugin_id.to_string(),
+			command_id: local_command_id.to_string(),
+			message:    "plugin command is not declared by the descriptor".to_string(),
+		}));
 	}
 
-	Err(PluginRuntimeFailure::Invocation {
-		plugin_id:  request.context.plugin_id.clone(),
-		command_id: request.command.id.clone(),
-		message:    format!(
-			"wasm execution skeleton is not implemented yet for {}",
-			plugin.wasm_path.display()
-		),
+	match call_run_command(&plugin.component, plugin_id, local_command_id, request)
+		.map_err(PluginInvocationError::Runtime)?
+	{
+		Ok(response) => Ok(plugin_command_response_from_wit(response)),
+		Err(err) => Err(PluginInvocationError::Guest(plugin_command_error_from_wit(err))),
+	}
+}
+
+fn call_run_command(
+	component: &Component,
+	plugin_id: &str,
+	local_command_id: &str,
+	request: &PluginCommandRequest,
+) -> Result<Result<wit::PluginCommandResponse, wit::PluginCommandError>, PluginRuntimeFailure> {
+	let linker = build_linker(component.engine()).map_err(|message| PluginRuntimeFailure::Invocation {
+		plugin_id: plugin_id.to_string(),
+		command_id: local_command_id.to_string(),
+		message,
+	})?;
+	let mut store = build_store(component.engine());
+	let bindings =
+		component_bindings::CommandPlugin::instantiate(&mut store, component, &linker).map_err(|err| {
+			PluginRuntimeFailure::Invocation {
+				plugin_id:  plugin_id.to_string(),
+				command_id: local_command_id.to_string(),
+				message:    format!("instantiate plugin component failed: {}", err),
+			}
+		})?;
+	let request = plugin_command_request_to_wit(local_command_id, request);
+	bindings.rim_plugin_command_provider().call_run_command(&mut store, &request).map_err(|err| {
+		PluginRuntimeFailure::Invocation {
+			plugin_id:  plugin_id.to_string(),
+			command_id: local_command_id.to_string(),
+			message:    format!("call command-provider.run-command failed: {}", err),
+		}
 	})
+}
+
+fn plugin_command_request_to_wit(
+	local_command_id: &str,
+	request: &PluginCommandRequest,
+) -> wit::PluginCommandRequest {
+	wit::PluginCommandRequest {
+		command_id:     local_command_id.to_string(),
+		argument:       request.argument.clone(),
+		workspace_root: request.workspace_root.clone(),
+	}
+}
+
+fn parse_plugin_command_id(command_id: &str) -> Option<(&str, &str)> {
+	let rest = command_id.strip_prefix("plugin.")?;
+	let (plugin_id, local_command_id) = rest.split_once('.')?;
+	(!plugin_id.is_empty() && !local_command_id.is_empty()).then_some((plugin_id, local_command_id))
+}
+
+fn plugin_metadata_from_wit(metadata: wit::PluginMetadata) -> PluginMetadata {
+	PluginMetadata {
+		id:                    metadata.id,
+		name:                  metadata.name,
+		version:               metadata.version,
+		declared_capabilities: metadata
+			.declared_capabilities
+			.into_iter()
+			.map(plugin_capability_from_wit)
+			.collect(),
+	}
+}
+
+fn plugin_capability_from_wit(capability: wit::PluginCapability) -> PluginCapability {
+	match capability {
+		wit::PluginCapability::CommandProvider => PluginCapability::CommandProvider,
+	}
+}
+
+fn plugin_command_metadata_from_wit(metadata: wit::PluginCommandMetadata) -> PluginCommandMetadata {
+	PluginCommandMetadata {
+		id:          metadata.id,
+		name:        metadata.name,
+		description: metadata.description,
+	}
+}
+
+fn plugin_command_response_from_wit(response: wit::PluginCommandResponse) -> PluginCommandResponse {
+	PluginCommandResponse { effects: response.effects.into_iter().map(plugin_effect_from_wit).collect() }
+}
+
+fn plugin_effect_from_wit(effect: wit::PluginEffect) -> PluginEffect {
+	match effect {
+		wit::PluginEffect::Notify(notification) => {
+			PluginEffect::Notify(plugin_notification_from_wit(notification))
+		}
+		wit::PluginEffect::ShowPanel(panel) => PluginEffect::ShowPanel(plugin_panel_from_wit(panel)),
+		wit::PluginEffect::RequestAction(action) => PluginEffect::RequestAction(plugin_action_from_wit(action)),
+	}
+}
+
+fn plugin_notification_from_wit(notification: wit::PluginNotification) -> PluginNotification {
+	PluginNotification {
+		level:   plugin_notification_level_from_wit(notification.level),
+		message: notification.message,
+	}
+}
+
+fn plugin_notification_level_from_wit(level: wit::PluginNotificationLevel) -> PluginNotificationLevel {
+	match level {
+		wit::PluginNotificationLevel::Info => PluginNotificationLevel::Info,
+		wit::PluginNotificationLevel::Warn => PluginNotificationLevel::Warn,
+		wit::PluginNotificationLevel::Error => PluginNotificationLevel::Error,
+	}
+}
+
+fn plugin_panel_from_wit(panel: wit::PluginPanel) -> PluginPanel {
+	PluginPanel { title: panel.title, lines: panel.lines, footer: panel.footer }
+}
+
+fn plugin_action_from_wit(action: wit::PluginAction) -> PluginAction {
+	match action {
+		wit::PluginAction::OpenFile(payload) => PluginAction::OpenFile { path: payload.path },
+		wit::PluginAction::InsertText(payload) => PluginAction::InsertText { text: payload.text },
+		wit::PluginAction::RunCommand(payload) => {
+			PluginAction::RunCommand { command_id: payload.command_id, argument: payload.argument }
+		}
+	}
+}
+
+fn plugin_command_error_from_wit(error: wit::PluginCommandError) -> PluginCommandError {
+	match error {
+		wit::PluginCommandError::InvalidRequest(payload) => {
+			PluginCommandError::InvalidRequest { message: payload.message }
+		}
+		wit::PluginCommandError::CommandUnavailable(payload) => {
+			PluginCommandError::CommandUnavailable { command_id: payload.command_id }
+		}
+		wit::PluginCommandError::ExecutionFailed(payload) => {
+			PluginCommandError::ExecutionFailed { message: payload.message }
+		}
+	}
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PluginManifest {
-	id:                    String,
-	name:                  String,
-	version:               String,
-	abi_version:           u32,
-	entry:                 String,
-	#[serde(default)]
-	declared_capabilities: Vec<PluginCapability>,
-	#[serde(default)]
-	commands:              Vec<PluginCommandMetadata>,
+	id:    String,
+	entry: String,
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn workspace_root() -> PathBuf { PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..") }
+
+	#[test]
+	fn example_plugin_can_be_discovered_and_invoked() {
+		let workspace_root = workspace_root();
+		let status = Command::new("cargo")
+			.arg("build")
+			.arg("-p")
+			.arg("rim-plugin-example")
+			.arg("--target")
+			.arg("wasm32-wasip2")
+			.current_dir(&workspace_root)
+			.status()
+			.expect("cargo build for example plugin should start");
+		assert!(status.success(), "example plugin component build should succeed");
+
+		let engine = build_engine();
+		let discovery =
+			discover_plugins(&engine, workspace_root.to_str().expect("workspace path should be utf-8"))
+				.expect("plugin discovery should succeed");
+		assert!(discovery.failures.is_empty(), "expected no plugin discovery failures: {:?}", discovery.failures);
+		let plugins = discovery
+			.plugins
+			.into_iter()
+			.map(|plugin| (plugin.registration.metadata.id.clone(), plugin))
+			.collect::<HashMap<_, _>>();
+		let request = PluginCommandRequest {
+			command_id:     "plugin.example.inspect".to_string(),
+			argument:       Some("hello".to_string()),
+			workspace_root: workspace_root.display().to_string(),
+		};
+
+		let response = invoke_command(&plugins, &request).expect("plugin invocation should succeed");
+		assert!(
+			response.effects.iter().any(|effect| {
+				matches!(
+					effect,
+					PluginEffect::Notify(notification) if notification.message == "example.inspect completed"
+				)
+			}),
+			"example plugin should emit a notification"
+		);
+		assert!(
+			response.effects.iter().any(|effect| {
+				matches!(effect, PluginEffect::ShowPanel(panel) if panel.title == "Example Plugin")
+			}),
+			"example plugin should emit a panel"
+		);
+	}
 }
