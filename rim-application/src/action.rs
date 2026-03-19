@@ -1,5 +1,7 @@
 use std::{ops::{BitOr, BitOrAssign}, path::PathBuf};
 
+use rim_ports::{PluginCommandResponse, PluginContext, PluginDiscoveryResult, PluginRuntimeFailure};
+
 use crate::state::{BufferId, PersistedBufferHistory, WorkspaceSessionSnapshot};
 
 /// Facility-agnostic key code used by the application.
@@ -60,6 +62,7 @@ pub enum AppAction {
 	Buffer(BufferAction),
 	Tab(TabAction),
 	File(FileAction),
+	Plugin(PluginRuntimeAction),
 	System(SystemAction),
 }
 
@@ -193,6 +196,14 @@ pub enum FileAction {
 		buffer_id: BufferId,
 		result:    anyhow::Result<()>,
 	},
+}
+
+/// Async plugin runtime callbacks flowing back into the application layer.
+#[derive(Debug)]
+pub enum PluginRuntimeAction {
+	DiscoverRequested,
+	DiscoveryCompleted { result: Result<PluginDiscoveryResult, PluginRuntimeFailure> },
+	CommandCompleted { context: PluginContext, result: Result<PluginCommandResponse, PluginRuntimeFailure> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

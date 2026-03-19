@@ -3,6 +3,7 @@ use std::{collections::{HashMap, HashSet, VecDeque}, fmt, ops::{Deref, DerefMut}
 use frizbee::{Config as FrizbeeConfig, match_list_indices};
 use rim_domain::preview::preview_max_scroll_with_mode;
 pub use rim_domain::{editor::{EditorOperationError, EditorState}, model::{BufferEditSnapshot, BufferHistoryEntry, BufferId, BufferState, BufferSwitchDirection, CursorState, EditorMode, FocusDirection, PendingBlockInsert, PendingInsertUndoGroup, PersistedBufferHistory, RopeTextDiff, SplitAxis, TabId, TabState, WindowBufferViewState, WindowId, WindowState, WorkspaceBufferHistorySnapshot, WorkspaceBufferSnapshot, WorkspaceSessionSnapshot, WorkspaceTabSnapshot, WorkspaceWindowBufferViewSnapshot, WorkspaceWindowSnapshot}};
+use rim_ports::PluginRegistration;
 use time::{OffsetDateTime, format_description::FormatItem, macros::format_description};
 
 use crate::{command::{BuiltinCommand, CommandArgKind, CommandCommand, CommandConfigError, CommandConfigFile, CommandPaletteFileMatch, CommandPaletteItem, CommandPaletteMatch, CommandRegistry, PluginCommandRegistration}, defaults};
@@ -10,6 +11,7 @@ use crate::{command::{BuiltinCommand, CommandArgKind, CommandCommand, CommandCon
 mod buffer;
 mod edit;
 mod mode;
+mod plugin;
 mod session;
 mod tab;
 mod window;
@@ -274,6 +276,7 @@ pub struct PendingSwapDecision {
 pub struct WorkbenchState {
 	pub title:                                 String,
 	pub workspace_root:                        PathBuf,
+	pub plugins:                               Vec<PluginRegistration>,
 	pub leader_key:                            char,
 	pub command_line:                          String,
 	pub quit_after_save:                       bool,
@@ -298,6 +301,7 @@ pub struct WorkbenchState {
 	notification_preview_active:               Vec<ActiveNotification>,
 	notification_preview_queue:                VecDeque<u64>,
 	next_notification_id:                      u64,
+	next_plugin_invocation_id:                 u64,
 	pub workspace_file_cache:                  Vec<WorkspaceFileEntry>,
 	pub workspace_file_cache_loading:          bool,
 	pub status_bar:                            StatusBarState,
@@ -309,6 +313,7 @@ impl WorkbenchState {
 		Self {
 			title:                                 "Rim".to_string(),
 			workspace_root:                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+			plugins:                               Vec::new(),
 			leader_key:                            default_editor.editor.leader_key,
 			command_line:                          String::new(),
 			quit_after_save:                       false,
@@ -333,6 +338,7 @@ impl WorkbenchState {
 			notification_preview_active:           Vec::new(),
 			notification_preview_queue:            VecDeque::new(),
 			next_notification_id:                  1,
+			next_plugin_invocation_id:             1,
 			workspace_file_cache:                  Vec::new(),
 			workspace_file_cache_loading:          false,
 			status_bar:                            StatusBarState::default(),

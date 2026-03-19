@@ -2,7 +2,7 @@ use std::{ops::ControlFlow, path::PathBuf};
 
 use tracing::error;
 
-use super::{ActionHandlerError, ActionPorts, RuntimePorts, StoragePorts};
+use super::{ActionHandlerError, ActionPorts, RuntimePorts, StoragePorts, plugin_flow};
 use crate::{action::{AppAction, FileAction, KeyCode, KeyEvent, WindowAction}, command::{BindingMatch, BuiltinCommand, CommandCommand, CommandPaletteCommand, CommandTarget, InsertCommand, ModeCommand, OverlayCommand, PickerCommand, ResolvedCommand}, state::{KeymapScope, NotificationLevel, RimState}};
 
 pub(super) fn handle_command_mode_key<P>(ports: &P, state: &mut RimState, key: KeyEvent) -> ControlFlow<()>
@@ -109,9 +109,8 @@ where
 {
 	match target {
 		CommandTarget::Builtin(builtin) => execute_builtin_command(ports, state, builtin, argument),
-		CommandTarget::Plugin { command_id, .. } => {
-			state.push_notification(NotificationLevel::Warn, format!("plugin command unavailable: {}", command_id));
-			ControlFlow::Continue(())
+		CommandTarget::Plugin { plugin_id, command_id } => {
+			plugin_flow::enqueue_plugin_command(ports, state, plugin_id, command_id, argument)
 		}
 	}
 }

@@ -1,17 +1,19 @@
 use std::ops::ControlFlow;
 
-use rim_ports::{FilePicker, FileWatcher, StorageIo};
+use rim_ports::{FilePicker, FileWatcher, PluginRuntime, StorageIo};
 
 mod command_flow;
 mod editor_flow;
 mod errors;
 mod file_flow;
 mod mode_flow;
+mod plugin_flow;
 mod post_edit_flow;
 
 use errors::ActionHandlerError;
 use file_flow::{enqueue_history_save, enqueue_history_save_for_buffer, handle_file_action, handle_pending_swap_decision_key};
 use mode_flow::SequenceMatch;
+use plugin_flow::handle_plugin_runtime_action;
 
 use crate::{action::{AppAction, BufferAction, EditorAction, KeyEvent, LayoutAction, SystemAction, TabAction, WindowAction}, ports::SwapEditOp, state::{BufferId, BufferSwitchDirection, FocusDirection, NormalSequenceKey, NotificationLevel, PersistedBufferHistory, RimState, SplitAxis, WorkspaceSessionSnapshot}};
 
@@ -41,9 +43,14 @@ pub trait RuntimePorts: StoragePorts + FileWatcher<BufferId = BufferId> {}
 impl<T> RuntimePorts for T where T: StoragePorts + FileWatcher<BufferId = BufferId> {}
 
 #[doc(hidden)]
-pub trait ActionPorts: RuntimePorts + FilePicker {}
+pub trait PluginPorts: PluginRuntime {}
 
-impl<T> ActionPorts for T where T: RuntimePorts + FilePicker {}
+impl<T> PluginPorts for T where T: PluginRuntime {}
+
+#[doc(hidden)]
+pub trait ActionPorts: RuntimePorts + FilePicker + PluginPorts {}
+
+impl<T> ActionPorts for T where T: RuntimePorts + FilePicker + PluginPorts {}
 
 impl RimState {
 	pub fn apply_action<P>(&mut self, ports: &P, action: AppAction) -> ControlFlow<()>
@@ -104,6 +111,9 @@ impl RimState {
 				state.switch_to_next_tab();
 			}
 			AppAction::File(file_action) => return handle_file_action(ports, state, file_action),
+			AppAction::Plugin(plugin_action) => {
+				return handle_plugin_runtime_action(ports, state, plugin_action);
+			}
 			AppAction::System(system_action) => match system_action {
 				SystemAction::Quit => {
 					for (buffer_id, path, history) in state.all_file_backed_persisted_history_snapshots() {

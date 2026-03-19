@@ -1,9 +1,8 @@
 [package]
-name              = "rim-ports"
+name              = "rim-plugin-api"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 
 [dependencies]
-thiserror.workspace = true
-serde.workspace     = true
+rim-ports.workspace = true

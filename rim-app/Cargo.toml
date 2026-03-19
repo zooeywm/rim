@@ -23,6 +23,7 @@ rim-application.workspace        = true
 rim-domain.workspace             = true
 rim-ports.workspace              = true
 rim-paths.workspace              = true
+rim-plugin-host.workspace        = true
 rim-infra-storage.workspace      = true
 rim-infra-file-watcher.workspace = true
 rim-infra-input.workspace        = true

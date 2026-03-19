@@ -1,4 +1,4 @@
-use rim_ports::{FileWatcherError, StorageIoError};
+use rim_ports::{FileWatcherError, PluginRuntimeError, StorageIoError};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -87,5 +87,15 @@ pub(super) enum ActionHandlerError {
 	PersistenceHistorySave {
 		#[source]
 		source: StorageIoError,
+	},
+	#[error("enqueue plugin discovery failed")]
+	PluginDiscover {
+		#[source]
+		source: PluginRuntimeError,
+	},
+	#[error("enqueue plugin command failed")]
+	PluginInvoke {
+		#[source]
+		source: PluginRuntimeError,
 	},
 }

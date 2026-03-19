@@ -1,11 +1,12 @@
 use std::{cell::RefCell, fs, ops::ControlFlow, path::{Path, PathBuf}, process::Command};
 
 use anyhow::{Context, Result};
-use rim_application::{action::{AppAction, FileAction, SystemAction}, config as application_config, state::RimState};
+use rim_application::{action::{AppAction, FileAction, PluginRuntimeAction, SystemAction}, config as application_config, state::RimState};
 use rim_infra_file_watcher::FileWatcherState;
 use rim_infra_input::InputPumpService;
 use rim_infra_storage::StorageIoState;
 use rim_infra_ui::{Renderer, TerminalSession};
+use rim_plugin_host::PluginHostState;
 use rim_ports::{FilePicker, FilePickerError, StorageIo};
 use tracing::trace;
 
@@ -19,6 +20,8 @@ pub struct App {
 	storage_io:         StorageIoState,
 	#[as_ref]
 	file_watcher:       FileWatcherState,
+	#[as_ref]
+	plugin_host:        PluginHostState,
 	terminal_session:   RefCell<Option<TerminalSession>>,
 	input_pump_service: RefCell<InputPumpService>,
 	event_tx:           flume::Sender<AppAction>,
@@ -29,6 +32,7 @@ pub struct App {
 pub(crate) struct AppPorts<'a> {
 	pub(crate) storage_io:       &'a StorageIoState,
 	pub(crate) file_watcher:     &'a FileWatcherState,
+	pub(crate) plugin_host:      &'a PluginHostState,
 	pub(crate) terminal_session: &'a RefCell<Option<TerminalSession>>,
 	pub(crate) input_pump:       &'a RefCell<InputPumpService>,
 }
@@ -37,10 +41,11 @@ impl<'a> AppPorts<'a> {
 	fn new(
 		storage_io: &'a StorageIoState,
 		file_watcher: &'a FileWatcherState,
+		plugin_host: &'a PluginHostState,
 		terminal_session: &'a RefCell<Option<TerminalSession>>,
 		input_pump: &'a RefCell<InputPumpService>,
 	) -> Self {
-		Self { storage_io, file_watcher, terminal_session, input_pump }
+		Self { storage_io, file_watcher, plugin_host, terminal_session, input_pump }
 	}
 }
 
@@ -56,6 +61,7 @@ impl App {
 			state,
 			storage_io: StorageIoState::new(event_tx.clone()),
 			file_watcher: FileWatcherState::new(event_tx.clone()),
+			plugin_host: PluginHostState::new(event_tx.clone()),
 			terminal_session: RefCell::new(None),
 			input_pump_service: RefCell::new(InputPumpService::new(event_tx.clone())),
 			event_tx,
@@ -68,6 +74,10 @@ impl App {
 		// bus.
 		self.storage_io.start();
 		self.file_watcher.start();
+		self.plugin_host.start();
+		if let Err(err) = self.event_tx.send(AppAction::Plugin(PluginRuntimeAction::DiscoverRequested)) {
+			tracing::error!("plugin discovery start failed: {}", err);
+		}
 		for config_path in [
 			application_config::keymaps_config_path(),
 			application_config::commands_config_path(),
@@ -104,8 +114,13 @@ impl App {
 		// Startup file opening is expressed as regular actions to reuse the same
 		// application flow.
 		if file_paths.is_empty() {
-			let ports =
-				AppPorts::new(&self.storage_io, &self.file_watcher, &self.terminal_session, &self.input_pump_service);
+			let ports = AppPorts::new(
+				&self.storage_io,
+				&self.file_watcher,
+				&self.plugin_host,
+				&self.terminal_session,
+				&self.input_pump_service,
+			);
 			if let Err(err) = ports.enqueue_load_workspace_session() {
 				self.state.create_untitled_buffer();
 				self.state.workbench.status_bar.message = format!("session load failed: {}", err);
@@ -175,8 +190,13 @@ impl App {
 		}
 		// All state transitions must go through one handler entrypoint.
 		let state = &mut self.state;
-		let ports =
-			AppPorts::new(&self.storage_io, &self.file_watcher, &self.terminal_session, &self.input_pump_service);
+		let ports = AppPorts::new(
+			&self.storage_io,
+			&self.file_watcher,
+			&self.plugin_host,
+			&self.terminal_session,
+			&self.input_pump_service,
+		);
 		state.apply_action(&ports, action)
 	}
 
@@ -186,6 +206,7 @@ impl App {
 			AppAction::Editor(_)
 				| AppAction::Layout(_)
 				| AppAction::File(FileAction::WorkspaceSessionLoaded { .. })
+				| AppAction::Plugin(_)
 		)
 	}
 

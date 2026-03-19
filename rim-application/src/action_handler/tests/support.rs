@@ -1,6 +1,6 @@
 use std::{cell::RefCell, ops::ControlFlow, path::{Path, PathBuf}};
 
-use rim_ports::{FilePicker, FilePickerError, FileWatcher, FileWatcherError, StorageIo, StorageIoError};
+use rim_ports::{FilePicker, FilePickerError, FileWatcher, FileWatcherError, PluginCommandRequest, PluginRuntime, PluginRuntimeError, StorageIo, StorageIoError};
 
 use super::super::mode_flow::{SequenceMatch, resolve_normal_sequence_with_registry};
 use crate::{action::{AppAction, KeyEvent}, command::CommandRegistry, ports::SwapEditOp, state::{BufferId, NormalSequenceKey, PersistedBufferHistory, RimState, WorkspaceSessionSnapshot}};
@@ -17,6 +17,14 @@ impl FileWatcher for TestPorts {
 
 impl FilePicker for TestPorts {
 	fn pick_open_path(&self) -> Result<Option<PathBuf>, FilePickerError> { Ok(None) }
+}
+
+impl PluginRuntime for TestPorts {
+	fn enqueue_discover_plugins(&self, _workspace_root: String) -> Result<(), PluginRuntimeError> { Ok(()) }
+
+	fn enqueue_invoke_command(&self, _request: PluginCommandRequest) -> Result<(), PluginRuntimeError> {
+		Ok(())
+	}
 }
 
 impl StorageIo for TestPorts {
@@ -123,6 +131,8 @@ pub(super) struct RecordingPorts {
 	pub(super) watch_requests:        RefCell<Vec<(BufferId, PathBuf)>>,
 	pub(super) initialize_bases:      RefCell<Vec<(BufferId, PathBuf, String, bool)>>,
 	pub(super) session_saves:         RefCell<Vec<WorkspaceSessionSnapshot>>,
+	pub(super) plugin_discovers:      RefCell<Vec<String>>,
+	pub(super) plugin_invocations:    RefCell<Vec<PluginCommandRequest>>,
 }
 
 impl FileWatcher for RecordingPorts {
@@ -141,6 +151,18 @@ impl FileWatcher for RecordingPorts {
 
 impl FilePicker for RecordingPorts {
 	fn pick_open_path(&self) -> Result<Option<PathBuf>, FilePickerError> { Ok(None) }
+}
+
+impl PluginRuntime for RecordingPorts {
+	fn enqueue_discover_plugins(&self, workspace_root: String) -> Result<(), PluginRuntimeError> {
+		self.plugin_discovers.borrow_mut().push(workspace_root);
+		Ok(())
+	}
+
+	fn enqueue_invoke_command(&self, request: PluginCommandRequest) -> Result<(), PluginRuntimeError> {
+		self.plugin_invocations.borrow_mut().push(request);
+		Ok(())
+	}
 }
 
 impl StorageIo for RecordingPorts {
@@ -268,6 +290,14 @@ impl FilePicker for SwapDecisionPorts {
 	fn pick_open_path(&self) -> Result<Option<PathBuf>, FilePickerError> { Ok(None) }
 }
 
+impl PluginRuntime for SwapDecisionPorts {
+	fn enqueue_discover_plugins(&self, _workspace_root: String) -> Result<(), PluginRuntimeError> { Ok(()) }
+
+	fn enqueue_invoke_command(&self, _request: PluginCommandRequest) -> Result<(), PluginRuntimeError> {
+		Ok(())
+	}
+}
+
 #[derive(Default)]
 pub(super) struct FilePickerPorts {
 	pub(super) picked_path:       RefCell<Option<PathBuf>>,
@@ -290,6 +320,14 @@ impl FileWatcher for FilePickerPorts {
 impl FilePicker for FilePickerPorts {
 	fn pick_open_path(&self) -> Result<Option<PathBuf>, FilePickerError> {
 		Ok(self.picked_path.borrow().clone())
+	}
+}
+
+impl PluginRuntime for FilePickerPorts {
+	fn enqueue_discover_plugins(&self, _workspace_root: String) -> Result<(), PluginRuntimeError> { Ok(()) }
+
+	fn enqueue_invoke_command(&self, _request: PluginCommandRequest) -> Result<(), PluginRuntimeError> {
+		Ok(())
 	}
 }
 

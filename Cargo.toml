@@ -2,6 +2,8 @@
 members = [
   "rim-command-macros",
   "rim-ports",
+  "rim-plugin-api",
+  "rim-plugin-host",
   "rim-application",
   "rim-domain",
   "rim-paths",
@@ -43,6 +45,8 @@ unicode-width          = "0.2"
 rim-app                = { path = "rim-app" }
 rim-command-macros     = { path = "rim-command-macros" }
 rim-ports              = { path = "rim-ports" }
+rim-plugin-api         = { path = "rim-plugin-api" }
+rim-plugin-host        = { path = "rim-plugin-host" }
 rim-application        = { path = "rim-application" }
 rim-domain             = { path = "rim-domain" }
 rim-infra-storage      = { path = "rim-infra-storage" }

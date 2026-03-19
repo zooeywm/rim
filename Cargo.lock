@@ -1551,6 +1551,7 @@ dependencies = [
  "rim-infra-storage",
  "rim-infra-ui",
  "rim-paths",
+ "rim-plugin-host",
  "rim-ports",
  "serde",
  "thiserror 2.0.18",
@@ -1660,9 +1661,31 @@ name = "rim-paths"
 version = "0.0.3"
 
 [[package]]
+name = "rim-plugin-api"
+version = "0.0.3"
+dependencies = [
+ "rim-ports",
+]
+
+[[package]]
+name = "rim-plugin-host"
+version = "0.0.3"
+dependencies = [
+ "dep-inj",
+ "flume",
+ "rim-application",
+ "rim-plugin-api",
+ "rim-ports",
+ "serde",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "rim-ports"
 version = "0.0.3"
 dependencies = [
+ "serde",
  "thiserror 2.0.18",
 ]
 

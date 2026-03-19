@@ -4,7 +4,8 @@ use rim_application::ports::SwapEditOp;
 use rim_domain::model::{BufferId, PersistedBufferHistory, WorkspaceSessionSnapshot};
 use rim_infra_file_watcher::FileWatcherImpl;
 use rim_infra_storage::StorageIoImpl;
-use rim_ports::{FileWatcher, FileWatcherError, StorageIo, StorageIoError};
+use rim_plugin_host::PluginRuntimeImpl;
+use rim_ports::{FileWatcher, FileWatcherError, PluginCommandRequest, PluginRuntime, PluginRuntimeError, StorageIo, StorageIoError};
 
 use crate::app::AppPorts;
 
@@ -129,5 +130,15 @@ impl FileWatcher for AppPorts<'_> {
 
 	fn enqueue_watch_workspace_root(&self, path: PathBuf) -> Result<(), FileWatcherError> {
 		FileWatcherImpl::inj_ref(self.file_watcher).enqueue_watch_workspace_root(path)
+	}
+}
+
+impl PluginRuntime for AppPorts<'_> {
+	fn enqueue_discover_plugins(&self, workspace_root: String) -> Result<(), PluginRuntimeError> {
+		PluginRuntimeImpl::inj_ref(self.plugin_host).enqueue_discover_plugins(workspace_root)
+	}
+
+	fn enqueue_invoke_command(&self, request: PluginCommandRequest) -> Result<(), PluginRuntimeError> {
+		PluginRuntimeImpl::inj_ref(self.plugin_host).enqueue_invoke_command(request)
 	}
 }

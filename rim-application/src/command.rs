@@ -609,7 +609,7 @@ impl CommandSpec {
 				plugin_id:  registration.plugin_id,
 				command_id: registration.command_id,
 			},
-			display_name: None,
+			display_name: Some(registration.title),
 		}
 	}
 }
@@ -1043,7 +1043,7 @@ impl CommandRegistry {
 		unaliased_specs.sort_by(|left, right| left.id.display_text().cmp(&right.id.display_text()));
 		for spec in unaliased_specs {
 			candidates.push(CommandPaletteCandidate {
-				name:             String::new(),
+				name:             spec.display_name.clone().unwrap_or_default(),
 				command_id_label: spec.id.display_text(),
 				command_id:       spec.id,
 				description:      spec.description,
@@ -1331,6 +1331,7 @@ pub struct PluginCommandRegistration {
 	pub id:          String,
 	pub plugin_id:   String,
 	pub command_id:  String,
+	pub title:       String,
 	pub category:    String,
 	pub description: String,
 	pub arg_kind:    CommandArgKind,
