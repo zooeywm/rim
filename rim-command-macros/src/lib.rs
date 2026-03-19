@@ -25,29 +25,32 @@ fn expand_builtin_command_group(input: &DeriveInput) -> syn::Result<proc_macro2:
 	let data = expect_enum(&input.data)?;
 	let variants = data.variants.iter().collect::<Vec<_>>();
 
-	let all_variants = variants.iter().map(|variant| {
-		let variant_name = &variant.ident;
-		quote! { #enum_name::#variant_name }
-	});
-	let segment_arms = variants.iter().map(|variant| {
-		let variant_name = &variant.ident;
-		let segment = command_segment_for_variant(variant);
-		quote! { Self::#variant_name => #segment }
-	});
+	let all_variants = variants
+		.iter()
+		.map(|variant| command_constructor(enum_name, variant))
+		.collect::<syn::Result<Vec<_>>>()?;
+	let segment_arms = variants
+		.iter()
+		.map(|variant| {
+			let pattern = command_match_pattern(variant)?;
+			let segment = command_segment_for_variant(variant);
+			Ok(quote! { #pattern => #segment })
+		})
+		.collect::<syn::Result<Vec<_>>>()?;
 	let description_arms = variants
 		.iter()
 		.map(|variant| {
-			let variant_name = &variant.ident;
+			let pattern = command_match_pattern(variant)?;
 			let description = command_description_for_variant(variant)?;
-			Ok(quote! { Self::#variant_name => #description })
+			Ok(quote! { #pattern => #description })
 		})
 		.collect::<syn::Result<Vec<_>>>()?;
-	let arg_kind_arms = variants
+	let param_arms = variants
 		.iter()
 		.map(|variant| {
-			let variant_name = &variant.ident;
-			let arg_kind = command_arg_kind_for_variant(variant)?;
-			Ok(quote! { Self::#variant_name => #arg_kind })
+			let pattern = command_match_pattern(variant)?;
+			let params = command_params_for_variant(variant)?;
+			Ok(quote! { #pattern => #params })
 		})
 		.collect::<syn::Result<Vec<_>>>()?;
 
@@ -65,9 +68,9 @@ fn expand_builtin_command_group(input: &DeriveInput) -> syn::Result<proc_macro2:
 				}
 			}
 
-			fn arg_kind(self) -> crate::command::CommandArgKind {
+			fn params(self) -> &'static [crate::command::BuiltinCommandParamSpec] {
 				match self {
-					#(#arg_kind_arms,)*
+					#(#param_arms,)*
 				}
 			}
 
@@ -94,12 +97,12 @@ fn expand_builtin_command_root(input: &DeriveInput) -> syn::Result<proc_macro2::
 		Ok(quote! { Self::#variant_name(inner) => <#field_ty as crate::command::BuiltinCommandGroupMeta>::description(inner) })
 	});
 	let description_arms = description_arms.collect::<syn::Result<Vec<_>>>()?;
-	let arg_kind_arms = variants.iter().map(|variant| {
+	let param_arms = variants.iter().map(|variant| {
 		let variant_name = &variant.ident;
 		let field_ty = expect_single_field_type(variant)?;
-		Ok(quote! { Self::#variant_name(inner) => <#field_ty as crate::command::BuiltinCommandGroupMeta>::arg_kind(inner) })
+		Ok(quote! { Self::#variant_name(inner) => <#field_ty as crate::command::BuiltinCommandGroupMeta>::params(inner) })
 	});
-	let arg_kind_arms = arg_kind_arms.collect::<syn::Result<Vec<_>>>()?;
+	let param_arms = param_arms.collect::<syn::Result<Vec<_>>>()?;
 
 	let all_segments = variants
 		.iter()
@@ -166,9 +169,9 @@ fn expand_builtin_command_root(input: &DeriveInput) -> syn::Result<proc_macro2::
 				}
 			}
 
-			fn arg_kind(self) -> crate::command::CommandArgKind {
+			fn params(self) -> &'static [crate::command::BuiltinCommandParamSpec] {
 				match self {
-					#(#arg_kind_arms,)*
+					#(#param_arms,)*
 				}
 			}
 
@@ -224,25 +227,175 @@ fn command_description_for_variant(variant: &Variant) -> syn::Result<String> {
 	Ok(docs.join(" ").trim().to_string())
 }
 
-fn command_arg_kind_for_variant(variant: &Variant) -> syn::Result<proc_macro2::TokenStream> {
+fn command_params_for_variant(variant: &Variant) -> syn::Result<proc_macro2::TokenStream> {
+	if let Fields::Named(fields) = &variant.fields {
+		let params = fields.named.iter().map(command_param_spec_from_field).collect::<syn::Result<Vec<_>>>()?;
+		return Ok(quote! { &[#(#params,)*] });
+	}
+	if !matches!(variant.fields, Fields::Unit) {
+		return Err(syn::Error::new_spanned(
+			&variant.fields,
+			"builtin command variants must be unit or struct-like with named fields",
+		));
+	}
 	for attr in &variant.attrs {
 		if !attr.path().is_ident("command") {
 			continue;
 		}
-		let mut parsed = None;
+		let mut parsed_params = None;
 		attr.parse_nested_meta(|meta| {
+			if meta.path.is_ident("params") {
+				let mut params = Vec::new();
+				meta.parse_nested_meta(|param_meta| {
+					let name = param_meta.path.get_ident().ok_or_else(|| {
+						syn::Error::new_spanned(&param_meta.path, "parameter name must be an identifier")
+					})?;
+					let value = param_meta.value()?;
+					let ident: Ident = value.parse()?;
+					params.push(command_param_spec_tokens(name.to_string().as_str(), &ident, false)?);
+					Ok(())
+				})?;
+				parsed_params = Some(quote! { &[#(#params,)*] });
+			}
 			if meta.path.is_ident("arg") || meta.path.is_ident("arg_kind") {
 				let value = meta.value()?;
 				let ident: Ident = value.parse()?;
-				parsed = Some(quote! { crate::command::CommandArgKind::#ident });
+				let optional = matches!(ident.to_string().as_str(), "OptionalString" | "OptionalPath");
+				let param = command_param_spec_tokens("path", &ident, optional)?;
+				parsed_params = Some(quote! { &[#param] });
 			}
 			Ok(())
 		})?;
-		if let Some(arg_kind) = parsed {
-			return Ok(arg_kind);
+		if let Some(params) = parsed_params {
+			return Ok(params);
 		}
 	}
-	Ok(quote! { crate::command::CommandArgKind::None })
+	Ok(quote! { &[] })
+}
+
+fn command_match_pattern(variant: &Variant) -> syn::Result<proc_macro2::TokenStream> {
+	let variant_name = &variant.ident;
+	match &variant.fields {
+		Fields::Unit => Ok(quote! { Self::#variant_name }),
+		Fields::Named(_) => Ok(quote! { Self::#variant_name { .. } }),
+		Fields::Unnamed(_) => Err(syn::Error::new_spanned(
+			&variant.fields,
+			"builtin command variants must be unit or struct-like with named fields",
+		)),
+	}
+}
+
+fn command_constructor(enum_name: &Ident, variant: &Variant) -> syn::Result<proc_macro2::TokenStream> {
+	let variant_name = &variant.ident;
+	match &variant.fields {
+		Fields::Unit => Ok(quote! { #enum_name::#variant_name }),
+		Fields::Named(fields) => {
+			let field_values =
+				fields.named.iter().map(command_field_initializer).collect::<syn::Result<Vec<_>>>()?;
+			Ok(quote! { #enum_name::#variant_name { #(#field_values,)* } })
+		}
+		Fields::Unnamed(_) => Err(syn::Error::new_spanned(
+			&variant.fields,
+			"builtin command variants must be unit or struct-like with named fields",
+		)),
+	}
+}
+
+fn command_param_spec_from_field(field: &syn::Field) -> syn::Result<proc_macro2::TokenStream> {
+	let name = field
+		.ident
+		.as_ref()
+		.ok_or_else(|| syn::Error::new_spanned(field, "parameter field must be named"))?
+		.to_string();
+	let (marker_type, optional) = option_inner_type(&field.ty).unwrap_or((&field.ty, false));
+	let marker_ident = marker_type_ident(marker_type)?;
+	command_param_spec_tokens(name.as_str(), marker_ident, optional)
+}
+
+fn command_field_initializer(field: &syn::Field) -> syn::Result<proc_macro2::TokenStream> {
+	let field_name =
+		field.ident.as_ref().ok_or_else(|| syn::Error::new_spanned(field, "parameter field must be named"))?;
+	if option_inner_type(&field.ty).is_some() {
+		return Ok(quote! { #field_name: None });
+	}
+	let marker_ident = marker_type_ident(&field.ty)?;
+	let initializer = match marker_ident.to_string().as_str() {
+		"File" => quote! { crate::command::File },
+		"Text" => quote! { crate::command::Text },
+		other => {
+			return Err(syn::Error::new_spanned(
+				&field.ty,
+				format!("unsupported command parameter marker type: {}", other),
+			));
+		}
+	};
+	Ok(quote! { #field_name: #initializer })
+}
+
+fn option_inner_type(ty: &syn::Type) -> Option<(&syn::Type, bool)> {
+	let syn::Type::Path(type_path) = ty else {
+		return None;
+	};
+	let segment = type_path.path.segments.last()?;
+	if segment.ident != "Option" {
+		return None;
+	}
+	let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+		return None;
+	};
+	let inner = args.args.first()?;
+	let syn::GenericArgument::Type(inner_ty) = inner else {
+		return None;
+	};
+	Some((inner_ty, true))
+}
+
+fn marker_type_ident(ty: &syn::Type) -> syn::Result<&Ident> {
+	let syn::Type::Path(type_path) = ty else {
+		return Err(syn::Error::new_spanned(
+			ty,
+			"command parameter fields must use File, Text, or Option<T> marker types",
+		));
+	};
+	type_path
+		.path
+		.segments
+		.last()
+		.map(|segment| &segment.ident)
+		.ok_or_else(|| syn::Error::new_spanned(ty, "unsupported command parameter type"))
+}
+
+fn command_param_spec_tokens(
+	name: &str,
+	ident: &Ident,
+	optional: bool,
+) -> syn::Result<proc_macro2::TokenStream> {
+	let (kind, inferred_optional, picker) = match ident.to_string().as_str() {
+		"String" | "Text" => (quote! { crate::command::CommandArgKind::String }, false, quote! { None }),
+		"OptionalString" => (quote! { crate::command::CommandArgKind::String }, true, quote! { None }),
+		"Path" | "File" => (
+			quote! { crate::command::CommandArgKind::File },
+			false,
+			quote! { Some(crate::command::PickerKind::File) },
+		),
+		"OptionalPath" => (
+			quote! { crate::command::CommandArgKind::File },
+			true,
+			quote! { Some(crate::command::PickerKind::File) },
+		),
+		other => {
+			return Err(syn::Error::new_spanned(ident, format!("unsupported command parameter kind: {}", other)));
+		}
+	};
+	let optional = optional || inferred_optional;
+	Ok(quote! {
+		crate::command::BuiltinCommandParamSpec {
+			name: #name,
+			kind: #kind,
+			optional: #optional,
+			picker: #picker,
+		}
+	})
 }
 
 fn command_namespace_for_root_variant(variant: &Variant) -> syn::Result<String> {

@@ -9,7 +9,7 @@ use crate::{action::{AppAction, BufferAction, EditorAction, LayoutAction, TabAct
 pub trait BuiltinCommandGroupMeta: Copy {
 	fn command_segment(self) -> &'static str;
 	fn description(self) -> &'static str;
-	fn arg_kind(self) -> CommandArgKind;
+	fn params(self) -> &'static [BuiltinCommandParamSpec];
 	fn all_commands() -> &'static [Self];
 }
 
@@ -17,9 +17,25 @@ pub trait BuiltinCommandRootMeta: Copy {
 	fn id(self) -> String;
 	fn category(self) -> BuiltinCommandCategory;
 	fn description(self) -> &'static str;
-	fn arg_kind(self) -> CommandArgKind;
+	fn params(self) -> &'static [BuiltinCommandParamSpec];
 	fn all_commands() -> Vec<Self>;
 	fn from_id(id: &str) -> Option<Self>;
+}
+
+/// Zero-sized marker used only by builtin command declaration parsing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct File;
+
+/// Zero-sized marker used only by builtin command declaration parsing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct Text;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuiltinCommandParamSpec {
+	pub name:     &'static str,
+	pub kind:     CommandArgKind,
+	pub optional: bool,
+	pub picker:   Option<PickerKind>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -294,29 +310,23 @@ pub enum CommandCommand {
 	/// Force quit application
 	QuitAllForce,
 	/// Save current buffer
-	#[command(arg = OptionalPath)]
-	Save,
+	Save { path: Option<File> },
 	/// Force save current buffer
-	#[command(arg = OptionalPath)]
-	SaveForce,
+	SaveForce { path: Option<File> },
 	/// Save all file-backed buffers
 	SaveAll,
 	/// Save current buffer and quit
-	#[command(arg = OptionalPath)]
-	SaveAndQuit,
+	SaveAndQuit { path: Option<File> },
 	/// Force save current buffer and quit
-	#[command(arg = OptionalPath)]
-	SaveAndQuitForce,
+	SaveAndQuitForce { path: Option<File> },
 	/// Save all file-backed buffers and quit
 	SaveAllAndQuit,
 	/// Force save all file-backed buffers and quit
 	SaveAllAndQuitForce,
 	/// Reload current buffer
-	#[command(arg = OptionalPath)]
-	Reload,
+	Reload { path: Option<File> },
 	/// Force reload current buffer
-	#[command(arg = OptionalPath)]
-	ReloadForce,
+	ReloadForce { path: Option<File> },
 	/// Execute current command input
 	Submit,
 	/// Delete previous command character
@@ -385,7 +395,7 @@ impl CommandCategoryInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunDirective {
 	Builtin(BuiltinCommand),
-	PluginInvocation { plugin_name: String, argument: Option<String> },
+	PluginInvocation { plugin_name: String },
 	Unresolved(String),
 }
 
@@ -395,6 +405,11 @@ impl RunDirective {
 		if let Some(command) = BuiltinCommand::from_id(trimmed) {
 			return Self::Builtin(command);
 		}
+		if let Some(plugin_name) = trimmed.strip_prefix("plugin.")
+			&& parse_plugin_command_name(plugin_name).is_some()
+		{
+			return Self::PluginInvocation { plugin_name: plugin_name.to_string() };
+		}
 		if let Some(payload) = trimmed.strip_prefix("plugin ") {
 			let payload = payload.trim();
 			if payload.is_empty() {
@@ -402,9 +417,10 @@ impl RunDirective {
 			}
 			let mut segments = payload.split_whitespace();
 			let plugin_name = segments.next().expect("plugin command is non-empty").to_string();
-			let tail = segments.collect::<Vec<_>>().join(" ");
-			let argument = if tail.is_empty() { None } else { Some(tail) };
-			return Self::PluginInvocation { plugin_name, argument };
+			if segments.next().is_some() || parse_plugin_command_name(plugin_name.as_str()).is_none() {
+				return Self::Unresolved(trimmed.to_string());
+			}
+			return Self::PluginInvocation { plugin_name };
 		}
 		Self::Unresolved(trimmed.to_string())
 	}
@@ -412,10 +428,7 @@ impl RunDirective {
 	pub fn render(&self) -> String {
 		match self {
 			Self::Builtin(command) => command.id(),
-			Self::PluginInvocation { plugin_name, argument } => match argument {
-				Some(argument) => format!("plugin {} {}", plugin_name, argument),
-				None => format!("plugin {}", plugin_name),
-			},
+			Self::PluginInvocation { plugin_name } => format!("plugin.{}", plugin_name),
 			Self::Unresolved(raw) => raw.clone(),
 		}
 	}
@@ -566,9 +579,21 @@ pub enum CommandTarget {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandArgKind {
-	None,
-	OptionalPath,
-	RawTail,
+	String,
+	File,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PickerKind {
+	File,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandParamSpec {
+	pub name:     String,
+	pub kind:     CommandArgKind,
+	pub optional: bool,
+	pub picker:   Option<PickerKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -576,15 +601,39 @@ pub struct CommandSpec {
 	pub id:           CommandId,
 	pub category:     CommandCategoryInfo,
 	pub description:  String,
-	pub arg_kind:     CommandArgKind,
+	pub params:       Vec<CommandParamSpec>,
 	pub target:       CommandTarget,
 	pub display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedCommand {
-	pub spec:     CommandSpec,
-	pub argument: Option<String>,
+	pub command_id: CommandId,
+	pub target:     CommandTarget,
+	pub argv:       Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandResolveError {
+	UnknownCommand { input: String },
+	InvalidSyntax { message: String },
+	MissingRequiredParams { command_id: String, missing: Vec<String> },
+	TooManyArguments { command_id: String, expected: usize, actual: usize },
+}
+
+impl std::fmt::Display for CommandResolveError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::UnknownCommand { input } => write!(f, "unknown command: {}", input),
+			Self::InvalidSyntax { message } => write!(f, "invalid command syntax: {}", message),
+			Self::MissingRequiredParams { command_id, missing } => {
+				write!(f, "missing required parameters for {}: {}", command_id, missing.join(", "))
+			}
+			Self::TooManyArguments { command_id, expected, actual } => {
+				write!(f, "too many arguments for {}: expected at most {}, got {}", command_id, expected, actual)
+			}
+		}
+	}
 }
 
 impl CommandSpec {
@@ -593,9 +642,9 @@ impl CommandSpec {
 			id:           CommandId::Builtin(command),
 			category:     CommandCategoryInfo::builtin(command.category()),
 			description:  command.description().to_string(),
-			arg_kind:     command.arg_kind(),
+			params:       builtin_params_to_runtime(command.params()),
 			target:       CommandTarget::Builtin(command),
-			display_name: None,
+			display_name: Some(derived_display_name(command)),
 		}
 	}
 
@@ -604,13 +653,46 @@ impl CommandSpec {
 			id:           CommandId::Plugin(registration.id.clone()),
 			category:     CommandCategoryInfo::plugin(registration.category),
 			description:  registration.description,
-			arg_kind:     registration.arg_kind,
+			params:       registration.params,
 			target:       CommandTarget::Plugin {
 				plugin_id:  registration.plugin_id,
 				command_id: registration.command_id,
 			},
 			display_name: None,
 		}
+	}
+}
+
+fn builtin_params_to_runtime(params: &[BuiltinCommandParamSpec]) -> Vec<CommandParamSpec> {
+	params
+		.iter()
+		.map(|param| CommandParamSpec {
+			name:     param.name.to_string(),
+			kind:     param.kind,
+			optional: param.optional,
+			picker:   param.picker,
+		})
+		.collect()
+}
+
+fn derived_display_name(command: BuiltinCommand) -> String {
+	normalize_pascal_case_name(command.id().rsplit('.').next().unwrap_or_default())
+}
+
+fn render_param_summary(params: &[CommandParamSpec]) -> String {
+	params
+		.iter()
+		.map(|param| if param.optional { format!("[{}]", param.name) } else { format!("<{}>", param.name) })
+		.collect::<Vec<_>>()
+		.join(" ")
+}
+
+fn format_command_palette_command_label(command_id: &CommandId, params: &[CommandParamSpec]) -> String {
+	let summary = render_param_summary(params);
+	if summary.is_empty() {
+		command_id.display_text()
+	} else {
+		format!("{} {}", command_id.display_text(), summary)
 	}
 }
 
@@ -659,6 +741,7 @@ impl CommandPaletteItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CommandPaletteCandidate {
 	name:             String,
+	alternate_name:   Option<String>,
 	completion:       String,
 	command_id:       CommandId,
 	command_id_label: String,
@@ -677,6 +760,8 @@ pub enum BindingMatch<T> {
 struct ScopedKeyBinding {
 	keys:       Vec<NormalSequenceKey>,
 	command_id: CommandId,
+	target:     CommandTarget,
+	args:       Vec<String>,
 	desc:       Option<String>,
 }
 
@@ -684,6 +769,8 @@ struct ScopedKeyBinding {
 struct CommandAlias {
 	name:                String,
 	resolved_command_id: Option<CommandId>,
+	target:              Option<CommandTarget>,
+	args:                Vec<String>,
 	run:                 RunDirective,
 	desc:                Option<String>,
 	error:               Option<String>,
@@ -762,6 +849,8 @@ impl CommandRegistry {
 				self.command_aliases.push(CommandAlias {
 					name:                alias.name.clone(),
 					resolved_command_id: None,
+					target:              None,
+					args:                alias.args.clone(),
 					run:                 alias.run.clone(),
 					desc:                alias.desc.clone(),
 					error:               Some(error),
@@ -770,7 +859,9 @@ impl CommandRegistry {
 			};
 			self.command_aliases.push(CommandAlias {
 				name:                alias.name.clone(),
-				resolved_command_id: Some(resolved.spec.id),
+				resolved_command_id: Some(resolved.command_id.clone()),
+				target:              Some(resolved.target.clone()),
+				args:                alias.args.clone(),
 				run:                 alias.run.clone(),
 				desc:                alias.desc.clone(),
 				error:               None,
@@ -809,11 +900,11 @@ impl CommandRegistry {
 				continue;
 			};
 			let bindings = self.bindings_mut(scope);
-			let should_override = !overridden_commands.iter().any(|command_id| command_id == &resolved.spec.id);
+			let should_override = !overridden_commands.iter().any(|command_id| command_id == &resolved.command_id);
 			let mut staged = if should_override {
 				bindings
 					.iter()
-					.filter(|candidate| candidate.command_id != resolved.spec.id)
+					.filter(|candidate| candidate.command_id != resolved.command_id)
 					.cloned()
 					.collect::<Vec<_>>()
 			} else {
@@ -822,7 +913,7 @@ impl CommandRegistry {
 			let mut conflicted = false;
 			for keys in key_sets {
 				if let Some(existing) = staged.iter_mut().find(|candidate| candidate.keys == keys) {
-					if existing.command_id != resolved.spec.id {
+					if existing.command_id != resolved.command_id {
 						errors.push(CommandConfigError::Keymap {
 							scope: scope_label.to_string(),
 							binding_index,
@@ -835,6 +926,8 @@ impl CommandRegistry {
 						conflicted = true;
 						break;
 					}
+					existing.target = resolved.target.clone();
+					existing.args = binding.args.clone();
 					existing.desc = binding.desc.clone();
 					continue;
 				}
@@ -862,7 +955,9 @@ impl CommandRegistry {
 				}
 				staged.push(ScopedKeyBinding {
 					keys,
-					command_id: resolved.spec.id.clone(),
+					command_id: resolved.command_id.clone(),
+					target: resolved.target.clone(),
+					args: binding.args.clone(),
 					desc: binding.desc.clone(),
 				});
 			}
@@ -870,7 +965,7 @@ impl CommandRegistry {
 				continue;
 			}
 			if should_override {
-				overridden_commands.push(resolved.spec.id.clone());
+				overridden_commands.push(resolved.command_id.clone());
 			}
 			*bindings = staged;
 		}
@@ -904,7 +999,7 @@ impl CommandRegistry {
 		plugin_command_id: String,
 		description: String,
 	) {
-		let default_name = default_name.trim().to_string();
+		let default_name = normalize_pascal_case_name(default_name.trim());
 		if default_name.is_empty() {
 			return;
 		}
@@ -917,9 +1012,13 @@ impl CommandRegistry {
 		self.command_aliases.push(CommandAlias {
 			name:                default_name,
 			resolved_command_id: Some(command_id),
+			target:              Some(CommandTarget::Plugin {
+				plugin_id:  plugin_id.clone(),
+				command_id: plugin_command_id.clone(),
+			}),
+			args:                Vec::new(),
 			run:                 RunDirective::PluginInvocation {
 				plugin_name: format!("{}.{}", plugin_id, plugin_command_id),
-				argument:    None,
 			},
 			desc:                Some(description),
 			error:               None,
@@ -930,7 +1029,7 @@ impl CommandRegistry {
 		&self,
 		scope: KeymapScope,
 		keys: &[NormalSequenceKey],
-	) -> BindingMatch<CommandTarget> {
+	) -> BindingMatch<ResolvedCommand> {
 		resolve_key_binding_set(&self.commands, self.bindings(scope), keys)
 	}
 
@@ -948,36 +1047,34 @@ impl CommandRegistry {
 			.collect()
 	}
 
-	pub fn resolve_command_input(&self, input: &str) -> Option<ResolvedCommand> {
-		let trimmed = input.trim();
-		let (name, argument) = match trimmed.split_once(' ') {
-			Some((name, argument)) => (name, Some(argument.trim().to_string())),
-			None => (trimmed, None),
+	pub fn command_spec(&self, command_id: &CommandId) -> Option<&CommandSpec> { self.commands.get(command_id) }
+
+	pub fn resolve_command_input(&self, input: &str) -> Result<ResolvedCommand, CommandResolveError> {
+		let trimmed = input.trim_start();
+		let Some((resolution, raw_argument_input, _)) = self.resolve_command_prefix(trimmed) else {
+			let unknown =
+				trimmed.split_whitespace().next().map(str::to_string).unwrap_or_else(|| input.trim().to_string());
+			return Err(CommandResolveError::UnknownCommand { input: unknown });
 		};
-		let command_id = if let Some(command) = BuiltinCommand::from_id(name) {
-			CommandId::Builtin(command)
-		} else if self.commands.contains_key(&CommandId::Plugin(name.to_string())) {
-			CommandId::Plugin(name.to_string())
-		} else {
-			let alias = self.command_aliases.iter().find(|alias| alias.name == name)?;
-			alias.resolved_command_id.clone()?
-		};
-		self.resolve_command_id_with_argument(&command_id, argument)
+		let parsed = tokenize_command_input(raw_argument_input)
+			.map_err(|message| CommandResolveError::InvalidSyntax { message })?;
+		let mut argv = resolution.argv_prefix;
+		argv.extend(parsed.tokens);
+		self.resolve_command_id_with_argv(&resolution.command_id, &resolution.target, argv)
 	}
 
-	pub fn resolve_command_id_with_argument(
+	pub fn resolve_command_id_with_argv(
 		&self,
 		command_id: &CommandId,
-		argument: Option<String>,
-	) -> Option<ResolvedCommand> {
-		let spec = self.commands.get(command_id)?.clone();
-		match spec.arg_kind {
-			CommandArgKind::None if argument.as_deref().is_some_and(|arg| !arg.is_empty()) => None,
-			CommandArgKind::None => Some(ResolvedCommand { spec, argument: None }),
-			CommandArgKind::OptionalPath | CommandArgKind::RawTail => {
-				Some(ResolvedCommand { spec, argument: argument.filter(|arg| !arg.is_empty()) })
-			}
-		}
+		target: &CommandTarget,
+		argv: Vec<String>,
+	) -> Result<ResolvedCommand, CommandResolveError> {
+		let spec = self
+			.commands
+			.get(command_id)
+			.ok_or_else(|| CommandResolveError::UnknownCommand { input: command_id.display_text() })?;
+		validate_command_argv(spec, argv.as_slice())?;
+		Ok(ResolvedCommand { command_id: command_id.clone(), target: target.clone(), argv })
 	}
 
 	pub fn command_palette_matches(&self, input: &str, limit: usize) -> Vec<CommandPaletteMatch> {
@@ -1001,13 +1098,17 @@ impl CommandRegistry {
 				}
 
 				let name_match = frizbee_match(query, candidate.name.as_str());
+				let alternate_name_match =
+					candidate.alternate_name.as_deref().and_then(|text| frizbee_match(query, text));
 				let command_match = frizbee_match(query, candidate.command_id_label.as_str());
 				let description_match = frizbee_match(query, candidate.description.as_str());
-				let score = [name_match.as_ref(), command_match.as_ref(), description_match.as_ref()]
-					.into_iter()
-					.flatten()
-					.map(|(score, _)| *score)
-					.max()?;
+				let mut score = name_match.as_ref().map(|(score, _)| *score).unwrap_or_default();
+				score = score.max(alternate_name_match.as_ref().map(|(score, _)| *score).unwrap_or_default());
+				score = score.max(command_match.as_ref().map(|(score, _)| *score).unwrap_or_default());
+				score = score.max(description_match.as_ref().map(|(score, _)| *score).unwrap_or_default());
+				if score == 0 {
+					return None;
+				}
 				let name_match_indices = name_match.map(|(_, indices)| indices).unwrap_or_default();
 				let command_id_match_indices = command_match.map(|(_, indices)| indices).unwrap_or_default();
 				let description_match_indices = description_match.map(|(_, indices)| indices).unwrap_or_default();
@@ -1050,7 +1151,16 @@ impl CommandRegistry {
 			}
 			candidates.push(CommandPaletteCandidate {
 				name:             alias.name.clone(),
-				completion:       alias.name.clone(),
+				alternate_name:   alias
+					.resolved_command_id
+					.as_ref()
+					.and_then(|command_id| self.commands.get(command_id))
+					.and_then(|spec| spec.display_name.clone()),
+				completion:       alias
+					.resolved_command_id
+					.as_ref()
+					.map(CommandId::display_text)
+					.unwrap_or_else(|| alias.run.render()),
 				command_id:       alias
 					.resolved_command_id
 					.clone()
@@ -1058,7 +1168,12 @@ impl CommandRegistry {
 				command_id_label: alias
 					.resolved_command_id
 					.as_ref()
-					.map(CommandId::display_text)
+					.and_then(|command_id| {
+						self
+							.commands
+							.get(command_id)
+							.map(|spec| format_command_palette_command_label(command_id, spec.params.as_slice()))
+					})
 					.unwrap_or_else(|| alias.run.render()),
 				description:      match (
 					alias.error.as_deref(),
@@ -1067,7 +1182,8 @@ impl CommandRegistry {
 				) {
 					(Some(_), Some(_), _) => "invalid command".to_string(),
 					(Some(_), None, _) => "invalid command".to_string(),
-					(None, Some(desc), _) => desc.to_string(),
+					(None, Some(desc), Some(_)) => desc.to_string(),
+					(None, Some(desc), None) => desc.to_string(),
 					(None, None, Some(command_id)) => {
 						self.commands.get(command_id).map(|spec| spec.description.clone()).unwrap_or_default()
 					}
@@ -1087,8 +1203,9 @@ impl CommandRegistry {
 		for spec in unaliased_specs {
 			candidates.push(CommandPaletteCandidate {
 				name:             spec.display_name.clone().unwrap_or_default(),
+				alternate_name:   None,
 				completion:       spec.id.display_text(),
-				command_id_label: spec.id.display_text(),
+				command_id_label: format_command_palette_command_label(&spec.id, spec.params.as_slice()),
 				command_id:       spec.id,
 				description:      spec.description,
 				is_error:         false,
@@ -1101,8 +1218,12 @@ impl CommandRegistry {
 	fn resolve_run_directive(&self, run: &RunDirective) -> Option<ResolvedCommand> {
 		match run {
 			RunDirective::Builtin(command) => {
-				let spec = self.commands.get(&CommandId::Builtin(*command))?.clone();
-				Some(ResolvedCommand { spec, argument: None })
+				let spec = self.commands.get(&CommandId::Builtin(*command))?;
+				Some(ResolvedCommand {
+					command_id: spec.id.clone(),
+					target:     spec.target.clone(),
+					argv:       Vec::new(),
+				})
 			}
 			RunDirective::PluginInvocation { .. } | RunDirective::Unresolved(_) => None,
 		}
@@ -1116,24 +1237,16 @@ impl CommandRegistry {
 	}
 
 	fn resolve_plugin_run_directive(&mut self, run: &RunDirective) -> Option<ResolvedCommand> {
-		let RunDirective::PluginInvocation { plugin_name, argument } = run else {
+		let RunDirective::PluginInvocation { plugin_name } = run else {
 			return None;
 		};
-		let (plugin_id, plugin_command_id) = parse_plugin_command_name(plugin_name)?;
 		let command_id = CommandId::Plugin(format!("plugin.{}", plugin_name));
-		if !self.commands.contains_key(&command_id) {
-			self.commands.insert(command_id.clone(), CommandSpec {
-				id:           command_id.clone(),
-				category:     CommandCategoryInfo::plugin(plugin_id.as_str()),
-				description:  format!("Plugin command '{}'", plugin_name),
-				arg_kind:     CommandArgKind::RawTail,
-				target:       CommandTarget::Plugin { plugin_id, command_id: plugin_command_id },
-				display_name: None,
-			});
-		}
-
-		let spec = self.commands.get(&command_id)?.clone();
-		Some(ResolvedCommand { spec, argument: argument.clone() })
+		let spec = self.commands.get(&command_id)?;
+		Some(ResolvedCommand {
+			command_id: spec.id.clone(),
+			target:     spec.target.clone(),
+			argv:       Vec::new(),
+		})
 	}
 
 	fn bindings(&self, scope: KeymapScope) -> &[ScopedKeyBinding] {
@@ -1186,6 +1299,7 @@ impl CommandRegistry {
 			command.push(CommandAliasConfig {
 				name: alias.name.clone(),
 				run:  alias.run.clone(),
+				args: alias.args.clone(),
 				desc: alias.desc.clone().or_else(|| Some(spec.description.clone())),
 			});
 		}
@@ -1212,6 +1326,232 @@ impl CommandRegistry {
 			self.commands.insert(CommandId::Builtin(command), CommandSpec::builtin(command));
 		}
 	}
+
+	pub fn active_parameter_context(&self, input: &str) -> Option<ActiveParameterContext> {
+		let trimmed = input.trim_start();
+		let (resolution, raw_argument_input, has_separator) = self.resolve_command_prefix(trimmed)?;
+		let spec = self.commands.get(&resolution.command_id)?;
+		if spec.params.is_empty() || !has_separator {
+			return None;
+		}
+		let parsed = tokenize_command_input(raw_argument_input).ok()?;
+		let arg_tokens = parsed.tokens.as_slice();
+		let active_index =
+			if parsed.ends_with_separator { arg_tokens.len() } else { arg_tokens.len().checked_sub(1)? };
+		let param = spec.params.get(active_index)?;
+		let input = if parsed.ends_with_separator {
+			String::new()
+		} else {
+			arg_tokens.get(active_index).cloned().unwrap_or_default()
+		};
+		Some(ActiveParameterContext {
+			command_id: resolution.command_id,
+			target: resolution.target,
+			index: active_index,
+			param: param.clone(),
+			input,
+		})
+	}
+
+	fn resolve_command_prefix<'a>(&self, input: &'a str) -> Option<(CommandTokenResolution, &'a str, bool)> {
+		let trimmed = input.trim_start();
+		if trimmed.is_empty() {
+			return None;
+		}
+
+		let command_end = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
+		let command_token = &trimmed[..command_end];
+		let raw_argument_input = &trimmed[command_end..];
+		if let Some(resolution) = self.resolve_command_token(command_token) {
+			return Some((resolution, raw_argument_input, !raw_argument_input.is_empty()));
+		}
+
+		let mut display_name_matches = self
+			.commands
+			.values()
+			.filter_map(|spec| spec.display_name.as_ref().map(|display_name| (display_name.as_str(), spec)))
+			.collect::<Vec<_>>();
+		display_name_matches
+			.sort_by(|left, right| right.0.len().cmp(&left.0.len()).then_with(|| left.0.cmp(right.0)));
+		for (display_name, spec) in display_name_matches {
+			if trimmed == display_name {
+				return Some((
+					CommandTokenResolution {
+						command_id:  spec.id.clone(),
+						target:      spec.target.clone(),
+						argv_prefix: Vec::new(),
+					},
+					"",
+					false,
+				));
+			}
+			if let Some(raw_argument_input) = trimmed.strip_prefix(display_name)
+				&& raw_argument_input.chars().next().is_some_and(char::is_whitespace)
+			{
+				return Some((
+					CommandTokenResolution {
+						command_id:  spec.id.clone(),
+						target:      spec.target.clone(),
+						argv_prefix: Vec::new(),
+					},
+					raw_argument_input,
+					true,
+				));
+			}
+		}
+
+		None
+	}
+
+	fn resolve_command_token(&self, token: &str) -> Option<CommandTokenResolution> {
+		if let Some(command) = BuiltinCommand::from_id(token) {
+			let spec = self.commands.get(&CommandId::Builtin(command))?;
+			return Some(CommandTokenResolution {
+				command_id:  spec.id.clone(),
+				target:      spec.target.clone(),
+				argv_prefix: Vec::new(),
+			});
+		}
+		if let Some(spec) = self.commands.get(&CommandId::Plugin(token.to_string())) {
+			return Some(CommandTokenResolution {
+				command_id:  spec.id.clone(),
+				target:      spec.target.clone(),
+				argv_prefix: Vec::new(),
+			});
+		}
+		if let Some(alias) = self.command_aliases.iter().find(|alias| alias.name == token) {
+			return Some(CommandTokenResolution {
+				command_id:  alias.resolved_command_id.clone()?,
+				target:      alias.target.clone()?,
+				argv_prefix: alias.args.clone(),
+			});
+		}
+		self.commands.values().find(|spec| spec.display_name.as_deref() == Some(token)).map(|spec| {
+			CommandTokenResolution {
+				command_id:  spec.id.clone(),
+				target:      spec.target.clone(),
+				argv_prefix: Vec::new(),
+			}
+		})
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Suggestion {
+	pub value:       String,
+	pub label:       String,
+	pub description: Option<String>,
+}
+
+pub trait Picker {
+	fn suggestions(&self, input: &str) -> Vec<Suggestion>;
+}
+
+pub struct PickerRegistry<'a> {
+	map: HashMap<PickerKind, Box<dyn Picker + 'a>>,
+}
+
+impl<'a> Default for PickerRegistry<'a> {
+	fn default() -> Self { Self { map: HashMap::new() } }
+}
+
+impl<'a> PickerRegistry<'a> {
+	pub fn register(&mut self, kind: PickerKind, picker: impl Picker + 'a) {
+		self.map.insert(kind, Box::new(picker));
+	}
+
+	pub fn suggestions(&self, kind: PickerKind, input: &str) -> Vec<Suggestion> {
+		self.map.get(&kind).map(|picker| picker.suggestions(input)).unwrap_or_default()
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveParameterContext {
+	pub command_id: CommandId,
+	pub target:     CommandTarget,
+	pub index:      usize,
+	pub param:      CommandParamSpec,
+	pub input:      String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommandTokenResolution {
+	command_id:  CommandId,
+	target:      CommandTarget,
+	argv_prefix: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TokenizedCommandInput {
+	tokens:              Vec<String>,
+	ends_with_separator: bool,
+}
+
+fn validate_command_argv(spec: &CommandSpec, argv: &[String]) -> Result<(), CommandResolveError> {
+	let required_count = spec.params.iter().filter(|param| !param.optional).count();
+	if argv.len() < required_count {
+		let missing = spec
+			.params
+			.iter()
+			.skip(argv.len())
+			.filter(|param| !param.optional)
+			.map(|param| param.name.clone())
+			.collect::<Vec<_>>();
+		return Err(CommandResolveError::MissingRequiredParams { command_id: spec.id.display_text(), missing });
+	}
+	if argv.len() > spec.params.len() {
+		return Err(CommandResolveError::TooManyArguments {
+			command_id: spec.id.display_text(),
+			expected:   spec.params.len(),
+			actual:     argv.len(),
+		});
+	}
+	Ok(())
+}
+
+fn tokenize_command_input(input: &str) -> Result<TokenizedCommandInput, String> {
+	let mut tokens = Vec::new();
+	let mut current = String::new();
+	let mut in_single = false;
+	let mut in_double = false;
+	let mut escaped = false;
+	let mut saw_token_boundary = false;
+
+	for ch in input.chars() {
+		if escaped {
+			current.push(ch);
+			escaped = false;
+			saw_token_boundary = false;
+			continue;
+		}
+		match ch {
+			'\\' => escaped = true,
+			'\'' if !in_double => in_single = !in_single,
+			'"' if !in_single => in_double = !in_double,
+			ch if ch.is_whitespace() && !in_single && !in_double => {
+				if !current.is_empty() {
+					tokens.push(std::mem::take(&mut current));
+				}
+				saw_token_boundary = true;
+			}
+			_ => {
+				current.push(ch);
+				saw_token_boundary = false;
+			}
+		}
+	}
+
+	if escaped {
+		return Err("unterminated escape sequence".to_string());
+	}
+	if in_single || in_double {
+		return Err("unterminated quoted string".to_string());
+	}
+	if !current.is_empty() {
+		tokens.push(current);
+	}
+
+	Ok(TokenizedCommandInput { tokens, ends_with_separator: saw_token_boundary })
 }
 
 fn frizbee_match(query: &str, haystack: &str) -> Option<(u16, Vec<usize>)> {
@@ -1301,6 +1641,8 @@ pub struct CommandAliasSection {
 pub struct KeymapBindingConfig {
 	pub on:   KeyBindingOn,
 	pub run:  RunDirective,
+	#[serde(default)]
+	pub args: Vec<String>,
 	pub desc: Option<String>,
 }
 
@@ -1351,12 +1693,16 @@ impl<'de> Deserialize<'de> for KeyBindingOn {
 pub struct CommandAliasConfig {
 	pub name: String,
 	pub run:  RunDirective,
+	#[serde(default)]
+	pub args: Vec<String>,
 	pub desc: Option<String>,
 }
 
 trait KeyBindingView {
 	fn keys(&self) -> &[NormalSequenceKey];
 	fn command_id(&self) -> &CommandId;
+	fn target(&self) -> &CommandTarget;
+	fn args(&self) -> &[String];
 	fn desc(&self) -> Option<&str>;
 }
 
@@ -1364,6 +1710,10 @@ impl KeyBindingView for ScopedKeyBinding {
 	fn keys(&self) -> &[NormalSequenceKey] { self.keys.as_slice() }
 
 	fn command_id(&self) -> &CommandId { &self.command_id }
+
+	fn target(&self) -> &CommandTarget { &self.target }
+
+	fn args(&self) -> &[String] { self.args.as_slice() }
 
 	fn desc(&self) -> Option<&str> { self.desc.as_deref() }
 }
@@ -1376,14 +1726,14 @@ pub struct PluginCommandRegistration {
 	pub command_id:   String,
 	pub category:     String,
 	pub description:  String,
-	pub arg_kind:     CommandArgKind,
+	pub params:       Vec<CommandParamSpec>,
 }
 
 fn resolve_key_binding_set<T>(
 	commands: &HashMap<CommandId, CommandSpec>,
 	bindings: &[T],
 	keys: &[NormalSequenceKey],
-) -> BindingMatch<CommandTarget>
+) -> BindingMatch<ResolvedCommand>
 where
 	T: KeyBindingView,
 {
@@ -1392,7 +1742,11 @@ where
 		if binding.keys() == keys
 			&& let Some(spec) = commands.get(binding.command_id())
 		{
-			return BindingMatch::Exact(spec.target.clone());
+			return BindingMatch::Exact(ResolvedCommand {
+				command_id: spec.id.clone(),
+				target:     binding.target().clone(),
+				argv:       binding.args().to_vec(),
+			});
 		}
 		if binding.keys().starts_with(keys) {
 			has_prefix = true;
@@ -1411,6 +1765,22 @@ fn parse_plugin_command_name(name: &str) -> Option<(String, String)> {
 	Some((plugin_id.to_string(), command_id.to_string()))
 }
 
+fn normalize_pascal_case_name(name: &str) -> String {
+	name
+		.split(|ch: char| !ch.is_alphanumeric())
+		.filter(|segment| !segment.is_empty())
+		.map(|segment| {
+			let mut chars = segment.chars();
+			let Some(first) = chars.next() else {
+				return String::new();
+			};
+			let mut rendered = first.to_uppercase().collect::<String>();
+			rendered.push_str(chars.as_str());
+			rendered
+		})
+		.collect::<String>()
+}
+
 fn export_keymap_bindings<T>(
 	commands: &HashMap<CommandId, CommandSpec>,
 	bindings: &[T],
@@ -1427,8 +1797,11 @@ where
 			on:   KeyBindingOn::single(render_normal_sequence(binding.keys())),
 			run:  match binding.command_id() {
 				CommandId::Builtin(command) => RunDirective::Builtin(*command),
-				CommandId::Plugin(command_id) => RunDirective::Unresolved(command_id.clone()),
+				CommandId::Plugin(command_id) => {
+					RunDirective::PluginInvocation { plugin_name: command_id.trim_start_matches("plugin.").to_string() }
+				}
 			},
+			args: binding.args().to_vec(),
 			desc: binding.desc().map(ToString::to_string).or_else(|| Some(spec.description.clone())),
 		});
 	}
@@ -1596,6 +1969,17 @@ fn is_prefix_sequence(prefix: &[NormalSequenceKey], sequence: &[NormalSequenceKe
 mod tests {
 	use super::*;
 
+	#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BuiltinCommandGroup)]
+	enum MacroDslTestCommand {
+		/// Rename file
+		Rename { from: File, to: File },
+		/// Search project
+		Search { query: Text, path: Option<File> },
+		/// Legacy save
+		#[command(arg = OptionalPath)]
+		LegacySave,
+	}
+
 	#[test]
 	fn parse_normal_sequence_should_support_leader_and_ctrl_tokens() {
 		let keys = parse_normal_sequence("<leader><Tab><C-h>").expect("sequence should parse");
@@ -1612,6 +1996,7 @@ mod tests {
 					keymap: vec![KeymapBindingConfig {
 						on:   KeyBindingOn::single("H"),
 						run:  "core.buffer.next".into(),
+						args: Vec::new(),
 						desc: Some("custom".to_string()),
 					}],
 				},
@@ -1625,15 +2010,27 @@ mod tests {
 		assert_eq!(errors.len(), 1);
 		assert_eq!(
 			registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('H')]),
-			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::Buffer(BufferCommand::Prev)))
+			BindingMatch::Exact(ResolvedCommand {
+				command_id: CommandId::Builtin(BuiltinCommand::Buffer(BufferCommand::Prev)),
+				target:     CommandTarget::Builtin(BuiltinCommand::Buffer(BufferCommand::Prev)),
+				argv:       Vec::new(),
+			})
 		);
 		assert_eq!(
 			registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('L')]),
-			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::Buffer(BufferCommand::Next)))
+			BindingMatch::Exact(ResolvedCommand {
+				command_id: CommandId::Builtin(BuiltinCommand::Buffer(BufferCommand::Next)),
+				target:     CommandTarget::Builtin(BuiltinCommand::Buffer(BufferCommand::Next)),
+				argv:       Vec::new(),
+			})
 		);
 		assert_eq!(
 			registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('j')]),
-			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::Cursor(CursorCommand::Down)))
+			BindingMatch::Exact(ResolvedCommand {
+				command_id: CommandId::Builtin(BuiltinCommand::Cursor(CursorCommand::Down)),
+				target:     CommandTarget::Builtin(BuiltinCommand::Cursor(CursorCommand::Down)),
+				argv:       Vec::new(),
+			})
 		);
 	}
 
@@ -1645,6 +2042,7 @@ mod tests {
 				commands: vec![CommandAliasConfig {
 					name: "qq".to_string(),
 					run:  "core.quit_all".into(),
+					args: Vec::new(),
 					desc: Some("custom".to_string()),
 				}],
 			},
@@ -1655,10 +2053,8 @@ mod tests {
 		let resolved = registry.resolve_command_input("qq").expect("command alias should resolve");
 
 		assert!(errors.is_empty());
-		assert_eq!(
-			resolved.spec.target,
-			CommandTarget::Builtin(BuiltinCommand::Command(CommandCommand::QuitAll))
-		);
+		assert_eq!(resolved.target, CommandTarget::Builtin(BuiltinCommand::Command(CommandCommand::QuitAll)));
+		assert!(resolved.argv.is_empty());
 	}
 
 	#[test]
@@ -1669,6 +2065,7 @@ mod tests {
 				commands: vec![CommandAliasConfig {
 					name: "haha".to_string(),
 					run:  "core.quit_all".into(),
+					args: Vec::new(),
 					desc: Some("custom".to_string()),
 				}],
 			},
@@ -1678,8 +2075,8 @@ mod tests {
 		let errors = registry.apply_config(&config);
 
 		assert!(errors.is_empty());
-		assert!(registry.resolve_command_input("qa").is_none());
-		assert!(registry.resolve_command_input("haha").is_some());
+		assert!(matches!(registry.resolve_command_input("qa"), Err(CommandResolveError::UnknownCommand { .. })));
+		assert!(registry.resolve_command_input("haha").is_ok());
 	}
 
 	#[test]
@@ -1691,6 +2088,7 @@ mod tests {
 					keymap: vec![KeymapBindingConfig {
 						on:   KeyBindingOn::many(vec!["gg".to_string(), "G".to_string()]),
 						run:  "core.cursor.file_end".into(),
+						args: Vec::new(),
 						desc: Some("custom".to_string()),
 					}],
 				},
@@ -1707,23 +2105,88 @@ mod tests {
 				NormalSequenceKey::Char('g'),
 				NormalSequenceKey::Char('g')
 			]),
-			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::Cursor(CursorCommand::FileStart)))
+			BindingMatch::Exact(ResolvedCommand {
+				command_id: CommandId::Builtin(BuiltinCommand::Cursor(CursorCommand::FileStart)),
+				target:     CommandTarget::Builtin(BuiltinCommand::Cursor(CursorCommand::FileStart)),
+				argv:       Vec::new(),
+			})
 		);
 		assert_eq!(
 			registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[NormalSequenceKey::Char('G')]),
-			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::Cursor(CursorCommand::FileEnd)))
+			BindingMatch::Exact(ResolvedCommand {
+				command_id: CommandId::Builtin(BuiltinCommand::Cursor(CursorCommand::FileEnd)),
+				target:     CommandTarget::Builtin(BuiltinCommand::Cursor(CursorCommand::FileEnd)),
+				argv:       Vec::new(),
+			})
 		);
+	}
+
+	#[test]
+	fn struct_like_command_variants_should_map_fields_to_ordered_param_specs() {
+		let rename = MacroDslTestCommand::Rename { from: File, to: File }.params();
+		let search = MacroDslTestCommand::Search { query: Text, path: None }.params();
+
+		assert_eq!(rename, &[
+			BuiltinCommandParamSpec {
+				name:     "from",
+				kind:     CommandArgKind::File,
+				optional: false,
+				picker:   Some(PickerKind::File),
+			},
+			BuiltinCommandParamSpec {
+				name:     "to",
+				kind:     CommandArgKind::File,
+				optional: false,
+				picker:   Some(PickerKind::File),
+			},
+		]);
+		assert_eq!(search, &[
+			BuiltinCommandParamSpec {
+				name:     "query",
+				kind:     CommandArgKind::String,
+				optional: false,
+				picker:   None,
+			},
+			BuiltinCommandParamSpec {
+				name:     "path",
+				kind:     CommandArgKind::File,
+				optional: true,
+				picker:   Some(PickerKind::File),
+			},
+		]);
+	}
+
+	#[test]
+	fn legacy_command_arg_attribute_should_remain_temporarily_compatible() {
+		assert_eq!(MacroDslTestCommand::LegacySave.params(), &[BuiltinCommandParamSpec {
+			name:     "path",
+			kind:     CommandArgKind::File,
+			optional: true,
+			picker:   Some(PickerKind::File),
+		}]);
 	}
 
 	#[test]
 	fn normal_keymap_should_accept_plugin_run_directive() {
 		let mut registry = CommandRegistry::with_defaults();
+		registry
+			.register_plugin_command(PluginCommandRegistration {
+				id:           "plugin.demo.chmod".to_string(),
+				default_name: "Chmod".to_string(),
+				plugin_id:    "demo".to_string(),
+				command_id:   "chmod".to_string(),
+				category:     "Demo Plugin".to_string(),
+				description:  "Plugin chmod".to_string(),
+				params:       Vec::new(),
+			})
+			.expect("plugin command should register");
 		let config = CommandConfigFile {
 			mode: ModeKeymapSections {
 				normal: CommandKeymapSection {
 					keymap: vec![KeymapBindingConfig {
 						on:   KeyBindingOn::many(vec!["cm".to_string(), "mc".to_string()]),
-						run:  "plugin chmod".into(),
+						run:  "plugin.demo.chmod".into(),
+						args: Vec::new(),
 						desc: Some("plugin".to_string()),
 					}],
 				},
@@ -1743,8 +2206,52 @@ mod tests {
 		]);
 
 		assert!(errors.is_empty());
-		assert!(matches!(resolved, BindingMatch::Exact(CommandTarget::Plugin { .. })));
-		assert!(matches!(alternate, BindingMatch::Exact(CommandTarget::Plugin { .. })));
+		assert!(matches!(
+			resolved,
+			BindingMatch::Exact(ResolvedCommand { target: CommandTarget::Plugin { .. }, .. })
+		));
+		assert!(matches!(
+			alternate,
+			BindingMatch::Exact(ResolvedCommand { target: CommandTarget::Plugin { .. }, .. })
+		));
+	}
+
+	#[test]
+	fn run_directive_should_accept_canonical_plugin_command_id() {
+		let parsed = RunDirective::parse("plugin.example.inspect");
+
+		assert_eq!(parsed, RunDirective::PluginInvocation { plugin_name: "example.inspect".to_string() });
+		assert_eq!(parsed.render(), "plugin.example.inspect");
+	}
+
+	#[test]
+	fn config_should_reject_unknown_plugin_run_directive() {
+		let mut registry = CommandRegistry::with_defaults();
+		let errors = registry.apply_config(&CommandConfigFile {
+			command: CommandAliasSection {
+				commands: vec![CommandAliasConfig {
+					name: "bad-plugin".to_string(),
+					run:  "plugin.example2.inspect".into(),
+					args: Vec::new(),
+					desc: Some("Broken plugin alias".to_string()),
+				}],
+			},
+			..CommandConfigFile::default()
+		});
+
+		assert_eq!(errors.len(), 1);
+		assert!(matches!(
+			&errors[0],
+			CommandConfigError::CommandAlias { reason, .. } if reason.contains("unknown run directive")
+		));
+
+		let matches = registry.command_palette_matches("bad-plugin", 16);
+		let item = matches
+			.iter()
+			.find(|candidate| candidate.name == "bad-plugin")
+			.expect("invalid plugin alias should still be visible");
+		assert!(item.is_error);
+		assert_eq!(item.description, "invalid command");
 	}
 
 	#[test]
@@ -1778,6 +2285,7 @@ mod tests {
 					keymap: vec![KeymapBindingConfig {
 						on:   KeyBindingOn::single("gg"),
 						run:  "core.cursor.file_start".into(),
+						args: Vec::new(),
 						desc: Some("Jump to beginning".to_string()),
 					}],
 				},
@@ -1854,7 +2362,7 @@ mod tests {
 	}
 
 	#[test]
-	fn empty_command_palette_should_include_unaliased_commands_with_blank_name() {
+	fn empty_command_palette_should_include_derived_display_names_for_unaliased_commands() {
 		let registry = CommandRegistry::with_defaults();
 
 		let matches = registry.command_palette_matches("", 128);
@@ -1864,24 +2372,39 @@ mod tests {
 				&& item.command_id == CommandId::Builtin(BuiltinCommand::Picker(PickerCommand::Yazi))
 		}));
 		assert!(matches.iter().any(|item| {
-			item.name.is_empty()
+			item.name == "SplitVertical"
 				&& item.command_id == CommandId::Builtin(BuiltinCommand::Window(WindowCommand::SplitVertical))
 		}));
-		let yazi_position = matches
-			.iter()
-			.position(|item| {
-				item.name == "yazi"
-					&& item.command_id == CommandId::Builtin(BuiltinCommand::Picker(PickerCommand::Yazi))
+	}
+
+	#[test]
+	fn command_palette_should_show_param_summary_in_command_column() {
+		let registry = CommandRegistry::with_defaults();
+
+		let item = registry
+			.command_palette_matches("e", 16)
+			.into_iter()
+			.find(|candidate| {
+				candidate.command_id
+					== CommandId::Builtin(BuiltinCommand::Command(CommandCommand::Reload { path: None }))
 			})
-			.expect("aliased command should be listed");
-		let unaliased_position = matches
-			.iter()
-			.position(|item| {
-				item.name.is_empty()
-					&& item.command_id == CommandId::Builtin(BuiltinCommand::Window(WindowCommand::SplitVertical))
-			})
-			.expect("unaliased command should be listed");
-		assert!(yazi_position < unaliased_position);
+			.expect("reload command should be visible");
+
+		assert_eq!(item.command_id_label, "core.reload [path]");
+		assert_eq!(item.description, "Reload current buffer");
+	}
+
+	#[test]
+	fn builtin_path_params_should_register_file_picker_metadata() {
+		let registry = CommandRegistry::with_defaults();
+		let spec = registry
+			.command_spec(&CommandId::Builtin(BuiltinCommand::Command(CommandCommand::Reload { path: None })))
+			.expect("reload command should be registered");
+
+		assert_eq!(spec.params.len(), 1);
+		assert_eq!(spec.params[0].name, "path");
+		assert_eq!(spec.params[0].kind, CommandArgKind::File);
+		assert_eq!(spec.params[0].picker, Some(PickerKind::File));
 	}
 
 	#[test]
@@ -1890,7 +2413,126 @@ mod tests {
 
 		let resolved = registry.resolve_command_input("core.tab.new").expect("direct command id should resolve");
 
-		assert_eq!(resolved.spec.id, CommandId::Builtin(BuiltinCommand::Tab(TabCommand::New)));
+		assert_eq!(resolved.command_id, CommandId::Builtin(BuiltinCommand::Tab(TabCommand::New)));
+	}
+
+	#[test]
+	fn resolve_command_input_should_accept_pascal_case_display_name() {
+		let registry = CommandRegistry::with_defaults();
+
+		let resolved = registry.resolve_command_input("FileStart").expect("display name should resolve");
+
+		assert_eq!(resolved.command_id, CommandId::Builtin(BuiltinCommand::Cursor(CursorCommand::FileStart)));
+		assert!(resolved.argv.is_empty());
+	}
+
+	#[test]
+	fn resolve_command_input_should_parse_quoted_arguments_and_validate_params() {
+		let mut registry = CommandRegistry::with_defaults();
+		registry
+			.register_plugin_command(PluginCommandRegistration {
+				id:           "plugin.demo.echo".to_string(),
+				default_name: "Echo".to_string(),
+				plugin_id:    "demo".to_string(),
+				command_id:   "echo".to_string(),
+				category:     "Demo Plugin".to_string(),
+				description:  "Echo arguments".to_string(),
+				params:       vec![
+					CommandParamSpec {
+						name:     "message".to_string(),
+						kind:     CommandArgKind::String,
+						optional: false,
+						picker:   None,
+					},
+					CommandParamSpec {
+						name:     "path".to_string(),
+						kind:     CommandArgKind::File,
+						optional: true,
+						picker:   Some(PickerKind::File),
+					},
+				],
+			})
+			.expect("plugin command should register");
+
+		let resolved =
+			registry.resolve_command_input("Echo \"hello world\" src/main.rs").expect("quoted args should resolve");
+
+		assert_eq!(resolved.argv, vec!["hello world".to_string(), "src/main.rs".to_string()]);
+		assert!(matches!(
+			registry.resolve_command_input("Echo"),
+			Err(CommandResolveError::MissingRequiredParams { .. })
+		));
+		assert!(matches!(
+			registry.resolve_command_input("Echo one two three"),
+			Err(CommandResolveError::TooManyArguments { .. })
+		));
+	}
+
+	#[test]
+	fn command_alias_args_should_prefix_user_arguments() {
+		let mut registry = CommandRegistry::with_defaults();
+		registry
+			.register_plugin_command(PluginCommandRegistration {
+				id:           "plugin.demo.echo".to_string(),
+				default_name: "Echo".to_string(),
+				plugin_id:    "demo".to_string(),
+				command_id:   "echo".to_string(),
+				category:     "Demo Plugin".to_string(),
+				description:  "Echo arguments".to_string(),
+				params:       vec![
+					CommandParamSpec {
+						name:     "first".to_string(),
+						kind:     CommandArgKind::String,
+						optional: false,
+						picker:   None,
+					},
+					CommandParamSpec {
+						name:     "second".to_string(),
+						kind:     CommandArgKind::String,
+						optional: false,
+						picker:   None,
+					},
+				],
+			})
+			.expect("plugin command should register");
+		let errors = registry.apply_config(&CommandConfigFile {
+			command: CommandAliasSection {
+				commands: vec![CommandAliasConfig {
+					name: "echop".to_string(),
+					run:  "plugin demo.echo".into(),
+					args: vec!["configured".to_string()],
+					desc: Some("Echo with prefix".to_string()),
+				}],
+			},
+			..CommandConfigFile::default()
+		});
+
+		assert!(errors.is_empty());
+		let resolved = registry.resolve_command_input("echop typed").expect("alias args should prefix user args");
+		assert_eq!(resolved.argv, vec!["configured".to_string(), "typed".to_string()]);
+	}
+
+	#[test]
+	fn active_parameter_context_should_require_resolved_command_and_separator() {
+		let registry = CommandRegistry::with_defaults();
+
+		assert!(registry.active_parameter_context("save").is_none());
+		assert!(registry.active_parameter_context("unknown ").is_none());
+
+		let context = registry
+			.active_parameter_context("core.save ")
+			.expect("file parameter should become active after separator");
+		assert_eq!(context.index, 0);
+		assert_eq!(context.param.name, "path");
+		assert_eq!(context.param.kind, CommandArgKind::File);
+		assert_eq!(context.param.picker, Some(PickerKind::File));
+		assert_eq!(context.input, "");
+
+		let editing_context = registry
+			.active_parameter_context("core.save src/main.rs")
+			.expect("editing first file parameter should stay active");
+		assert_eq!(editing_context.index, 0);
+		assert_eq!(editing_context.input, "src/main.rs");
 	}
 
 	#[test]
@@ -1901,6 +2543,7 @@ mod tests {
 				commands: vec![CommandAliasConfig {
 					name: "bad".to_string(),
 					run:  "core.not.exists".into(),
+					args: Vec::new(),
 					desc: Some("Broken alias".to_string()),
 				}],
 			},
@@ -1924,6 +2567,7 @@ mod tests {
 					keymap: vec![KeymapBindingConfig {
 						on:   KeyBindingOn::single("g"),
 						run:  "core.cursor.down".into(),
+						args: Vec::new(),
 						desc: Some("conflict".to_string()),
 					}],
 				},
@@ -1950,6 +2594,7 @@ mod tests {
 					keymap: vec![KeymapBindingConfig {
 						on:   KeyBindingOn::single("p"),
 						run:  "core.cursor.down".into(),
+						args: Vec::new(),
 						desc: Some("conflict".to_string()),
 					}],
 				},

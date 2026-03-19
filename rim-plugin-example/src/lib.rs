@@ -14,13 +14,19 @@ impl CommandProviderPlugin for ExamplePlugin {
 			commands: vec![
 				PluginCommandMetadata {
 					id:          "inspect".to_string(),
-					name:        "inspect".to_string(),
+					name:        "Inspect".to_string(),
 					description: "Show a panel with the current plugin request context".to_string(),
+					params:      vec![PluginCommandParamSpec {
+						name:     "message".to_string(),
+						kind:     PluginCommandParamKind::String,
+						optional: true,
+					}],
 				},
 				PluginCommandMetadata {
 					id:          "new-tab".to_string(),
-					name:        "tabnew".to_string(),
+					name:        "NewTab".to_string(),
 					description: "Request that Rim opens a new tab".to_string(),
+					params:      Vec::new(),
 				},
 			],
 		}
@@ -30,18 +36,14 @@ impl CommandProviderPlugin for ExamplePlugin {
 		match request.command_id.as_str() {
 			"inspect" => Ok(inspect_command(request)),
 			"new-tab" => Ok(new_tab_command()),
-			other => Err(PluginCommandError::CommandUnavailable {
-				command_id: other.to_string(),
-			}),
+			other => Err(PluginCommandError::CommandUnavailable { command_id: other.to_string() }),
 		}
 	}
 }
 
 fn inspect_command(request: PluginCommandRequest) -> PluginCommandResponse {
-	let mut lines = vec![
-		format!("command: {}", request.command_id),
-		format!("workspace: {}", request.workspace_root),
-	];
+	let mut lines =
+		vec![format!("command: {}", request.command_id), format!("workspace: {}", request.workspace_root)];
 	if let Some(argument) = request.argument.as_deref() {
 		lines.push(format!("argument: {}", argument));
 	}
@@ -53,7 +55,7 @@ fn inspect_command(request: PluginCommandRequest) -> PluginCommandResponse {
 				message: "example.inspect completed".to_string(),
 			}),
 			PluginEffect::ShowPanel(PluginPanel {
-				title:  "Example Plugin".to_string(),
+				title: "Example Plugin".to_string(),
 				lines,
 				footer: Some("CommandProvider v1".to_string()),
 			}),

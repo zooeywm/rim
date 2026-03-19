@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use ratatui::{buffer::Buffer, layout::{Alignment, Constraint, Layout, Rect}, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap}};
-use rim_application::{command::{CommandPaletteFileMatch, CommandPaletteItem, CommandPaletteMatch}, state::{CommandPaletteState, RimState}};
+use rim_application::{command::{CommandPaletteFileMatch, CommandPaletteItem, CommandPaletteMatch, PickerKind}, state::{CommandPaletteState, RimState}};
 use rim_domain::preview::preview_rows;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -30,7 +30,8 @@ impl CommandPaletteWidgets {
 			Rect { x, y: content_area.y.saturating_add(1), width, height: visible_input_rows as u16 + 2 },
 			content_area,
 		);
-		let result_rows = if palette.showing_files {
+		let showing_file_picker = palette.active_picker == Some(PickerKind::File);
+		let result_rows = if showing_file_picker {
 			palette.items.len().clamp(1, MAX_RESULTS).saturating_add(6) as u16
 		} else {
 			palette.items.len().clamp(1, MAX_RESULTS) as u16
@@ -38,7 +39,7 @@ impl CommandPaletteWidgets {
 		let available_result_rows =
 			content_area.height.saturating_sub(input_area.height).saturating_sub(4).max(3);
 		let max_inner_rows = available_result_rows.saturating_sub(2).max(1);
-		let min_inner_rows = if palette.showing_files { 8 } else { 3 };
+		let min_inner_rows = if showing_file_picker { 8 } else { 3 };
 		let inner_rows = result_rows.min(max_inner_rows).max(min_inner_rows.min(max_inner_rows));
 		let results_area = clamp_rect_to_content_area(
 			Rect {
@@ -144,7 +145,7 @@ impl Widget for CommandPaletteResultsWidget {
 
 		let body_area =
 			Rect { x: inner.x, y: inner.y, width: inner.width, height: inner.height.saturating_sub(1) };
-		if self.palette.showing_files && body_area.height > 1 {
+		if self.palette.active_picker == Some(PickerKind::File) && body_area.height > 1 {
 			let [list_area, divider_area, preview_area] =
 				Layout::vertical([Constraint::Percentage(42), Constraint::Length(1), Constraint::Min(1)])
 					.areas(body_area);
@@ -188,7 +189,7 @@ fn render_result_lines(palette: &CommandPaletteState, width: usize, height: usiz
 	if palette.items.is_empty() {
 		let empty_message = if palette.loading {
 			"Loading workspace files..."
-		} else if palette.showing_files {
+		} else if palette.active_picker == Some(PickerKind::File) {
 			"No matching files"
 		} else {
 			"No matching commands"
@@ -197,16 +198,21 @@ fn render_result_lines(palette: &CommandPaletteState, width: usize, height: usiz
 	}
 
 	let visible_rows = height.max(1);
+	let item_rows = visible_rows.saturating_sub(1).max(1);
 	let start =
-		palette.selected.saturating_sub(visible_rows / 2).min(palette.items.len().saturating_sub(visible_rows));
-	palette
-		.items
-		.iter()
-		.skip(start)
-		.take(visible_rows)
-		.enumerate()
-		.map(|(index, item)| render_command_palette_item(item, start + index == palette.selected, width))
-		.collect::<Vec<_>>()
+		palette.selected.saturating_sub(item_rows / 2).min(palette.items.len().saturating_sub(item_rows));
+	let mut lines =
+		vec![render_command_palette_header(palette.items.first().expect("checked non-empty"), width)];
+	lines.extend(
+		palette
+			.items
+			.iter()
+			.skip(start)
+			.take(item_rows)
+			.enumerate()
+			.map(|(index, item)| render_command_palette_item(item, start + index == palette.selected, width)),
+	);
+	lines
 }
 
 fn render_preview_lines(
@@ -273,6 +279,24 @@ fn render_command_palette_item(
 			render_command_palette_command_item(item, selected, name_width, command_width, desc_width)
 		}
 		CommandPaletteItem::File(item) => render_command_palette_file_item(item, selected, body_width),
+	}
+}
+
+fn render_command_palette_header(item: &CommandPaletteItem, body_width: usize) -> Line<'static> {
+	let header_style = Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD);
+	match item {
+		CommandPaletteItem::Command(_) => {
+			let name_width = compute_name_column_width(body_width);
+			let command_width = compute_command_column_width(body_width, name_width);
+			let desc_width = body_width - name_width - command_width - 2;
+			let mut spans = padded_text("NAME", name_width, header_style);
+			spans.push(Span::styled(" ", header_style));
+			spans.extend(padded_text("COMMAND", command_width, header_style));
+			spans.push(Span::styled(" ", header_style));
+			spans.extend(highlighted_text("DESCRIPTION", desc_width, &[], header_style, header_style, false));
+			Line::from(spans)
+		}
+		CommandPaletteItem::File(_) => Line::styled("FILE", header_style),
 	}
 }
 
@@ -377,6 +401,10 @@ fn highlighted_text(
 	}
 
 	spans
+}
+
+fn padded_text(text: &str, width: usize, style: Style) -> Vec<Span<'static>> {
+	highlighted_text(text, width, &[], style, style, true)
 }
 
 fn wrap_command_input(query: &str, width: usize) -> Vec<String> {

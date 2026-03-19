@@ -16,6 +16,18 @@ interface command-provider {
         id: string,
         name: string,
         description: string,
+        params: list<plugin-command-param-spec>,
+    }
+
+    enum plugin-command-param-kind {
+        text,
+        file,
+    }
+
+    record plugin-command-param-spec {
+        name: string,
+        kind: plugin-command-param-kind,
+        optional: bool,
     }
 
     record plugin-command-request {

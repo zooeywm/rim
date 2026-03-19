@@ -1,12 +1,12 @@
 use std::ops::ControlFlow;
 
 use super::{ActionPorts, command_flow, enqueue_history_save_for_buffer, handle_pending_swap_decision_key, post_edit_flow};
-use crate::{action::{AppAction, EditorAction, KeyCode, KeyEvent, KeyModifiers}, command::{BindingMatch, BuiltinCommand, CommandRegistry, CommandTarget, HelpCommand, InsertCommand, ModeCommand, NotificationCommand, OverlayCommand}, state::{EditorMode, KeymapScope, NormalSequenceKey, RimState}};
+use crate::{action::{AppAction, EditorAction, KeyCode, KeyEvent, KeyModifiers}, command::{BindingMatch, BuiltinCommand, CommandRegistry, CommandTarget, HelpCommand, InsertCommand, ModeCommand, NotificationCommand, OverlayCommand, ResolvedCommand}, state::{EditorMode, KeymapScope, NormalSequenceKey, RimState}};
 
 #[derive(Debug)]
 pub(super) enum SequenceMatch {
 	Action(AppAction),
-	Command(CommandTarget),
+	Command(ResolvedCommand),
 	Pending,
 	NoMatch,
 }
@@ -113,7 +113,7 @@ where P: ActionPorts {
 				state.workbench.normal_sequence.clear();
 				state.workbench.status_bar.key_sequence.clear();
 				state.close_key_hints();
-				return command_flow::execute_command_target(ports, state, target, None);
+				return command_flow::execute_resolved_command(ports, state, target);
 			}
 			SequenceMatch::Pending => {
 				state.workbench.status_bar.key_sequence = render_normal_sequence(&state.workbench.normal_sequence);
@@ -199,11 +199,11 @@ pub(super) fn resolve_normal_sequence_with_registry(
 	match registry.resolve_scope_sequence(crate::state::KeymapScope::ModeNormal, keys) {
 		BindingMatch::Pending => SequenceMatch::Pending,
 		BindingMatch::NoMatch => SequenceMatch::NoMatch,
-		BindingMatch::Exact(CommandTarget::Builtin(builtin)) => {
+		BindingMatch::Exact(resolved @ ResolvedCommand { target: CommandTarget::Builtin(builtin), .. }) => {
 			if let Some(action) = builtin.normal_mode_action() {
 				SequenceMatch::Action(action)
 			} else {
-				SequenceMatch::Command(CommandTarget::Builtin(builtin))
+				SequenceMatch::Command(resolved)
 			}
 		}
 		BindingMatch::Exact(target) => SequenceMatch::Command(target),
@@ -217,11 +217,11 @@ pub(super) fn resolve_visual_sequence_with_registry(
 	match registry.resolve_scope_sequence(crate::state::KeymapScope::ModeVisual, keys) {
 		BindingMatch::Pending => SequenceMatch::Pending,
 		BindingMatch::NoMatch => SequenceMatch::NoMatch,
-		BindingMatch::Exact(CommandTarget::Builtin(builtin)) => {
+		BindingMatch::Exact(resolved @ ResolvedCommand { target: CommandTarget::Builtin(builtin), .. }) => {
 			if let Some(action) = builtin.visual_mode_action() {
 				SequenceMatch::Action(action)
 			} else {
-				SequenceMatch::Command(CommandTarget::Builtin(builtin))
+				SequenceMatch::Command(resolved)
 			}
 		}
 		BindingMatch::Exact(target) => SequenceMatch::Command(target),
@@ -331,7 +331,7 @@ where P: ActionPorts {
 				state.workbench.normal_sequence.clear();
 				state.workbench.status_bar.key_sequence.clear();
 				state.close_key_hints();
-				return command_flow::execute_command_target(ports, state, target, None);
+				return command_flow::execute_resolved_command(ports, state, target);
 			}
 			SequenceMatch::Pending => {
 				state.workbench.status_bar.key_sequence = render_normal_sequence(&state.workbench.normal_sequence);
@@ -384,7 +384,7 @@ where P: ActionPorts {
 		.resolve_scope_sequence(crate::state::KeymapScope::OverlayWhichKey, &[normal_key])
 	{
 		BindingMatch::Exact(target) => {
-			let _ = command_flow::execute_command_target(ports, state, target, None);
+			let _ = command_flow::execute_resolved_command(ports, state, target);
 			ControlFlow::Break(())
 		}
 		BindingMatch::Pending | BindingMatch::NoMatch => ControlFlow::Continue(()),
@@ -398,15 +398,17 @@ fn handle_insert_scope_key(state: &mut RimState, key: KeyEvent) -> Option<Contro
 		.command_registry
 		.resolve_scope_sequence(crate::state::KeymapScope::ModeInsert, &[normal_key])
 	{
-		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Mode(
-			ModeCommand::Normal,
-		))) => {
+		BindingMatch::Exact(ResolvedCommand {
+			target: CommandTarget::Builtin(crate::command::BuiltinCommand::Mode(ModeCommand::Normal)),
+			..
+		}) => {
 			state.exit_insert_mode();
 			Some(ControlFlow::Continue(()))
 		}
-		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(
-			InsertCommand::Newline,
-		))) => {
+		BindingMatch::Exact(ResolvedCommand {
+			target: CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(InsertCommand::Newline)),
+			..
+		}) => {
 			if state.is_block_insert_mode() {
 				state.workbench.status_bar.message =
 					"block insert supports text, tab, backspace, esc only".to_string();
@@ -415,9 +417,10 @@ fn handle_insert_scope_key(state: &mut RimState, key: KeyEvent) -> Option<Contro
 			state.insert_newline_at_cursor();
 			Some(ControlFlow::Continue(()))
 		}
-		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(
-			InsertCommand::Backspace,
-		))) => {
+		BindingMatch::Exact(ResolvedCommand {
+			target: CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(InsertCommand::Backspace)),
+			..
+		}) => {
 			if state.is_block_insert_mode() {
 				state.backspace_at_block_cursor();
 			} else {
@@ -425,9 +428,10 @@ fn handle_insert_scope_key(state: &mut RimState, key: KeyEvent) -> Option<Contro
 			}
 			Some(ControlFlow::Continue(()))
 		}
-		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(
-			InsertCommand::Left,
-		))) => {
+		BindingMatch::Exact(ResolvedCommand {
+			target: CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(InsertCommand::Left)),
+			..
+		}) => {
 			if state.is_block_insert_mode() {
 				state.workbench.status_bar.message =
 					"block insert supports text, tab, backspace, esc only".to_string();
@@ -436,9 +440,10 @@ fn handle_insert_scope_key(state: &mut RimState, key: KeyEvent) -> Option<Contro
 			state.move_cursor_left();
 			Some(ControlFlow::Continue(()))
 		}
-		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(
-			InsertCommand::Down,
-		))) => {
+		BindingMatch::Exact(ResolvedCommand {
+			target: CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(InsertCommand::Down)),
+			..
+		}) => {
 			if state.is_block_insert_mode() {
 				state.workbench.status_bar.message =
 					"block insert supports text, tab, backspace, esc only".to_string();
@@ -447,9 +452,10 @@ fn handle_insert_scope_key(state: &mut RimState, key: KeyEvent) -> Option<Contro
 			state.move_cursor_down();
 			Some(ControlFlow::Continue(()))
 		}
-		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(
-			InsertCommand::Up,
-		))) => {
+		BindingMatch::Exact(ResolvedCommand {
+			target: CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(InsertCommand::Up)),
+			..
+		}) => {
 			if state.is_block_insert_mode() {
 				state.workbench.status_bar.message =
 					"block insert supports text, tab, backspace, esc only".to_string();
@@ -458,9 +464,10 @@ fn handle_insert_scope_key(state: &mut RimState, key: KeyEvent) -> Option<Contro
 			state.move_cursor_up();
 			Some(ControlFlow::Continue(()))
 		}
-		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(
-			InsertCommand::Right,
-		))) => {
+		BindingMatch::Exact(ResolvedCommand {
+			target: CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(InsertCommand::Right)),
+			..
+		}) => {
 			if state.is_block_insert_mode() {
 				state.workbench.status_bar.message =
 					"block insert supports text, tab, backspace, esc only".to_string();
@@ -469,9 +476,10 @@ fn handle_insert_scope_key(state: &mut RimState, key: KeyEvent) -> Option<Contro
 			state.move_cursor_right_for_insert();
 			Some(ControlFlow::Continue(()))
 		}
-		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(
-			InsertCommand::Tab,
-		))) => {
+		BindingMatch::Exact(ResolvedCommand {
+			target: CommandTarget::Builtin(crate::command::BuiltinCommand::Insert(InsertCommand::Tab)),
+			..
+		}) => {
 			if state.is_block_insert_mode() {
 				state.insert_char_at_block_cursor('\t');
 			} else {
@@ -479,9 +487,10 @@ fn handle_insert_scope_key(state: &mut RimState, key: KeyEvent) -> Option<Contro
 			}
 			Some(ControlFlow::Continue(()))
 		}
-		BindingMatch::Exact(CommandTarget::Builtin(crate::command::BuiltinCommand::Help(
-			HelpCommand::Keymap,
-		))) => {
+		BindingMatch::Exact(ResolvedCommand {
+			target: CommandTarget::Builtin(crate::command::BuiltinCommand::Help(HelpCommand::Keymap)),
+			..
+		}) => {
 			state.open_key_hints_overview();
 			Some(ControlFlow::Continue(()))
 		}
@@ -514,7 +523,7 @@ fn handle_notification_center_key(state: &mut RimState, key: KeyEvent) -> Contro
 			BindingMatch::Exact(target) => {
 				state.workbench.normal_sequence.clear();
 				state.workbench.status_bar.key_sequence.clear();
-				handle_notification_center_target(state, target);
+				handle_notification_center_target(state, target.target);
 				return ControlFlow::Continue(());
 			}
 			BindingMatch::Pending => {

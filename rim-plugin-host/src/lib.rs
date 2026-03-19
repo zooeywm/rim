@@ -3,7 +3,7 @@ use std::process::Command;
 use std::{collections::{HashMap, HashSet}, fs, path::{Path, PathBuf}, sync::Mutex, thread};
 
 use rim_application::action::{AppAction, PluginRuntimeAction};
-use rim_ports::{PluginAction, PluginCapability, PluginCommandError, PluginCommandMetadata, PluginCommandRequest, PluginCommandResponse, PluginDiscoveryResult, PluginEffect, PluginInvocationError, PluginLoadFailure, PluginMetadata, PluginNotification, PluginNotificationLevel, PluginPanel, PluginRegistration, PluginRuntime, PluginRuntimeError, PluginRuntimeFailure};
+use rim_ports::{PluginAction, PluginCapability, PluginCommandError, PluginCommandMetadata, PluginCommandParamKind, PluginCommandParamSpec, PluginCommandRequest, PluginCommandResponse, PluginDiscoveryResult, PluginEffect, PluginInvocationError, PluginLoadFailure, PluginMetadata, PluginNotification, PluginNotificationLevel, PluginPanel, PluginRegistration, PluginRuntime, PluginRuntimeError, PluginRuntimeFailure};
 use serde::Deserialize;
 use tracing::error;
 use wasmtime::{Config, Engine, Store, component::{Component, Linker}};
@@ -434,6 +434,22 @@ fn plugin_command_metadata_from_wit(metadata: wit::PluginCommandMetadata) -> Plu
 		id:          metadata.id,
 		name:        metadata.name,
 		description: metadata.description,
+		params:      metadata.params.into_iter().map(plugin_command_param_spec_from_wit).collect(),
+	}
+}
+
+fn plugin_command_param_spec_from_wit(param: wit::PluginCommandParamSpec) -> PluginCommandParamSpec {
+	PluginCommandParamSpec {
+		name:     param.name,
+		kind:     plugin_command_param_kind_from_wit(param.kind),
+		optional: param.optional,
+	}
+}
+
+fn plugin_command_param_kind_from_wit(kind: wit::PluginCommandParamKind) -> PluginCommandParamKind {
+	match kind {
+		wit::PluginCommandParamKind::Text => PluginCommandParamKind::String,
+		wit::PluginCommandParamKind::File => PluginCommandParamKind::File,
 	}
 }
 

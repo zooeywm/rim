@@ -288,6 +288,7 @@ fn configured_command_alias_should_execute_registered_command() {
 			commands: vec![CommandAliasConfig {
 				name: "qq".to_string(),
 				run:  "core.quit_all".into(),
+				args: Vec::new(),
 				desc: Some("custom".to_string()),
 			}],
 		},

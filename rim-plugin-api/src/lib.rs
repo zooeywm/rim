@@ -9,7 +9,7 @@ pub mod bindings {
 }
 
 mod wit_types {
-	pub use super::bindings::exports::rim::plugin::command_provider::{CommandUnavailableError, ExecutionFailedError, Guest, InsertTextAction, InvalidRequestError, OpenFileAction, PluginAction as WitPluginAction, PluginCapability as WitPluginCapability, PluginCommandError as WitPluginCommandError, PluginCommandMetadata as WitPluginCommandMetadata, PluginCommandRequest as WitPluginCommandRequest, PluginCommandResponse as WitPluginCommandResponse, PluginDescriptor as WitPluginDescriptor, PluginEffect as WitPluginEffect, PluginMetadata as WitPluginMetadata, PluginNotification as WitPluginNotification, PluginNotificationLevel as WitPluginNotificationLevel, PluginPanel as WitPluginPanel, RunCommandAction};
+	pub use super::bindings::exports::rim::plugin::command_provider::{CommandUnavailableError, ExecutionFailedError, Guest, InsertTextAction, InvalidRequestError, OpenFileAction, PluginAction as WitPluginAction, PluginCapability as WitPluginCapability, PluginCommandError as WitPluginCommandError, PluginCommandMetadata as WitPluginCommandMetadata, PluginCommandParamKind as WitPluginCommandParamKind, PluginCommandParamSpec as WitPluginCommandParamSpec, PluginCommandRequest as WitPluginCommandRequest, PluginCommandResponse as WitPluginCommandResponse, PluginDescriptor as WitPluginDescriptor, PluginEffect as WitPluginEffect, PluginMetadata as WitPluginMetadata, PluginNotification as WitPluginNotification, PluginNotificationLevel as WitPluginNotificationLevel, PluginPanel as WitPluginPanel, RunCommandAction};
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -30,6 +30,20 @@ pub struct PluginCommandMetadata {
 	pub id:          String,
 	pub name:        String,
 	pub description: String,
+	pub params:      Vec<PluginCommandParamSpec>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PluginCommandParamKind {
+	String,
+	File,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginCommandParamSpec {
+	pub name:     String,
+	pub kind:     PluginCommandParamKind,
+	pub optional: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,6 +161,22 @@ fn into_wit_command_metadata(metadata: PluginCommandMetadata) -> wit_types::WitP
 		id:          metadata.id,
 		name:        metadata.name,
 		description: metadata.description,
+		params:      metadata.params.into_iter().map(into_wit_command_param_spec).collect(),
+	}
+}
+
+fn into_wit_command_param_spec(param: PluginCommandParamSpec) -> wit_types::WitPluginCommandParamSpec {
+	wit_types::WitPluginCommandParamSpec {
+		name:     param.name,
+		kind:     into_wit_command_param_kind(param.kind),
+		optional: param.optional,
+	}
+}
+
+fn into_wit_command_param_kind(kind: PluginCommandParamKind) -> wit_types::WitPluginCommandParamKind {
+	match kind {
+		PluginCommandParamKind::String => wit_types::WitPluginCommandParamKind::Text,
+		PluginCommandParamKind::File => wit_types::WitPluginCommandParamKind::File,
 	}
 }
 
@@ -230,5 +260,5 @@ macro_rules! export_plugin {
 }
 
 pub mod prelude {
-	pub use crate::{CommandProviderPlugin, PluginAction, PluginCapability, PluginCommandError, PluginCommandMetadata, PluginCommandOutcome, PluginCommandRequest, PluginCommandResponse, PluginDescriptor, PluginEffect, PluginMetadata, PluginNotification, PluginNotificationLevel, PluginPanel, export_plugin};
+	pub use crate::{CommandProviderPlugin, PluginAction, PluginCapability, PluginCommandError, PluginCommandMetadata, PluginCommandOutcome, PluginCommandParamKind, PluginCommandParamSpec, PluginCommandRequest, PluginCommandResponse, PluginDescriptor, PluginEffect, PluginMetadata, PluginNotification, PluginNotificationLevel, PluginPanel, export_plugin};
 }

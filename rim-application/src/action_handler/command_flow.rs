@@ -73,10 +73,7 @@ where
 {
 	let normal_key = super::mode_flow::to_normal_key(state, key)?;
 	match state.workbench.command_registry.resolve_scope_sequence(scope, &[normal_key]) {
-		BindingMatch::Exact(CommandTarget::Builtin(builtin)) => {
-			Some(execute_builtin_command(ports, state, builtin, None))
-		}
-		BindingMatch::Exact(target) => Some(execute_command_target(ports, state, target, None)),
+		BindingMatch::Exact(resolved) => Some(execute_resolved_command(ports, state, resolved)),
 		BindingMatch::Pending | BindingMatch::NoMatch => None,
 	}
 }
@@ -90,8 +87,9 @@ where P: ActionPorts {
 		return ControlFlow::Continue(());
 	}
 	let resolved = state.workbench.command_registry.resolve_command_input(command.as_str());
-	let Some(resolved) = resolved else {
-		state.push_notification(NotificationLevel::Error, format!("unknown command: {}", command));
+	let Ok(resolved) = resolved else {
+		let err = resolved.expect_err("checked err");
+		state.push_notification(NotificationLevel::Error, err.to_string());
 		return ControlFlow::Continue(());
 	};
 	state.exit_command_mode();
@@ -102,14 +100,15 @@ pub(super) fn execute_command_target<P>(
 	ports: &P,
 	state: &mut RimState,
 	target: CommandTarget,
-	argument: Option<String>,
+	argv: Vec<String>,
 ) -> ControlFlow<()>
 where
 	P: ActionPorts,
 {
 	match target {
-		CommandTarget::Builtin(builtin) => execute_builtin_command(ports, state, builtin, argument),
+		CommandTarget::Builtin(builtin) => execute_builtin_command(ports, state, builtin, argv),
 		CommandTarget::Plugin { plugin_id, command_id } => {
+			let argument = argv.first().cloned();
 			plugin_flow::enqueue_plugin_command(ports, state, plugin_id, command_id, argument)
 		}
 	}
@@ -123,18 +122,19 @@ pub(super) fn execute_resolved_command<P>(
 where
 	P: ActionPorts,
 {
-	execute_command_target(ports, state, resolved.spec.target, resolved.argument)
+	execute_command_target(ports, state, resolved.target, resolved.argv)
 }
 
 fn execute_builtin_command<P>(
 	ports: &P,
 	state: &mut RimState,
 	command: BuiltinCommand,
-	argument: Option<String>,
+	argv: Vec<String>,
 ) -> ControlFlow<()>
 where
 	P: ActionPorts,
 {
+	let first_argument = || argv.first().cloned();
 	match command {
 		command if command.normal_mode_action().is_some() => {
 			let action = command.normal_mode_action().expect("checked above");
@@ -144,24 +144,24 @@ where
 		BuiltinCommand::Command(CommandCommand::QuitForce) => quit_current_scope(ports, state, true),
 		BuiltinCommand::Command(CommandCommand::QuitAll) => quit_application(ports, state, false),
 		BuiltinCommand::Command(CommandCommand::QuitAllForce) => quit_application(ports, state, true),
-		BuiltinCommand::Command(CommandCommand::Save) => {
-			enqueue_save_active_buffer(ports, state, false, false, argument.map(PathBuf::from));
+		BuiltinCommand::Command(CommandCommand::Save { .. }) => {
+			enqueue_save_active_buffer(ports, state, false, false, first_argument().map(PathBuf::from));
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::Command(CommandCommand::SaveForce) => {
-			enqueue_save_active_buffer(ports, state, false, true, argument.map(PathBuf::from));
+		BuiltinCommand::Command(CommandCommand::SaveForce { .. }) => {
+			enqueue_save_active_buffer(ports, state, false, true, first_argument().map(PathBuf::from));
 			ControlFlow::Continue(())
 		}
 		BuiltinCommand::Command(CommandCommand::SaveAll) => {
 			enqueue_save_all_buffers(ports, state, false, false);
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::Command(CommandCommand::SaveAndQuit) => {
-			enqueue_save_active_buffer(ports, state, true, false, argument.map(PathBuf::from));
+		BuiltinCommand::Command(CommandCommand::SaveAndQuit { .. }) => {
+			enqueue_save_active_buffer(ports, state, true, false, first_argument().map(PathBuf::from));
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::Command(CommandCommand::SaveAndQuitForce) => {
-			enqueue_save_active_buffer(ports, state, true, true, argument.map(PathBuf::from));
+		BuiltinCommand::Command(CommandCommand::SaveAndQuitForce { .. }) => {
+			enqueue_save_active_buffer(ports, state, true, true, first_argument().map(PathBuf::from));
 			ControlFlow::Continue(())
 		}
 		BuiltinCommand::Command(CommandCommand::SaveAllAndQuit) => {
@@ -172,8 +172,8 @@ where
 			enqueue_save_all_buffers(ports, state, true, true);
 			ControlFlow::Continue(())
 		}
-		BuiltinCommand::Command(CommandCommand::Reload) => {
-			if let Some(path) = argument {
+		BuiltinCommand::Command(CommandCommand::Reload { .. }) => {
+			if let Some(path) = first_argument() {
 				RimState::dispatch_internal(
 					ports,
 					state,
@@ -184,8 +184,8 @@ where
 				ControlFlow::Continue(())
 			}
 		}
-		BuiltinCommand::Command(CommandCommand::ReloadForce) => {
-			if let Some(path) = argument {
+		BuiltinCommand::Command(CommandCommand::ReloadForce { .. }) => {
+			if let Some(path) = first_argument() {
 				RimState::dispatch_internal(
 					ports,
 					state,
@@ -364,7 +364,7 @@ where P: StoragePorts {
 	if !force {
 		return;
 	}
-	let Some(path) = state.selected_command_palette_file_path().map(PathBuf::from) else {
+	let Some(path) = state.selected_command_palette_picker_path().map(PathBuf::from) else {
 		return;
 	};
 	state.set_command_palette_preview_loading(path.as_path());

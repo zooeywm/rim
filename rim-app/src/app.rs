@@ -305,6 +305,7 @@ mod tests {
 					keymap: vec![KeymapBindingConfig {
 						on:   KeyBindingOn::single("go"),
 						run:  "core.cursor.file_start".into(),
+						args: Vec::new(),
 						desc: Some("custom".to_string()),
 					}],
 				},
@@ -328,7 +329,13 @@ mod tests {
 				NormalSequenceKey::Char('g'),
 				NormalSequenceKey::Char('g')
 			]),
-			BindingMatch::Exact(CommandTarget::Builtin(BuiltinCommand::Cursor(CursorCommand::FileStart)))
+			BindingMatch::Exact(rim_application::command::ResolvedCommand {
+				command_id: rim_application::command::CommandId::Builtin(BuiltinCommand::Cursor(
+					CursorCommand::FileStart,
+				)),
+				target:     CommandTarget::Builtin(BuiltinCommand::Cursor(CursorCommand::FileStart)),
+				argv:       Vec::new(),
+			})
 		);
 		assert_eq!(
 			state.workbench.command_registry.resolve_scope_sequence(KeymapScope::ModeNormal, &[
@@ -348,6 +355,7 @@ mod tests {
 					keymap: vec![KeymapBindingConfig {
 						on:   KeyBindingOn::single("gg"),
 						run:  "core.cursor.file_start".into(),
+						args: Vec::new(),
 						desc: Some("Jump to beginning".to_string()),
 					}],
 				},

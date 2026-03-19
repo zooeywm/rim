@@ -1,7 +1,7 @@
-use rim_ports::{PluginCommandRequest, PluginPanel, PluginRegistration};
+use rim_ports::{PluginCommandParamKind, PluginCommandRequest, PluginPanel, PluginRegistration};
 
 use super::{FloatingWindowLine, FloatingWindowPlacement, FloatingWindowState, OverlayState, RimState};
-use crate::command::{CommandArgKind, PluginCommandRegistration};
+use crate::command::{CommandArgKind, CommandParamSpec, PickerKind, PluginCommandRegistration};
 
 impl RimState {
 	pub fn set_plugin_registrations(&mut self, plugins: Vec<PluginRegistration>) {
@@ -23,7 +23,7 @@ impl RimState {
 					command_id:   command.id.clone(),
 					category:     plugin.metadata.name.clone(),
 					description:  command.description.clone(),
-					arg_kind:     CommandArgKind::RawTail,
+					params:       command.params.iter().map(plugin_param_to_command_param).collect(),
 				})
 			})
 			.collect()
@@ -69,5 +69,20 @@ impl RimState {
 			lines,
 			scroll: 0,
 		}));
+	}
+}
+
+fn plugin_param_to_command_param(param: &rim_ports::PluginCommandParamSpec) -> CommandParamSpec {
+	CommandParamSpec {
+		name:     param.name.clone(),
+		kind:     match param.kind {
+			PluginCommandParamKind::String => CommandArgKind::String,
+			PluginCommandParamKind::File => CommandArgKind::File,
+		},
+		optional: param.optional,
+		picker:   match param.kind {
+			PluginCommandParamKind::String => None,
+			PluginCommandParamKind::File => Some(PickerKind::File),
+		},
 	}
 }

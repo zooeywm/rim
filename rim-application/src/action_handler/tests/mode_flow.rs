@@ -42,7 +42,10 @@ fn resolve_normal_sequence_should_map_leader_v_w_to_toggle_word_wrap() {
 	let resolved = resolve_keys(&seq);
 	assert!(matches!(
 		resolved,
-		SequenceMatch::Command(CommandTarget::Builtin(BuiltinCommand::View(ViewCommand::ToggleWordWrap)))
+		SequenceMatch::Command(crate::command::ResolvedCommand {
+			target: CommandTarget::Builtin(BuiltinCommand::View(ViewCommand::ToggleWordWrap)),
+			..
+		})
 	));
 }
 
@@ -230,6 +233,7 @@ fn configured_normal_key_binding_should_reject_conflicting_mapping() {
 				keymap: vec![KeymapBindingConfig {
 					on:   KeyBindingOn::single("H"),
 					run:  "core.buffer.next".into(),
+					args: Vec::new(),
 					desc: Some("custom".to_string()),
 				}],
 			},
@@ -980,6 +984,7 @@ fn open_key_hint_popup_should_refresh_after_config_reload() {
 				keymap: vec![KeymapBindingConfig {
 					on:   KeyBindingOn::single("L"),
 					run:  "core.buffer.next".into(),
+					args: Vec::new(),
 					desc: Some("custom".to_string()),
 				}],
 			},
@@ -1011,6 +1016,7 @@ fn open_command_palette_should_refresh_after_config_reload() {
 			commands: vec![CommandAliasConfig {
 				name: "y".to_string(),
 				run:  "core.picker.yazi".into(),
+				args: Vec::new(),
 				desc: Some("Open custom picker".to_string()),
 			}],
 		},
@@ -1308,7 +1314,7 @@ fn command_palette_file_preview_should_toggle_wrap_with_ctrl_w() {
 			result:         Ok(vec![workspace_root.join("README.md")]),
 		}),
 	);
-	assert!(state.command_palette_showing_files());
+	assert!(state.command_palette_showing_picker(crate::command::PickerKind::File));
 	assert!(state.picker_preview_word_wrap_enabled());
 
 	let _ = state.apply_action(
@@ -1507,22 +1513,27 @@ fn command_mode_should_show_palette_matches_for_command_ids() {
 }
 
 #[test]
-fn command_mode_tab_completion_should_use_plugin_default_name() {
+fn command_mode_tab_completion_should_use_plugin_command_id() {
 	let mut state = RimState::new();
 	state
 		.register_plugin_command(PluginCommandRegistration {
 			id:           "plugin.demo.echo".to_string(),
-			default_name: "echo".to_string(),
+			default_name: "Echo".to_string(),
 			plugin_id:    "demo".to_string(),
 			command_id:   "echo".to_string(),
 			category:     "Demo Plugin".to_string(),
 			description:  "Echo through plugin runtime".to_string(),
-			arg_kind:     CommandArgKind::RawTail,
+			params:       vec![crate::command::CommandParamSpec {
+				name:     "message".to_string(),
+				kind:     CommandArgKind::String,
+				optional: true,
+				picker:   None,
+			}],
 		})
 		.expect("plugin command should register");
 
 	state.enter_command_mode();
-	for ch in "ec".chars() {
+	for ch in "Ec".chars() {
 		let _ = dispatch_test_action(
 			&mut state,
 			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))),
@@ -1534,11 +1545,11 @@ fn command_mode_tab_completion_should_use_plugin_default_name() {
 		AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))),
 	);
 
-	assert_eq!(state.workbench.command_line, "echo");
+	assert_eq!(state.workbench.command_line, "plugin.demo.echo");
 }
 
 #[test]
-fn command_mode_should_switch_palette_to_workspace_files_for_optional_path_commands() {
+fn command_mode_should_switch_palette_to_workspace_file_picker_for_path_params() {
 	let workspace_root = PathBuf::from("/workspace");
 	let mut state = RimState::new();
 	state.set_workspace_root(workspace_root.clone());
@@ -1562,7 +1573,7 @@ fn command_mode_should_switch_palette_to_workspace_files_for_optional_path_comma
 	);
 
 	let palette = state.command_palette().expect("command palette should stay open");
-	assert!(palette.showing_files);
+	assert_eq!(palette.active_picker, Some(crate::command::PickerKind::File));
 	assert!(!palette.loading);
 	let first = palette.items.first().expect("file match should be present");
 	let file = first.as_file().expect("palette should switch to file entries");

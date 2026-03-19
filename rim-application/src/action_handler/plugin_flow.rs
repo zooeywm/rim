@@ -165,7 +165,7 @@ where
 				Some(argument) if !argument.is_empty() => format!("{} {}", command_id, argument),
 				_ => command_id,
 			};
-			let Some(resolved) = state.workbench.command_registry.resolve_command_input(raw.as_str()) else {
+			let Ok(resolved) = state.workbench.command_registry.resolve_command_input(raw.as_str()) else {
 				state
 					.push_notification(NotificationLevel::Error, format!("plugin requested unknown command: {}", raw));
 				return ControlFlow::Continue(());

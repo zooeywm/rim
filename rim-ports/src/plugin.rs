@@ -22,6 +22,21 @@ pub struct PluginCommandMetadata {
 	pub id:          String,
 	pub name:        String,
 	pub description: String,
+	pub params:      Vec<PluginCommandParamSpec>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginCommandParamKind {
+	String,
+	File,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PluginCommandParamSpec {
+	pub name:     String,
+	pub kind:     PluginCommandParamKind,
+	pub optional: bool,
 }
 
 /// Request contract for the v1 CommandProvider capability.

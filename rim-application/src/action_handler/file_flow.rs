@@ -312,8 +312,8 @@ where P: ActionPorts {
 					})
 					.collect::<Vec<_>>();
 				state.set_workspace_file_cache(entries.clone());
-				if state.command_palette_showing_files()
-					&& let Some(path) = state.selected_command_palette_file_path().map(PathBuf::from)
+				if state.command_palette_showing_picker(crate::command::PickerKind::File)
+					&& let Some(path) = state.selected_command_palette_picker_path().map(PathBuf::from)
 				{
 					state.set_command_palette_preview_loading(path.as_path());
 					if let Err(source) = ports.enqueue_load_workspace_file_preview(path.clone()) {
@@ -350,7 +350,7 @@ where P: ActionPorts {
 		FileAction::WorkspaceFilesChanged { workspace_root } => {
 			if !state.has_workspace_file_cache()
 				&& !state.workspace_file_picker_open()
-				&& !state.command_palette().is_some_and(|palette| palette.showing_files)
+				&& !state.command_palette_showing_picker(crate::command::PickerKind::File)
 			{
 				return ControlFlow::Continue(());
 			}
