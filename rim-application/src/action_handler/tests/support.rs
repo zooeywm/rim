@@ -133,6 +133,7 @@ pub(super) struct RecordingPorts {
 	pub(super) session_saves:         RefCell<Vec<WorkspaceSessionSnapshot>>,
 	pub(super) plugin_discovers:      RefCell<Vec<String>>,
 	pub(super) plugin_invocations:    RefCell<Vec<PluginCommandRequest>>,
+	pub(super) picked_path:           RefCell<Option<PathBuf>>,
 }
 
 impl FileWatcher for RecordingPorts {
@@ -150,7 +151,9 @@ impl FileWatcher for RecordingPorts {
 }
 
 impl FilePicker for RecordingPorts {
-	fn pick_open_path(&self) -> Result<Option<PathBuf>, FilePickerError> { Ok(None) }
+	fn pick_open_path(&self) -> Result<Option<PathBuf>, FilePickerError> {
+		Ok(self.picked_path.borrow().clone())
+	}
 }
 
 impl PluginRuntime for RecordingPorts {

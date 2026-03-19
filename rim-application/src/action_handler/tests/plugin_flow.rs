@@ -1,4 +1,4 @@
-use std::ops::ControlFlow;
+use std::{ops::ControlFlow, path::PathBuf};
 
 use rim_ports::{PluginAction as RequestedPluginAction, PluginCapability, PluginCommandMetadata, PluginCommandParamKind, PluginCommandParamSpec, PluginCommandResponse, PluginDiscoveryResult, PluginEffect, PluginMetadata, PluginNotification, PluginNotificationLevel, PluginPanel, PluginRegistration};
 
@@ -114,4 +114,26 @@ fn command_completed_should_apply_effects_and_requested_actions() {
 	let panel = state.floating_window().expect("plugin panel should be open");
 	assert_eq!(panel.title, "Plugin Panel");
 	assert_eq!(panel.footer.as_deref(), Some("Close with Esc"));
+}
+
+#[test]
+fn command_completed_should_apply_pick_file_requested_action() {
+	let ports = RecordingPorts::default();
+	let selected_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+	ports.picked_path.replace(Some(selected_path.clone()));
+	let mut state = RimState::new();
+
+	let flow = state.apply_action(
+		&ports,
+		AppAction::Plugin(PluginRuntimeAction::CommandCompleted {
+			command_id: "plugin.yazi.yazi".to_string(),
+			result:     Ok(PluginCommandResponse {
+				effects: vec![PluginEffect::RequestAction(RequestedPluginAction::PickFile)],
+			}),
+		}),
+	);
+
+	assert!(matches!(flow, ControlFlow::Continue(())));
+	assert_eq!(ports.file_loads.borrow().len(), 1);
+	assert_eq!(ports.file_loads.borrow()[0].1, selected_path);
 }

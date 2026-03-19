@@ -494,6 +494,7 @@ fn plugin_panel_from_wit(panel: wit::PluginPanel) -> PluginPanel {
 fn plugin_action_from_wit(action: wit::PluginAction) -> PluginAction {
 	match action {
 		wit::PluginAction::OpenFile(payload) => PluginAction::OpenFile { path: payload.path },
+		wit::PluginAction::PickFile(_) => PluginAction::PickFile,
 		wit::PluginAction::InsertText(payload) => PluginAction::InsertText { text: payload.text },
 		wit::PluginAction::RunCommand(payload) => {
 			PluginAction::RunCommand { command_id: payload.command_id, argument: payload.argument }

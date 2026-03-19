@@ -68,6 +68,8 @@ interface command-provider {
         text: string,
     }
 
+    record pick-file-action {}
+
     record run-command-action {
         command-id: string,
         argument: option<string>,
@@ -75,6 +77,7 @@ interface command-provider {
 
     variant plugin-action {
         open-file(open-file-action),
+        pick-file(pick-file-action),
         insert-text(insert-text-action),
         run-command(run-command-action),
     }

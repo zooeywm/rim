@@ -153,6 +153,20 @@ where
 			state,
 			AppAction::File(FileAction::OpenRequested { path: PathBuf::from(path) }),
 		),
+		RequestedPluginAction::PickFile => match ports.pick_open_path() {
+			Ok(Some(path)) => {
+				RimState::dispatch_internal(ports, state, AppAction::File(FileAction::OpenRequested { path }))
+			}
+			Ok(None) => {
+				state.workbench.status_bar.message = "open cancelled".to_string();
+				ControlFlow::Continue(())
+			}
+			Err(err) => {
+				error!("plugin file picker failed: {}", err);
+				state.workbench.status_bar.message = format!("open failed: {}", err);
+				ControlFlow::Continue(())
+			}
+		},
 		RequestedPluginAction::InsertText { text } => {
 			state.push_notification(
 				NotificationLevel::Warn,

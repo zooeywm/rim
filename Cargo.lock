@@ -2576,6 +2576,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rim-plugin-yazi"
+version = "0.0.3"
+dependencies = [
+ "rim-plugin-api",
+]
+
+[[package]]
 name = "rim-ports"
 version = "0.0.3"
 dependencies = [
