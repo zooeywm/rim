@@ -1,10 +1,12 @@
 #[cfg(test)]
+use std::path::PathBuf;
+#[cfg(test)]
 use std::process::Command;
-use std::{collections::{HashMap, HashSet}, fs, path::{Path, PathBuf}, sync::Mutex, thread};
+use std::{collections::{HashMap, HashSet}, fs, path::Path, sync::Mutex, thread};
 
 use rim_application::action::{AppAction, PluginRuntimeAction};
+use rim_paths::user_config_root;
 use rim_ports::{PluginAction, PluginCapability, PluginCommandError, PluginCommandMetadata, PluginCommandParamKind, PluginCommandParamSpec, PluginCommandRequest, PluginCommandResponse, PluginDiscoveryResult, PluginEffect, PluginInvocationError, PluginLoadFailure, PluginMetadata, PluginNotification, PluginNotificationLevel, PluginPanel, PluginRegistration, PluginResolvedParam, PluginRuntime, PluginRuntimeError, PluginRuntimeFailure};
-use serde::Deserialize;
 use tracing::error;
 use wasmtime::{Config, Engine, Store, component::{Component, Linker}};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
@@ -177,9 +179,9 @@ fn build_store(engine: &Engine) -> Store<PluginStoreState> { Store::new(engine, 
 
 fn discover_plugins(
 	engine: &Engine,
-	workspace_root: &str,
+	_workspace_root: &str,
 ) -> Result<DiscoverySnapshot, PluginRuntimeFailure> {
-	let plugins_root = Path::new(workspace_root).join("plugins");
+	let plugins_root = user_config_root().join("plugins");
 	if !plugins_root.exists() {
 		return Ok(DiscoverySnapshot { plugins: Vec::new(), failures: Vec::new() });
 	}
@@ -203,11 +205,24 @@ fn discover_plugins(
 			}
 		};
 		let path = entry.path();
-		if !path.is_dir() {
+		if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("wasm") {
 			continue;
 		}
 		match load_plugin(engine, path.as_path()) {
-			Ok(plugin) => plugins.push(plugin),
+			Ok(plugin) => {
+				if plugins
+					.iter()
+					.any(|loaded: &LoadedPlugin| loaded.registration.metadata.id == plugin.registration.metadata.id)
+				{
+					failures.push(PluginLoadFailure {
+						plugin_id: Some(plugin.registration.metadata.id.clone()),
+						location:  path.display().to_string(),
+						message:   "duplicate plugin id is already loaded from another wasm file".to_string(),
+					});
+					continue;
+				}
+				plugins.push(plugin);
+			}
 			Err(failure) => failures.push(failure),
 		}
 	}
@@ -215,74 +230,48 @@ fn discover_plugins(
 	Ok(DiscoverySnapshot { plugins, failures })
 }
 
-fn load_plugin(engine: &Engine, plugin_dir: &Path) -> Result<LoadedPlugin, PluginLoadFailure> {
-	let manifest_path = plugin_dir.join("plugin.toml");
-	let manifest_text = fs::read_to_string(&manifest_path).map_err(|err| PluginLoadFailure {
-		plugin_id: None,
-		location:  manifest_path.display().to_string(),
-		message:   format!("read plugin manifest failed: {}", err),
-	})?;
-	let manifest =
-		toml::from_str::<PluginManifest>(manifest_text.as_str()).map_err(|err| PluginLoadFailure {
-			plugin_id: None,
-			location:  manifest_path.display().to_string(),
-			message:   format!("parse plugin manifest failed: {}", err),
-		})?;
-
-	let entry_path = resolve_entry_path(plugin_dir, manifest.entry.as_str());
+fn load_plugin(engine: &Engine, entry_path: &Path) -> Result<LoadedPlugin, PluginLoadFailure> {
 	if entry_path.extension().and_then(|ext| ext.to_str()) != Some("wasm") {
 		return Err(PluginLoadFailure {
-			plugin_id: Some(manifest.id.clone()),
+			plugin_id: None,
 			location:  entry_path.display().to_string(),
 			message:   "plugin entry must be a .wasm file".to_string(),
 		});
 	}
 	if !entry_path.is_file() {
 		return Err(PluginLoadFailure {
-			plugin_id: Some(manifest.id.clone()),
+			plugin_id: None,
 			location:  entry_path.display().to_string(),
-			message:   format!(
-				"plugin wasm file is missing; build it with `cargo build -p rim-plugin-example --target \
-				 wasm32-wasip2`"
-			),
+			message:   "plugin wasm file is missing".to_string(),
 		});
 	}
 
 	let component = Component::from_file(engine, &entry_path).map_err(|err| PluginLoadFailure {
-		plugin_id: Some(manifest.id.clone()),
+		plugin_id: None,
 		location:  entry_path.display().to_string(),
 		message:   format!("compile plugin component failed: {}", err),
 	})?;
 	let descriptor = read_descriptor(&component).map_err(|message| PluginLoadFailure {
-		plugin_id: Some(manifest.id.clone()),
+		plugin_id: None,
 		location: entry_path.display().to_string(),
 		message,
 	})?;
 
-	validate_descriptor(&manifest, &descriptor, &entry_path)?;
+	validate_descriptor(&descriptor, entry_path)?;
 	let registration = registration_from_descriptor(descriptor);
 
 	Ok(LoadedPlugin { registration, component })
 }
 
-fn resolve_entry_path(plugin_dir: &Path, entry: &str) -> PathBuf {
-	let entry_path = PathBuf::from(entry);
-	if entry_path.is_absolute() { entry_path } else { plugin_dir.join(entry_path) }
-}
-
 fn validate_descriptor(
-	manifest: &PluginManifest,
 	descriptor: &wit::PluginDescriptor,
 	entry_path: &Path,
 ) -> Result<(), PluginLoadFailure> {
-	if descriptor.metadata.id != manifest.id {
+	if descriptor.metadata.id.trim().is_empty() {
 		return Err(PluginLoadFailure {
-			plugin_id: Some(manifest.id.clone()),
+			plugin_id: None,
 			location:  entry_path.display().to_string(),
-			message:   format!(
-				"plugin descriptor id '{}' does not match manifest id '{}'",
-				descriptor.metadata.id, manifest.id
-			),
+			message:   "plugin descriptor id must not be empty".to_string(),
 		});
 	}
 	if !descriptor
@@ -292,7 +281,7 @@ fn validate_descriptor(
 		.any(|capability| matches!(capability, wit::PluginCapability::CommandProvider))
 	{
 		return Err(PluginLoadFailure {
-			plugin_id: Some(manifest.id.clone()),
+			plugin_id: Some(descriptor.metadata.id.clone()),
 			location:  entry_path.display().to_string(),
 			message:   "plugin does not declare the command-provider capability".to_string(),
 		});
@@ -302,7 +291,7 @@ fn validate_descriptor(
 	for command in &descriptor.commands {
 		if !seen_commands.insert(command.id.clone()) {
 			return Err(PluginLoadFailure {
-				plugin_id: Some(manifest.id.clone()),
+				plugin_id: Some(descriptor.metadata.id.clone()),
 				location:  entry_path.display().to_string(),
 				message:   format!("duplicate plugin command id '{}'", command.id),
 			});
@@ -526,18 +515,21 @@ fn plugin_command_error_from_wit(error: wit::PluginCommandError) -> PluginComman
 	}
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PluginManifest {
-	id:    String,
-	entry: String,
-}
-
 #[cfg(test)]
 mod tests {
+	use std::time::{SystemTime, UNIX_EPOCH};
+
 	use super::*;
 
 	fn workspace_root() -> PathBuf { PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..") }
+
+	fn unique_test_config_root() -> PathBuf {
+		let nonce = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.expect("system time should be after unix epoch")
+			.as_nanos();
+		std::env::temp_dir().join(format!("rim-plugin-host-test-{}-{}", std::process::id(), nonce))
+	}
 
 	#[test]
 	fn example_plugin_can_be_discovered_and_invoked() {
@@ -552,6 +544,17 @@ mod tests {
 			.status()
 			.expect("cargo build for example plugin should start");
 		assert!(status.success(), "example plugin component build should succeed");
+
+		let config_root = unique_test_config_root();
+		let plugins_root = config_root.join("rim").join("plugins");
+		fs::create_dir_all(&plugins_root).expect("plugin config directory should be created");
+		let wasm_source = workspace_root.join("target/wasm32-wasip2/debug/rim_plugin_example.wasm");
+		let wasm_target = plugins_root.join("rim_plugin_example.wasm");
+		fs::copy(&wasm_source, &wasm_target)
+			.expect("example plugin wasm should be copied into config plugin dir");
+		unsafe {
+			std::env::set_var("XDG_CONFIG_HOME", &config_root);
+		}
 
 		let engine = build_engine();
 		let discovery =

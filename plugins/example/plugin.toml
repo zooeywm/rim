@@ -1,2 +1,0 @@
-id = "example"
-entry = "../../target/wasm32-wasip2/debug/rim_plugin_example.wasm"

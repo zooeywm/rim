@@ -1,21 +1,15 @@
 # Plugins
 
-This directory is the workspace plugin root used by the v1 WASM CommandProvider implementation.
+This directory is no longer used for runtime plugin discovery.
 
-Development layout:
+Runtime discovery now reads `.wasm` plugin components from the user config directory:
 
 ```text
-plugins/
-  example/
-    plugin.toml
+$XDG_CONFIG_HOME/rim/plugins/*.wasm
 ```
 
-The checked-in example manifest points to the workspace example plugin crate build output:
-
-```toml
-id = "example"
-entry = "../../target/wasm32-wasip2/debug/rim_plugin_example.wasm"
-```
+On macOS and Windows this maps to the existing `rim-paths::user_config_root()` platform-specific
+config directory.
 
 Build the example plugin artifact with:
 
@@ -24,4 +18,11 @@ rustup target add wasm32-wasip2
 cargo build -p rim-plugin-example --target wasm32-wasip2
 ```
 
-After that, startup discovery will load the example plugin through the normal application/runtime path.
+Then copy the resulting `.wasm` file into the user config plugin directory, for example:
+
+```bash
+mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/rim/plugins"
+cp target/wasm32-wasip2/debug/rim_plugin_example.wasm "${XDG_CONFIG_HOME:-$HOME/.config}/rim/plugins/"
+```
+
+After that, startup discovery will load the plugin through the normal application/runtime path.
