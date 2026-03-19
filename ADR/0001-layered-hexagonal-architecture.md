@@ -72,7 +72,7 @@ flowchart TD
 
 ## Outcome
 
-The migration is complete and the temporary facade crate has been removed. The repository now uses the final crate graph directly.
+The migration is complete. The repository now uses the final crate graph directly.
 
 ## Follow-Up
 

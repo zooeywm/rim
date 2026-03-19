@@ -10,7 +10,19 @@ export default defineConfig({
 			title: 'rim Docs',
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/zooeywm/rim' }],
 			customCss: ['./src/styles/custom.css'],
+			components: {
+				MarkdownContent: './src/components/MarkdownContent.astro',
+			},
 			sidebar: [
+				{
+					label: 'Guides',
+					items: [
+						{ label: 'Getting Started', slug: 'guides/getting-started' },
+						{ label: 'Local Development', slug: 'guides/local-development' },
+						{ label: 'Testing Strategy', slug: 'guides/testing-strategy' },
+						{ label: 'How To Add A Command', slug: 'guides/how-to-add-a-command' },
+					],
+				},
 				{
 					label: 'Architecture',
 					items: [
@@ -20,15 +32,6 @@ export default defineConfig({
 						{ label: 'Ports And Adapters', slug: 'architecture/ports-and-adapters' },
 						{ label: 'Runtime Event Loop', slug: 'architecture/runtime-event-loop' },
 						{ label: 'Dependency Rules', slug: 'architecture/dependency-rules' },
-					],
-				},
-				{
-					label: 'Guides',
-					items: [
-						{ label: 'Getting Started', slug: 'guides/getting-started' },
-						{ label: 'Local Development', slug: 'guides/local-development' },
-						{ label: 'Testing Strategy', slug: 'guides/testing-strategy' },
-						{ label: 'How To Add A Command', slug: 'guides/how-to-add-a-command' },
 					],
 				},
 				{

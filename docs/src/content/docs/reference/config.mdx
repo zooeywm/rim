@@ -26,13 +26,14 @@ On Unix-like systems that is typically:
 
 ```mermaid
 flowchart TD
-    Start["App startup or reload"] --> Init["initialize_config_files()"]
-    Init --> Reset["reset_config_state_to_defaults()"]
+    Start["App startup or reload"] --> Reset["reset_config_state_to_defaults()"]
     Reset --> Editor["load editor.toml"]
     Editor --> Keymaps["load keymaps.toml"]
     Keymaps --> Commands["load commands.toml"]
     Commands --> Apply["apply to WorkbenchState / CommandRegistry"]
 ```
+
+Missing files are not created at startup. If a config file is absent, `rim` keeps the embedded preset defaults for that slice.
 
 ## Ownership
 
@@ -49,12 +50,9 @@ flowchart TD
 - `key_hints_width`
 - `key_hints_max_height`
 
-## Backward Compatibility
-
-Legacy `config.toml` migration is still supported by the current config initialization path. Refactors should preserve that behavior unless removal is deliberate and documented.
-
 ## Anti-Patterns
 
 - putting config-derived registry state into `rim-domain`
 - having adapters parse config on their own
 - duplicating config path logic outside `rim-application`
+- adding startup-time config file creation or migration side effects back into the runtime path

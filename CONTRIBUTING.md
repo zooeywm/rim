@@ -31,10 +31,9 @@ If a change needs both pure logic and side effects, split it. Put the pure trans
 
 ## Change Process
 
-1. Start from the owning crate, not from the facade.
-2. Keep public boundaries explicit.
-3. Prefer small, compile-safe slices.
-4. Run formatting and workspace verification before finishing.
+1. Keep public boundaries explicit.
+2. Prefer small, compile-safe slices.
+3. Run formatting and workspace verification before finishing.
 
 Required verification:
 

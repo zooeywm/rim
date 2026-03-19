@@ -1,0 +1,110 @@
+---
+import '@astrojs/starlight/style/markdown.css';
+---
+
+<div class="sl-markdown-content"><slot /></div>
+
+<script>
+	import mermaid from 'mermaid';
+
+	let nextDiagramId = 0;
+
+	mermaid.initialize({
+		startOnLoad: false,
+		securityLevel: 'loose',
+	});
+
+	function collectMermaidBlocks() {
+		const preBlocks = Array.from(document.querySelectorAll('.sl-markdown-content pre[data-language="mermaid"]'));
+		const legacyBlocks = Array.from(
+			document.querySelectorAll('.sl-markdown-content pre > code.language-mermaid'),
+		)
+			.map((code) => code.parentElement)
+			.filter((pre) => pre instanceof HTMLPreElement);
+
+		return Array.from(new Set([...preBlocks, ...legacyBlocks]));
+	}
+
+	function extractMermaidSource(pre) {
+		const code = pre.querySelector('code');
+		if (!code) {
+			return pre.textContent?.trimEnd() ?? '';
+		}
+
+		const expressiveLines = code.querySelectorAll('.ec-line .code');
+		if (expressiveLines.length > 0) {
+			return Array.from(expressiveLines)
+				.map((line) => line.textContent ?? '')
+				.join('\n')
+				.trimEnd();
+		}
+
+		return code.textContent?.trimEnd() ?? '';
+	}
+
+	async function renderMermaidBlocks() {
+		const blocks = collectMermaidBlocks();
+
+		for (const block of blocks) {
+			const pre = block instanceof HTMLPreElement ? block : null;
+			if (!pre) continue;
+			const source = extractMermaidSource(pre);
+			const container = document.createElement('div');
+			container.className = 'mermaid-diagram';
+			pre.replaceWith(container);
+
+			if (!source) {
+				continue;
+			}
+
+			try {
+				const id = `mermaid-diagram-${nextDiagramId++}`;
+				const { svg, bindFunctions } = await mermaid.render(id, source);
+				container.innerHTML = svg;
+				bindFunctions?.(container);
+			} catch (error) {
+				const message = document.createElement('p');
+				message.className = 'mermaid-diagram-error-message';
+				message.textContent = 'Mermaid diagram failed to render.';
+
+				const fallback = document.createElement('pre');
+				fallback.className = 'mermaid-diagram-error-source';
+				fallback.textContent = source;
+
+				container.replaceChildren(message, fallback);
+				console.error('mermaid render failed', error);
+			}
+		}
+	}
+
+	document.addEventListener('astro:page-load', () => {
+		void renderMermaidBlocks();
+	});
+
+	void renderMermaidBlocks();
+</script>
+
+<style>
+	.mermaid-diagram {
+		margin: 1.5rem 0;
+		overflow-x: auto;
+	}
+
+	.mermaid-diagram :global(svg) {
+		display: block;
+		height: auto;
+		margin: 0 auto;
+		max-width: 100%;
+	}
+
+	.mermaid-diagram-error-message {
+		color: var(--sl-color-orange-high);
+		font-size: 0.95rem;
+		font-weight: 600;
+		margin: 0 0 0.75rem;
+	}
+
+	.mermaid-diagram-error-source {
+		margin: 0;
+	}
+</style>
