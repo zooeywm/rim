@@ -101,15 +101,15 @@ pub(super) fn execute_command_target<P>(
 	state: &mut RimState,
 	target: CommandTarget,
 	argv: Vec<String>,
+	params: crate::command::ResolvedParams,
 ) -> ControlFlow<()>
 where
 	P: ActionPorts,
 {
 	match target {
-		CommandTarget::Builtin(builtin) => execute_builtin_command(ports, state, builtin, argv),
+		CommandTarget::Builtin(builtin) => execute_builtin_command(ports, state, builtin, argv, params),
 		CommandTarget::Plugin { plugin_id, command_id } => {
-			let argument = argv.first().cloned();
-			plugin_flow::enqueue_plugin_command(ports, state, plugin_id, command_id, argument)
+			plugin_flow::enqueue_plugin_command(ports, state, plugin_id, command_id, &params)
 		}
 	}
 }
@@ -122,7 +122,7 @@ pub(super) fn execute_resolved_command<P>(
 where
 	P: ActionPorts,
 {
-	execute_command_target(ports, state, resolved.target, resolved.argv)
+	execute_command_target(ports, state, resolved.target, resolved.argv, resolved.params)
 }
 
 fn execute_builtin_command<P>(
@@ -130,11 +130,13 @@ fn execute_builtin_command<P>(
 	state: &mut RimState,
 	command: BuiltinCommand,
 	argv: Vec<String>,
+	params: crate::command::ResolvedParams,
 ) -> ControlFlow<()>
 where
 	P: ActionPorts,
 {
-	let first_argument = || argv.first().cloned();
+	let path_argument =
+		|| params.get_file("path").map(PathBuf::from).or_else(|| argv.first().map(PathBuf::from));
 	match command {
 		command if command.normal_mode_action().is_some() => {
 			let action = command.normal_mode_action().expect("checked above");
@@ -145,11 +147,11 @@ where
 		BuiltinCommand::Command(CommandCommand::QuitAll) => quit_application(ports, state, false),
 		BuiltinCommand::Command(CommandCommand::QuitAllForce) => quit_application(ports, state, true),
 		BuiltinCommand::Command(CommandCommand::Save { .. }) => {
-			enqueue_save_active_buffer(ports, state, false, false, first_argument().map(PathBuf::from));
+			enqueue_save_active_buffer(ports, state, false, false, path_argument());
 			ControlFlow::Continue(())
 		}
 		BuiltinCommand::Command(CommandCommand::SaveForce { .. }) => {
-			enqueue_save_active_buffer(ports, state, false, true, first_argument().map(PathBuf::from));
+			enqueue_save_active_buffer(ports, state, false, true, path_argument());
 			ControlFlow::Continue(())
 		}
 		BuiltinCommand::Command(CommandCommand::SaveAll) => {
@@ -157,11 +159,11 @@ where
 			ControlFlow::Continue(())
 		}
 		BuiltinCommand::Command(CommandCommand::SaveAndQuit { .. }) => {
-			enqueue_save_active_buffer(ports, state, true, false, first_argument().map(PathBuf::from));
+			enqueue_save_active_buffer(ports, state, true, false, path_argument());
 			ControlFlow::Continue(())
 		}
 		BuiltinCommand::Command(CommandCommand::SaveAndQuitForce { .. }) => {
-			enqueue_save_active_buffer(ports, state, true, true, first_argument().map(PathBuf::from));
+			enqueue_save_active_buffer(ports, state, true, true, path_argument());
 			ControlFlow::Continue(())
 		}
 		BuiltinCommand::Command(CommandCommand::SaveAllAndQuit) => {
@@ -173,24 +175,16 @@ where
 			ControlFlow::Continue(())
 		}
 		BuiltinCommand::Command(CommandCommand::Reload { .. }) => {
-			if let Some(path) = first_argument() {
-				RimState::dispatch_internal(
-					ports,
-					state,
-					AppAction::File(FileAction::OpenRequested { path: PathBuf::from(path) }),
-				)
+			if let Some(path) = path_argument() {
+				RimState::dispatch_internal(ports, state, AppAction::File(FileAction::OpenRequested { path }))
 			} else {
 				enqueue_reload_active_buffer(ports, state, false);
 				ControlFlow::Continue(())
 			}
 		}
 		BuiltinCommand::Command(CommandCommand::ReloadForce { .. }) => {
-			if let Some(path) = first_argument() {
-				RimState::dispatch_internal(
-					ports,
-					state,
-					AppAction::File(FileAction::OpenRequested { path: PathBuf::from(path) }),
-				)
+			if let Some(path) = path_argument() {
+				RimState::dispatch_internal(ports, state, AppAction::File(FileAction::OpenRequested { path }))
 			} else {
 				enqueue_reload_active_buffer(ports, state, true);
 				ControlFlow::Continue(())

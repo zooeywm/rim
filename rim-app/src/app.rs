@@ -335,6 +335,7 @@ mod tests {
 				)),
 				target:     CommandTarget::Builtin(BuiltinCommand::Cursor(CursorCommand::FileStart)),
 				argv:       Vec::new(),
+				params:     rim_application::command::ResolvedParams::default(),
 			})
 		);
 		assert_eq!(

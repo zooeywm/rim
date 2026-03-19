@@ -2548,6 +2548,7 @@ version = "0.0.3"
 name = "rim-plugin-api"
 version = "0.0.3"
 dependencies = [
+ "rim-command-macros",
  "wit-bindgen",
 ]
 

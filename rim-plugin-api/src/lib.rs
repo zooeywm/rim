@@ -1,5 +1,7 @@
 use core::marker::PhantomData;
 
+pub use rim_command_macros::PluginCommandSet;
+
 pub mod bindings {
 	wit_bindgen::generate!({
 		path: "wit",
@@ -9,13 +11,21 @@ pub mod bindings {
 }
 
 mod wit_types {
-	pub use super::bindings::exports::rim::plugin::command_provider::{CommandUnavailableError, ExecutionFailedError, Guest, InsertTextAction, InvalidRequestError, OpenFileAction, PluginAction as WitPluginAction, PluginCapability as WitPluginCapability, PluginCommandError as WitPluginCommandError, PluginCommandMetadata as WitPluginCommandMetadata, PluginCommandParamKind as WitPluginCommandParamKind, PluginCommandParamSpec as WitPluginCommandParamSpec, PluginCommandRequest as WitPluginCommandRequest, PluginCommandResponse as WitPluginCommandResponse, PluginDescriptor as WitPluginDescriptor, PluginEffect as WitPluginEffect, PluginMetadata as WitPluginMetadata, PluginNotification as WitPluginNotification, PluginNotificationLevel as WitPluginNotificationLevel, PluginPanel as WitPluginPanel, RunCommandAction};
+	pub use super::bindings::exports::rim::plugin::command_provider::{CommandUnavailableError, ExecutionFailedError, Guest, InsertTextAction, InvalidRequestError, OpenFileAction, PluginAction as WitPluginAction, PluginCapability as WitPluginCapability, PluginCommandError as WitPluginCommandError, PluginCommandMetadata as WitPluginCommandMetadata, PluginCommandParamKind as WitPluginCommandParamKind, PluginCommandParamSpec as WitPluginCommandParamSpec, PluginCommandRequest as WitPluginCommandRequest, PluginCommandResponse as WitPluginCommandResponse, PluginDescriptor as WitPluginDescriptor, PluginEffect as WitPluginEffect, PluginMetadata as WitPluginMetadata, PluginNotification as WitPluginNotification, PluginNotificationLevel as WitPluginNotificationLevel, PluginPanel as WitPluginPanel, PluginResolvedParam as WitPluginResolvedParam, RunCommandAction};
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PluginCapability {
 	CommandProvider,
 }
+
+/// Zero-sized marker used only by plugin command declaration parsing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct File;
+
+/// Zero-sized marker used only by plugin command declaration parsing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct Text;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginMetadata {
@@ -35,8 +45,15 @@ pub struct PluginCommandMetadata {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PluginCommandParamKind {
-	String,
+	Text,
 	File,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PluginCommandParamStaticSpec {
+	pub name:     &'static str,
+	pub kind:     PluginCommandParamKind,
+	pub optional: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,9 +64,42 @@ pub struct PluginCommandParamSpec {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginResolvedParam {
+	pub name:  String,
+	pub kind:  PluginCommandParamKind,
+	pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PluginResolvedParams(Vec<PluginResolvedParam>);
+
+impl PluginResolvedParams {
+	pub fn new(params: Vec<PluginResolvedParam>) -> Self { Self(params) }
+
+	pub fn as_slice(&self) -> &[PluginResolvedParam] { self.0.as_slice() }
+
+	pub fn iter(&self) -> impl Iterator<Item = &PluginResolvedParam> { self.0.iter() }
+
+	pub fn get(&self, name: &str) -> Option<&PluginResolvedParam> {
+		self.0.iter().find(|param| param.name == name)
+	}
+
+	pub fn get_text(&self, name: &str) -> Option<&str> {
+		let param = self.get(name)?;
+		(param.kind == PluginCommandParamKind::Text).then_some(param.value.as_str())
+	}
+
+	pub fn get_file(&self, name: &str) -> Option<&str> {
+		let param = self.get(name)?;
+		(param.kind == PluginCommandParamKind::File).then_some(param.value.as_str())
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginCommandRequest {
 	pub command_id:     String,
 	pub argument:       Option<String>,
+	pub params:         Vec<PluginResolvedParam>,
 	pub workspace_root: String,
 }
 
@@ -107,16 +157,56 @@ pub struct PluginDescriptor {
 
 pub type PluginCommandOutcome = Result<PluginCommandResponse, PluginCommandError>;
 
-pub trait CommandProviderPlugin {
-	fn descriptor() -> PluginDescriptor;
+pub trait PluginCommandSetMeta: Copy + 'static {
+	fn command_id(self) -> &'static str;
+	fn command_name(self) -> &'static str;
+	fn description(self) -> &'static str;
+	fn params(self) -> &'static [PluginCommandParamStaticSpec];
+	fn all_commands() -> &'static [Self];
+	fn from_command_id(command_id: &str) -> Option<Self>;
+
+	fn metadata() -> Vec<PluginCommandMetadata> {
+		Self::all_commands().iter().copied().map(Self::to_metadata).collect()
+	}
+
+	fn to_metadata(self) -> PluginCommandMetadata {
+		PluginCommandMetadata {
+			id:          self.command_id().to_string(),
+			name:        self.command_name().to_string(),
+			description: self.description().to_string(),
+			params:      plugin_static_params_to_runtime(self.params()),
+		}
+	}
+}
+
+pub trait Plugin {
+	const ID: &'static str;
+	const NAME: &'static str;
+	const VERSION: &'static str;
+	type Commands: PluginCommandSetMeta;
+
 	fn run_command(request: PluginCommandRequest) -> PluginCommandOutcome;
+
+	fn declared_capabilities() -> Vec<PluginCapability> { vec![PluginCapability::CommandProvider] }
+
+	fn descriptor() -> PluginDescriptor {
+		PluginDescriptor {
+			metadata: PluginMetadata {
+				id:                    Self::ID.to_string(),
+				name:                  Self::NAME.to_string(),
+				version:               Self::VERSION.to_string(),
+				declared_capabilities: Self::declared_capabilities(),
+			},
+			commands: <Self::Commands as PluginCommandSetMeta>::metadata(),
+		}
+	}
 }
 
 #[doc(hidden)]
 pub struct ExportedCommandProvider<T>(PhantomData<T>);
 
 impl<T> wit_types::Guest for ExportedCommandProvider<T>
-where T: CommandProviderPlugin
+where T: Plugin
 {
 	fn describe() -> wit_types::WitPluginDescriptor { into_wit_descriptor(T::descriptor()) }
 
@@ -165,6 +255,53 @@ fn into_wit_command_metadata(metadata: PluginCommandMetadata) -> wit_types::WitP
 	}
 }
 
+fn plugin_static_params_to_runtime(params: &[PluginCommandParamStaticSpec]) -> Vec<PluginCommandParamSpec> {
+	params
+		.iter()
+		.map(|param| PluginCommandParamSpec {
+			name:     param.name.to_string(),
+			kind:     param.kind,
+			optional: param.optional,
+		})
+		.collect()
+}
+
+#[doc(hidden)]
+pub fn decode_plugin_params(
+	specs: &[PluginCommandParamStaticSpec],
+	request: &PluginCommandRequest,
+) -> Result<PluginResolvedParams, PluginCommandError> {
+	let mut resolved = Vec::with_capacity(request.params.len());
+	for spec in specs {
+		let param = request.params.iter().find(|param| param.name == spec.name);
+		match param {
+			Some(param) if param.kind == spec.kind => resolved.push(param.clone()),
+			Some(param) => {
+				return Err(PluginCommandError::InvalidRequest {
+					message: format!(
+						"parameter '{}' kind mismatch: expected {:?}, got {:?}",
+						spec.name, spec.kind, param.kind
+					),
+				});
+			}
+			None if spec.optional => {}
+			None => {
+				return Err(PluginCommandError::InvalidRequest {
+					message: format!("missing required parameter '{}'", spec.name),
+				});
+			}
+		}
+	}
+	for param in &request.params {
+		if !specs.iter().any(|spec| spec.name == param.name) {
+			return Err(PluginCommandError::InvalidRequest {
+				message: format!("unexpected parameter '{}'", param.name),
+			});
+		}
+	}
+	Ok(PluginResolvedParams::new(resolved))
+}
+
 fn into_wit_command_param_spec(param: PluginCommandParamSpec) -> wit_types::WitPluginCommandParamSpec {
 	wit_types::WitPluginCommandParamSpec {
 		name:     param.name,
@@ -175,7 +312,7 @@ fn into_wit_command_param_spec(param: PluginCommandParamSpec) -> wit_types::WitP
 
 fn into_wit_command_param_kind(kind: PluginCommandParamKind) -> wit_types::WitPluginCommandParamKind {
 	match kind {
-		PluginCommandParamKind::String => wit_types::WitPluginCommandParamKind::Text,
+		PluginCommandParamKind::Text => wit_types::WitPluginCommandParamKind::Text,
 		PluginCommandParamKind::File => wit_types::WitPluginCommandParamKind::File,
 	}
 }
@@ -247,7 +384,23 @@ fn from_wit_command_request(request: wit_types::WitPluginCommandRequest) -> Plug
 	PluginCommandRequest {
 		command_id:     request.command_id,
 		argument:       request.argument,
+		params:         request.params.into_iter().map(from_wit_resolved_param).collect(),
 		workspace_root: request.workspace_root,
+	}
+}
+
+fn from_wit_resolved_param(param: wit_types::WitPluginResolvedParam) -> PluginResolvedParam {
+	PluginResolvedParam {
+		name:  param.name,
+		kind:  from_wit_command_param_kind(param.kind),
+		value: param.value,
+	}
+}
+
+fn from_wit_command_param_kind(kind: wit_types::WitPluginCommandParamKind) -> PluginCommandParamKind {
+	match kind {
+		wit_types::WitPluginCommandParamKind::Text => PluginCommandParamKind::Text,
+		wit_types::WitPluginCommandParamKind::File => PluginCommandParamKind::File,
 	}
 }
 
@@ -260,5 +413,5 @@ macro_rules! export_plugin {
 }
 
 pub mod prelude {
-	pub use crate::{CommandProviderPlugin, PluginAction, PluginCapability, PluginCommandError, PluginCommandMetadata, PluginCommandOutcome, PluginCommandParamKind, PluginCommandParamSpec, PluginCommandRequest, PluginCommandResponse, PluginDescriptor, PluginEffect, PluginMetadata, PluginNotification, PluginNotificationLevel, PluginPanel, export_plugin};
+	pub use crate::{File, Plugin, PluginAction, PluginCapability, PluginCommandError, PluginCommandOutcome, PluginCommandParamKind, PluginCommandParamSpec, PluginCommandRequest, PluginCommandResponse, PluginCommandSet, PluginDescriptor, PluginEffect, PluginMetadata, PluginNotification, PluginNotificationLevel, PluginPanel, PluginResolvedParam, PluginResolvedParams, Text, export_plugin};
 }

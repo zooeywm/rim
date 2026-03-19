@@ -30,9 +30,16 @@ interface command-provider {
         optional: bool,
     }
 
+    record plugin-resolved-param {
+        name: string,
+        kind: plugin-command-param-kind,
+        value: string,
+    }
+
     record plugin-command-request {
         command-id: string,
         argument: option<string>,
+        params: list<plugin-resolved-param>,
         workspace-root: string,
     }
 

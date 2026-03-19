@@ -1314,7 +1314,7 @@ fn command_palette_file_preview_should_toggle_wrap_with_ctrl_w() {
 			result:         Ok(vec![workspace_root.join("README.md")]),
 		}),
 	);
-	assert!(state.command_palette_showing_picker(crate::command::PickerKind::File));
+	assert!(state.command_palette_showing_file_suggestions());
 	assert!(state.picker_preview_word_wrap_enabled());
 
 	let _ = state.apply_action(
@@ -1525,9 +1525,8 @@ fn command_mode_tab_completion_should_use_plugin_command_id() {
 			description:  "Echo through plugin runtime".to_string(),
 			params:       vec![crate::command::CommandParamSpec {
 				name:     "message".to_string(),
-				kind:     CommandArgKind::String,
+				kind:     CommandArgKind::Text,
 				optional: true,
-				picker:   None,
 			}],
 		})
 		.expect("plugin command should register");
@@ -1573,10 +1572,57 @@ fn command_mode_should_switch_palette_to_workspace_file_picker_for_path_params()
 	);
 
 	let palette = state.command_palette().expect("command palette should stay open");
-	assert_eq!(palette.active_picker, Some(crate::command::PickerKind::File));
+	assert_eq!(palette.active_param_kind, Some(crate::command::CommandArgKind::File));
 	assert!(!palette.loading);
 	let first = palette.items.first().expect("file match should be present");
 	let file = first.as_file().expect("palette should switch to file entries");
+	assert_eq!(file.relative_path, "README.md");
+	assert_eq!(ports.workspace_queries.borrow().as_slice(), &[workspace_root]);
+}
+
+#[test]
+fn plugin_command_file_params_should_enter_workspace_file_suggestion_mode() {
+	let workspace_root = PathBuf::from("/workspace");
+	let mut state = RimState::new();
+	state.set_workspace_root(workspace_root.clone());
+	let ports = FilePickerPorts::default();
+	state
+		.register_plugin_command(PluginCommandRegistration {
+			id:           "plugin.demo.open".to_string(),
+			default_name: "Open".to_string(),
+			plugin_id:    "demo".to_string(),
+			command_id:   "open".to_string(),
+			category:     "Demo Plugin".to_string(),
+			description:  "Open a file through plugin".to_string(),
+			params:       vec![crate::command::CommandParamSpec {
+				name:     "path".to_string(),
+				kind:     CommandArgKind::File,
+				optional: false,
+			}],
+		})
+		.expect("plugin command should register");
+
+	state.enter_command_mode();
+	for ch in "Open ".chars() {
+		let _ = state.apply_action(
+			&ports,
+			AppAction::Editor(EditorAction::KeyPressed(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))),
+		);
+	}
+	let _ = state.apply_action(
+		&ports,
+		AppAction::File(crate::action::FileAction::WorkspaceFilesListed {
+			workspace_root: workspace_root.clone(),
+			result:         Ok(vec![workspace_root.join("README.md"), workspace_root.join("src/main.rs")]),
+		}),
+	);
+
+	let palette = state.command_palette().expect("command palette should stay open");
+	assert_eq!(palette.active_param_kind, Some(CommandArgKind::File));
+	assert!(state.command_palette_showing_file_suggestions());
+	assert!(!palette.loading);
+	let first = palette.items.first().expect("file match should be present");
+	let file = first.as_file().expect("plugin file params should use file suggestions");
 	assert_eq!(file.relative_path, "README.md");
 	assert_eq!(ports.workspace_queries.borrow().as_slice(), &[workspace_root]);
 }

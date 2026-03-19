@@ -6,3 +6,4 @@ authors.workspace = true
 
 [dependencies]
 wit-bindgen.workspace = true
+rim-command-macros.workspace = true

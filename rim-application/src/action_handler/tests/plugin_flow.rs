@@ -19,7 +19,7 @@ fn sample_plugin() -> PluginRegistration {
 			description: "Echo command".to_string(),
 			params:      vec![PluginCommandParamSpec {
 				name:     "message".to_string(),
-				kind:     PluginCommandParamKind::String,
+				kind:     PluginCommandParamKind::Text,
 				optional: true,
 			}],
 		}],
@@ -73,6 +73,9 @@ fn executing_plugin_command_should_enqueue_runtime_request() {
 	assert_eq!(invocations.len(), 1);
 	assert_eq!(invocations[0].command_id, "plugin.demo.echo");
 	assert_eq!(invocations[0].argument.as_deref(), Some("hello"));
+	assert_eq!(invocations[0].params.len(), 1);
+	assert_eq!(invocations[0].params[0].name, "message");
+	assert_eq!(invocations[0].params[0].value, "hello");
 }
 
 #[test]

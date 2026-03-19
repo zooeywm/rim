@@ -6,7 +6,7 @@ pub use rim_domain::{editor::{EditorOperationError, EditorState}, model::{Buffer
 use rim_ports::PluginRegistration;
 use time::{OffsetDateTime, format_description::FormatItem, macros::format_description};
 
-use crate::{command::{BuiltinCommand, CommandCommand, CommandConfigError, CommandConfigFile, CommandPaletteFileMatch, CommandPaletteItem, CommandPaletteMatch, CommandRegistry, Picker, PickerKind, PickerRegistry, PluginCommandRegistration, Suggestion}, defaults};
+use crate::{command::{BuiltinCommand, CommandArgKind, CommandCommand, CommandConfigError, CommandConfigFile, CommandPaletteFileMatch, CommandPaletteItem, CommandPaletteMatch, CommandRegistry, Picker, PickerRegistry, PluginCommandRegistration, Suggestion}, defaults};
 
 mod buffer;
 mod edit;
@@ -141,14 +141,14 @@ impl FloatingWindowState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandPaletteState {
-	pub query:          String,
-	pub items:          Vec<CommandPaletteItem>,
-	pub selected:       usize,
-	pub loading:        bool,
-	pub active_picker:  Option<PickerKind>,
-	pub preview_title:  String,
-	pub preview_lines:  Vec<String>,
-	pub preview_scroll: usize,
+	pub query:             String,
+	pub items:             Vec<CommandPaletteItem>,
+	pub selected:          usize,
+	pub loading:           bool,
+	pub active_param_kind: Option<CommandArgKind>,
+	pub preview_title:     String,
+	pub preview_lines:     Vec<String>,
+	pub preview_scroll:    usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -643,15 +643,17 @@ impl RimState {
 			.and_then(|palette| palette.items.get(palette.selected))
 			.and_then(CommandPaletteItem::as_file)
 			.map(|item| (item.absolute_path.clone(), item.relative_path.clone()));
-		let (items, loading, active_picker) = if let Some(context) = self.command_palette_picker_context() {
-			match context.param.picker {
-				Some(PickerKind::File) if self.workbench.workspace_file_cache_loading => {
-					(Vec::new(), true, Some(PickerKind::File))
+		let (items, loading, active_param_kind) = if let Some(context) = self.command_palette_picker_context() {
+			match context.param.kind {
+				CommandArgKind::File if self.workbench.workspace_file_cache_loading => {
+					(Vec::new(), true, Some(CommandArgKind::File))
 				}
-				Some(kind) => {
-					(self.command_palette_picker_matches(kind, context.input.as_str(), 512), false, Some(kind))
-				}
-				None => {
+				CommandArgKind::File => (
+					self.command_palette_picker_matches(CommandArgKind::File, context.input.as_str(), 512),
+					false,
+					Some(CommandArgKind::File),
+				),
+				CommandArgKind::Text => {
 					let command_query = self.workbench.command_line.split_whitespace().next().unwrap_or_default();
 					let items = self
 						.workbench
@@ -660,7 +662,7 @@ impl RimState {
 						.into_iter()
 						.map(CommandPaletteItem::Command)
 						.collect();
-					(items, false, None)
+					(items, false, Some(CommandArgKind::Text))
 				}
 			}
 		} else {
@@ -700,7 +702,7 @@ impl RimState {
 		};
 		let selected_file_path =
 			items.get(selected).and_then(CommandPaletteItem::as_file).map(|file| file.absolute_path.as_path());
-		let (preview_title, preview_lines, preview_scroll) = if active_picker == Some(PickerKind::File)
+		let (preview_title, preview_lines, preview_scroll) = if active_param_kind == Some(CommandArgKind::File)
 			&& selected_file_path
 				.zip(previous_selected_file.as_ref().map(|(path, _)| path.as_path()))
 				.is_some_and(|(selected_path, previous_path)| selected_path == previous_path)
@@ -714,7 +716,7 @@ impl RimState {
 			items,
 			selected,
 			loading,
-			active_picker,
+			active_param_kind,
 			preview_title,
 			preview_lines,
 			preview_scroll,
@@ -740,9 +742,7 @@ impl RimState {
 	}
 
 	pub fn command_palette_needs_workspace_files(&self) -> bool {
-		self
-			.command_palette_picker_context()
-			.is_some_and(|context| context.param.picker == Some(PickerKind::File))
+		self.command_palette_picker_context().is_some_and(|context| context.param.kind == CommandArgKind::File)
 			&& self.workbench.workspace_file_cache.is_empty()
 			&& !self.workbench.workspace_file_cache_loading
 	}
@@ -1019,7 +1019,7 @@ impl RimState {
 		let Some(palette) = self.workbench.command_palette.as_mut() else {
 			return false;
 		};
-		if palette.active_picker != Some(PickerKind::File) {
+		if palette.active_param_kind != Some(CommandArgKind::File) {
 			return false;
 		}
 		let max_scroll = preview_max_scroll_with_mode(palette.preview_lines.as_slice(), preview_width, word_wrap);
@@ -1095,7 +1095,7 @@ impl RimState {
 			picker.preview_scroll = picker.preview_scroll.min(max_scroll);
 		}
 		if let Some(palette) = self.workbench.command_palette.as_mut()
-			&& palette.active_picker == Some(PickerKind::File)
+			&& palette.active_param_kind == Some(CommandArgKind::File)
 		{
 			let max_scroll = preview_max_scroll_with_mode(
 				palette.preview_lines.as_slice(),
@@ -1125,8 +1125,12 @@ impl RimState {
 		self.selected_command_palette_picker_file_match().map(|item| item.absolute_path.as_path())
 	}
 
-	pub fn command_palette_showing_picker(&self, kind: PickerKind) -> bool {
-		self.workbench.command_palette.as_ref().is_some_and(|palette| palette.active_picker == Some(kind))
+	pub fn command_palette_showing_file_suggestions(&self) -> bool {
+		self
+			.workbench
+			.command_palette
+			.as_ref()
+			.is_some_and(|palette| palette.active_param_kind == Some(CommandArgKind::File))
 	}
 
 	pub fn set_command_palette_preview(&mut self, path: &Path, preview: String) {
@@ -1136,7 +1140,7 @@ impl RimState {
 		let Some(palette) = self.workbench.command_palette.as_mut() else {
 			return;
 		};
-		if palette.active_picker != Some(PickerKind::File) {
+		if palette.active_param_kind != Some(CommandArgKind::File) {
 			return;
 		}
 		let selected = palette.items.get(palette.selected).and_then(CommandPaletteItem::as_file);
@@ -1163,7 +1167,7 @@ impl RimState {
 		let Some(palette) = self.workbench.command_palette.as_mut() else {
 			return;
 		};
-		if palette.active_picker != Some(PickerKind::File) {
+		if palette.active_param_kind != Some(CommandArgKind::File) {
 			return;
 		}
 		let selected = palette.items.get(palette.selected).and_then(CommandPaletteItem::as_file);
@@ -1327,21 +1331,21 @@ impl RimState {
 	}
 
 	fn command_palette_picker_context(&self) -> Option<crate::command::ActiveParameterContext> {
-		let context =
-			self.workbench.command_registry.active_parameter_context(self.workbench.command_line.as_str())?;
-		context.param.picker.is_some().then_some(context)
+		self.workbench.command_registry.active_parameter_context(self.workbench.command_line.as_str())
 	}
 
 	fn command_palette_picker_registry(&self) -> PickerRegistry<'_> {
 		let mut registry = PickerRegistry::default();
-		registry
-			.register(PickerKind::File, WorkspaceFilePicker::new(self.workbench.workspace_file_cache.as_slice()));
+		registry.register(
+			CommandArgKind::File,
+			WorkspaceFilePicker::new(self.workbench.workspace_file_cache.as_slice()),
+		);
 		registry
 	}
 
 	fn command_palette_picker_matches(
 		&self,
-		kind: PickerKind,
+		kind: CommandArgKind,
 		query: &str,
 		limit: usize,
 	) -> Vec<CommandPaletteItem> {

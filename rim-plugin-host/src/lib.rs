@@ -3,7 +3,7 @@ use std::process::Command;
 use std::{collections::{HashMap, HashSet}, fs, path::{Path, PathBuf}, sync::Mutex, thread};
 
 use rim_application::action::{AppAction, PluginRuntimeAction};
-use rim_ports::{PluginAction, PluginCapability, PluginCommandError, PluginCommandMetadata, PluginCommandParamKind, PluginCommandParamSpec, PluginCommandRequest, PluginCommandResponse, PluginDiscoveryResult, PluginEffect, PluginInvocationError, PluginLoadFailure, PluginMetadata, PluginNotification, PluginNotificationLevel, PluginPanel, PluginRegistration, PluginRuntime, PluginRuntimeError, PluginRuntimeFailure};
+use rim_ports::{PluginAction, PluginCapability, PluginCommandError, PluginCommandMetadata, PluginCommandParamKind, PluginCommandParamSpec, PluginCommandRequest, PluginCommandResponse, PluginDiscoveryResult, PluginEffect, PluginInvocationError, PluginLoadFailure, PluginMetadata, PluginNotification, PluginNotificationLevel, PluginPanel, PluginRegistration, PluginResolvedParam, PluginRuntime, PluginRuntimeError, PluginRuntimeFailure};
 use serde::Deserialize;
 use tracing::error;
 use wasmtime::{Config, Engine, Store, component::{Component, Linker}};
@@ -400,7 +400,23 @@ fn plugin_command_request_to_wit(
 	wit::PluginCommandRequest {
 		command_id:     local_command_id.to_string(),
 		argument:       request.argument.clone(),
+		params:         request.params.iter().cloned().map(plugin_resolved_param_to_wit).collect(),
 		workspace_root: request.workspace_root.clone(),
+	}
+}
+
+fn plugin_resolved_param_to_wit(param: PluginResolvedParam) -> wit::PluginResolvedParam {
+	wit::PluginResolvedParam {
+		name:  param.name,
+		kind:  plugin_command_param_kind_to_wit(param.kind),
+		value: param.value,
+	}
+}
+
+fn plugin_command_param_kind_to_wit(kind: PluginCommandParamKind) -> wit::PluginCommandParamKind {
+	match kind {
+		PluginCommandParamKind::Text => wit::PluginCommandParamKind::Text,
+		PluginCommandParamKind::File => wit::PluginCommandParamKind::File,
 	}
 }
 
@@ -448,7 +464,7 @@ fn plugin_command_param_spec_from_wit(param: wit::PluginCommandParamSpec) -> Plu
 
 fn plugin_command_param_kind_from_wit(kind: wit::PluginCommandParamKind) -> PluginCommandParamKind {
 	match kind {
-		wit::PluginCommandParamKind::Text => PluginCommandParamKind::String,
+		wit::PluginCommandParamKind::Text => PluginCommandParamKind::Text,
 		wit::PluginCommandParamKind::File => PluginCommandParamKind::File,
 	}
 }
@@ -550,6 +566,11 @@ mod tests {
 		let request = PluginCommandRequest {
 			command_id:     "plugin.example.inspect".to_string(),
 			argument:       Some("hello".to_string()),
+			params:         vec![PluginResolvedParam {
+				name:  "message".to_string(),
+				kind:  PluginCommandParamKind::Text,
+				value: "hello".to_string(),
+			}],
 			workspace_root: workspace_root.display().to_string(),
 		};
 

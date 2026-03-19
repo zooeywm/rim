@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use ratatui::{buffer::Buffer, layout::{Alignment, Constraint, Layout, Rect}, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap}};
-use rim_application::{command::{CommandPaletteFileMatch, CommandPaletteItem, CommandPaletteMatch, PickerKind}, state::{CommandPaletteState, RimState}};
+use rim_application::{command::{CommandArgKind, CommandPaletteFileMatch, CommandPaletteItem, CommandPaletteMatch}, state::{CommandPaletteState, RimState}};
 use rim_domain::preview::preview_rows;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -30,7 +30,7 @@ impl CommandPaletteWidgets {
 			Rect { x, y: content_area.y.saturating_add(1), width, height: visible_input_rows as u16 + 2 },
 			content_area,
 		);
-		let showing_file_picker = palette.active_picker == Some(PickerKind::File);
+		let showing_file_picker = palette.active_param_kind == Some(CommandArgKind::File);
 		let result_rows = if showing_file_picker {
 			palette.items.len().clamp(1, MAX_RESULTS).saturating_add(6) as u16
 		} else {
@@ -145,7 +145,7 @@ impl Widget for CommandPaletteResultsWidget {
 
 		let body_area =
 			Rect { x: inner.x, y: inner.y, width: inner.width, height: inner.height.saturating_sub(1) };
-		if self.palette.active_picker == Some(PickerKind::File) && body_area.height > 1 {
+		if self.palette.active_param_kind == Some(CommandArgKind::File) && body_area.height > 1 {
 			let [list_area, divider_area, preview_area] =
 				Layout::vertical([Constraint::Percentage(42), Constraint::Length(1), Constraint::Min(1)])
 					.areas(body_area);
@@ -189,7 +189,7 @@ fn render_result_lines(palette: &CommandPaletteState, width: usize, height: usiz
 	if palette.items.is_empty() {
 		let empty_message = if palette.loading {
 			"Loading workspace files..."
-		} else if palette.active_picker == Some(PickerKind::File) {
+		} else if palette.active_param_kind == Some(CommandArgKind::File) {
 			"No matching files"
 		} else {
 			"No matching commands"

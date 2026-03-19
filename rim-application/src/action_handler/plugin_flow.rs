@@ -19,12 +19,12 @@ pub(super) fn enqueue_plugin_command<P>(
 	state: &mut RimState,
 	plugin_id: String,
 	command_id: String,
-	argument: Option<String>,
+	params: &crate::command::ResolvedParams,
 ) -> ControlFlow<()>
 where
 	P: ActionPorts,
 {
-	let request = state.build_plugin_command_request(plugin_id.clone(), command_id.clone(), argument);
+	let request = state.build_plugin_command_request(plugin_id.clone(), command_id.clone(), params);
 	let request_command_id = request.command_id.clone();
 	if let Err(source) = ports.enqueue_invoke_command(request) {
 		let err = ActionHandlerError::PluginInvoke { source };

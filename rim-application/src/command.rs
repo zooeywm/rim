@@ -35,7 +35,6 @@ pub struct BuiltinCommandParamSpec {
 	pub name:     &'static str,
 	pub kind:     CommandArgKind,
 	pub optional: bool,
-	pub picker:   Option<PickerKind>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -577,14 +576,9 @@ pub enum CommandTarget {
 	Plugin { plugin_id: String, command_id: String },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommandArgKind {
-	String,
-	File,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PickerKind {
+pub enum CommandArgKind {
+	Text,
 	File,
 }
 
@@ -593,7 +587,58 @@ pub struct CommandParamSpec {
 	pub name:     String,
 	pub kind:     CommandArgKind,
 	pub optional: bool,
-	pub picker:   Option<PickerKind>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandValue {
+	Text(String),
+	File(String),
+}
+
+impl CommandValue {
+	pub fn as_str(&self) -> &str {
+		match self {
+			Self::Text(value) | Self::File(value) => value.as_str(),
+		}
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedParam {
+	pub name:  String,
+	pub kind:  CommandArgKind,
+	pub value: CommandValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ResolvedParams(Vec<ResolvedParam>);
+
+impl ResolvedParams {
+	pub fn new(params: Vec<ResolvedParam>) -> Self { Self(params) }
+
+	pub fn as_slice(&self) -> &[ResolvedParam] { self.0.as_slice() }
+
+	pub fn iter(&self) -> impl Iterator<Item = &ResolvedParam> { self.0.iter() }
+
+	pub fn len(&self) -> usize { self.0.len() }
+
+	pub fn is_empty(&self) -> bool { self.0.is_empty() }
+
+	pub fn get(&self, name: &str) -> Option<&ResolvedParam> { self.0.iter().find(|param| param.name == name) }
+
+	pub fn get_text(&self, name: &str) -> Option<&str> {
+		match &self.get(name)?.value {
+			CommandValue::Text(value) => Some(value.as_str()),
+			CommandValue::File(_) => None,
+		}
+	}
+
+	pub fn get_file(&self, name: &str) -> Option<&str> {
+		match &self.get(name)?.value {
+			CommandValue::File(value) => Some(value.as_str()),
+			CommandValue::Text(_) => None,
+		}
+	}
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -611,6 +656,15 @@ pub struct ResolvedCommand {
 	pub command_id: CommandId,
 	pub target:     CommandTarget,
 	pub argv:       Vec<String>,
+	pub params:     ResolvedParams,
+}
+
+impl ResolvedCommand {
+	pub fn get_param(&self, name: &str) -> Option<&ResolvedParam> { self.params.get(name) }
+
+	pub fn get_text(&self, name: &str) -> Option<&str> { self.params.get_text(name) }
+
+	pub fn get_file(&self, name: &str) -> Option<&str> { self.params.get_file(name) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -670,7 +724,6 @@ fn builtin_params_to_runtime(params: &[BuiltinCommandParamSpec]) -> Vec<CommandP
 			name:     param.name.to_string(),
 			kind:     param.kind,
 			optional: param.optional,
-			picker:   param.picker,
 		})
 		.collect()
 }
@@ -1074,7 +1127,8 @@ impl CommandRegistry {
 			.get(command_id)
 			.ok_or_else(|| CommandResolveError::UnknownCommand { input: command_id.display_text() })?;
 		validate_command_argv(spec, argv.as_slice())?;
-		Ok(ResolvedCommand { command_id: command_id.clone(), target: target.clone(), argv })
+		let params = resolved_params_from_argv(spec, argv.as_slice());
+		Ok(ResolvedCommand { command_id: command_id.clone(), target: target.clone(), argv, params })
 	}
 
 	pub fn command_palette_matches(&self, input: &str, limit: usize) -> Vec<CommandPaletteMatch> {
@@ -1223,6 +1277,7 @@ impl CommandRegistry {
 					command_id: spec.id.clone(),
 					target:     spec.target.clone(),
 					argv:       Vec::new(),
+					params:     ResolvedParams::default(),
 				})
 			}
 			RunDirective::PluginInvocation { .. } | RunDirective::Unresolved(_) => None,
@@ -1246,6 +1301,7 @@ impl CommandRegistry {
 			command_id: spec.id.clone(),
 			target:     spec.target.clone(),
 			argv:       Vec::new(),
+			params:     ResolvedParams::default(),
 		})
 	}
 
@@ -1448,7 +1504,7 @@ pub trait Picker {
 }
 
 pub struct PickerRegistry<'a> {
-	map: HashMap<PickerKind, Box<dyn Picker + 'a>>,
+	map: HashMap<CommandArgKind, Box<dyn Picker + 'a>>,
 }
 
 impl<'a> Default for PickerRegistry<'a> {
@@ -1456,11 +1512,11 @@ impl<'a> Default for PickerRegistry<'a> {
 }
 
 impl<'a> PickerRegistry<'a> {
-	pub fn register(&mut self, kind: PickerKind, picker: impl Picker + 'a) {
+	pub fn register(&mut self, kind: CommandArgKind, picker: impl Picker + 'a) {
 		self.map.insert(kind, Box::new(picker));
 	}
 
-	pub fn suggestions(&self, kind: PickerKind, input: &str) -> Vec<Suggestion> {
+	pub fn suggestions(&self, kind: CommandArgKind, input: &str) -> Vec<Suggestion> {
 		self.map.get(&kind).map(|picker| picker.suggestions(input)).unwrap_or_default()
 	}
 }
@@ -1507,6 +1563,24 @@ fn validate_command_argv(spec: &CommandSpec, argv: &[String]) -> Result<(), Comm
 		});
 	}
 	Ok(())
+}
+
+fn resolved_params_from_argv(spec: &CommandSpec, argv: &[String]) -> ResolvedParams {
+	ResolvedParams::new(
+		spec
+			.params
+			.iter()
+			.zip(argv.iter())
+			.map(|(param, value)| ResolvedParam {
+				name:  param.name.clone(),
+				kind:  param.kind,
+				value: match param.kind {
+					CommandArgKind::Text => CommandValue::Text(value.clone()),
+					CommandArgKind::File => CommandValue::File(value.clone()),
+				},
+			})
+			.collect(),
+	)
 }
 
 fn tokenize_command_input(input: &str) -> Result<TokenizedCommandInput, String> {
@@ -1746,6 +1820,7 @@ where
 				command_id: spec.id.clone(),
 				target:     binding.target().clone(),
 				argv:       binding.args().to_vec(),
+				params:     resolved_params_from_argv(spec, binding.args()),
 			});
 		}
 		if binding.keys().starts_with(keys) {
@@ -1975,9 +2050,6 @@ mod tests {
 		Rename { from: File, to: File },
 		/// Search project
 		Search { query: Text, path: Option<File> },
-		/// Legacy save
-		#[command(arg = OptionalPath)]
-		LegacySave,
 	}
 
 	#[test]
@@ -2014,6 +2086,7 @@ mod tests {
 				command_id: CommandId::Builtin(BuiltinCommand::Buffer(BufferCommand::Prev)),
 				target:     CommandTarget::Builtin(BuiltinCommand::Buffer(BufferCommand::Prev)),
 				argv:       Vec::new(),
+				params:     ResolvedParams::default(),
 			})
 		);
 		assert_eq!(
@@ -2022,6 +2095,7 @@ mod tests {
 				command_id: CommandId::Builtin(BuiltinCommand::Buffer(BufferCommand::Next)),
 				target:     CommandTarget::Builtin(BuiltinCommand::Buffer(BufferCommand::Next)),
 				argv:       Vec::new(),
+				params:     ResolvedParams::default(),
 			})
 		);
 		assert_eq!(
@@ -2030,6 +2104,7 @@ mod tests {
 				command_id: CommandId::Builtin(BuiltinCommand::Cursor(CursorCommand::Down)),
 				target:     CommandTarget::Builtin(BuiltinCommand::Cursor(CursorCommand::Down)),
 				argv:       Vec::new(),
+				params:     ResolvedParams::default(),
 			})
 		);
 	}
@@ -2109,6 +2184,7 @@ mod tests {
 				command_id: CommandId::Builtin(BuiltinCommand::Cursor(CursorCommand::FileStart)),
 				target:     CommandTarget::Builtin(BuiltinCommand::Cursor(CursorCommand::FileStart)),
 				argv:       Vec::new(),
+				params:     ResolvedParams::default(),
 			})
 		);
 		assert_eq!(
@@ -2117,6 +2193,7 @@ mod tests {
 				command_id: CommandId::Builtin(BuiltinCommand::Cursor(CursorCommand::FileEnd)),
 				target:     CommandTarget::Builtin(BuiltinCommand::Cursor(CursorCommand::FileEnd)),
 				argv:       Vec::new(),
+				params:     ResolvedParams::default(),
 			})
 		);
 	}
@@ -2127,43 +2204,13 @@ mod tests {
 		let search = MacroDslTestCommand::Search { query: Text, path: None }.params();
 
 		assert_eq!(rename, &[
-			BuiltinCommandParamSpec {
-				name:     "from",
-				kind:     CommandArgKind::File,
-				optional: false,
-				picker:   Some(PickerKind::File),
-			},
-			BuiltinCommandParamSpec {
-				name:     "to",
-				kind:     CommandArgKind::File,
-				optional: false,
-				picker:   Some(PickerKind::File),
-			},
+			BuiltinCommandParamSpec { name: "from", kind: CommandArgKind::File, optional: false },
+			BuiltinCommandParamSpec { name: "to", kind: CommandArgKind::File, optional: false },
 		]);
 		assert_eq!(search, &[
-			BuiltinCommandParamSpec {
-				name:     "query",
-				kind:     CommandArgKind::String,
-				optional: false,
-				picker:   None,
-			},
-			BuiltinCommandParamSpec {
-				name:     "path",
-				kind:     CommandArgKind::File,
-				optional: true,
-				picker:   Some(PickerKind::File),
-			},
+			BuiltinCommandParamSpec { name: "query", kind: CommandArgKind::Text, optional: false },
+			BuiltinCommandParamSpec { name: "path", kind: CommandArgKind::File, optional: true },
 		]);
-	}
-
-	#[test]
-	fn legacy_command_arg_attribute_should_remain_temporarily_compatible() {
-		assert_eq!(MacroDslTestCommand::LegacySave.params(), &[BuiltinCommandParamSpec {
-			name:     "path",
-			kind:     CommandArgKind::File,
-			optional: true,
-			picker:   Some(PickerKind::File),
-		}]);
 	}
 
 	#[test]
@@ -2404,7 +2451,6 @@ mod tests {
 		assert_eq!(spec.params.len(), 1);
 		assert_eq!(spec.params[0].name, "path");
 		assert_eq!(spec.params[0].kind, CommandArgKind::File);
-		assert_eq!(spec.params[0].picker, Some(PickerKind::File));
 	}
 
 	#[test]
@@ -2440,16 +2486,10 @@ mod tests {
 				params:       vec![
 					CommandParamSpec {
 						name:     "message".to_string(),
-						kind:     CommandArgKind::String,
+						kind:     CommandArgKind::Text,
 						optional: false,
-						picker:   None,
 					},
-					CommandParamSpec {
-						name:     "path".to_string(),
-						kind:     CommandArgKind::File,
-						optional: true,
-						picker:   Some(PickerKind::File),
-					},
+					CommandParamSpec { name: "path".to_string(), kind: CommandArgKind::File, optional: true },
 				],
 			})
 			.expect("plugin command should register");
@@ -2458,6 +2498,8 @@ mod tests {
 			registry.resolve_command_input("Echo \"hello world\" src/main.rs").expect("quoted args should resolve");
 
 		assert_eq!(resolved.argv, vec!["hello world".to_string(), "src/main.rs".to_string()]);
+		assert_eq!(resolved.get_text("message"), Some("hello world"));
+		assert_eq!(resolved.get_file("path"), Some("src/main.rs"));
 		assert!(matches!(
 			registry.resolve_command_input("Echo"),
 			Err(CommandResolveError::MissingRequiredParams { .. })
@@ -2480,17 +2522,11 @@ mod tests {
 				category:     "Demo Plugin".to_string(),
 				description:  "Echo arguments".to_string(),
 				params:       vec![
-					CommandParamSpec {
-						name:     "first".to_string(),
-						kind:     CommandArgKind::String,
-						optional: false,
-						picker:   None,
-					},
+					CommandParamSpec { name: "first".to_string(), kind: CommandArgKind::Text, optional: false },
 					CommandParamSpec {
 						name:     "second".to_string(),
-						kind:     CommandArgKind::String,
+						kind:     CommandArgKind::Text,
 						optional: false,
-						picker:   None,
 					},
 				],
 			})
@@ -2525,7 +2561,6 @@ mod tests {
 		assert_eq!(context.index, 0);
 		assert_eq!(context.param.name, "path");
 		assert_eq!(context.param.kind, CommandArgKind::File);
-		assert_eq!(context.param.picker, Some(PickerKind::File));
 		assert_eq!(context.input, "");
 
 		let editing_context = registry

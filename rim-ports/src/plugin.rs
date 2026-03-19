@@ -28,7 +28,7 @@ pub struct PluginCommandMetadata {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginCommandParamKind {
-	String,
+	Text,
 	File,
 }
 
@@ -39,11 +39,19 @@ pub struct PluginCommandParamSpec {
 	pub optional: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PluginResolvedParam {
+	pub name:  String,
+	pub kind:  PluginCommandParamKind,
+	pub value: String,
+}
+
 /// Request contract for the v1 CommandProvider capability.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PluginCommandRequest {
 	pub command_id:     String,
 	pub argument:       Option<String>,
+	pub params:         Vec<PluginResolvedParam>,
 	pub workspace_root: String,
 }
 

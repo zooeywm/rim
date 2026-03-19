@@ -1,7 +1,7 @@
-use rim_ports::{PluginCommandParamKind, PluginCommandRequest, PluginPanel, PluginRegistration};
+use rim_ports::{PluginCommandParamKind, PluginCommandRequest, PluginPanel, PluginRegistration, PluginResolvedParam};
 
 use super::{FloatingWindowLine, FloatingWindowPlacement, FloatingWindowState, OverlayState, RimState};
-use crate::command::{CommandArgKind, CommandParamSpec, PickerKind, PluginCommandRegistration};
+use crate::command::{CommandArgKind, CommandParamSpec, CommandValue, PluginCommandRegistration, ResolvedParams};
 
 impl RimState {
 	pub fn set_plugin_registrations(&mut self, plugins: Vec<PluginRegistration>) {
@@ -40,11 +40,12 @@ impl RimState {
 		&mut self,
 		plugin_id: String,
 		command_id: String,
-		argument: Option<String>,
+		params: &ResolvedParams,
 	) -> PluginCommandRequest {
 		PluginCommandRequest {
-			command_id: format!("plugin.{}.{}", plugin_id, command_id),
-			argument,
+			command_id:     format!("plugin.{}.{}", plugin_id, command_id),
+			argument:       params.as_slice().first().map(|param| param.value.as_str().to_string()),
+			params:         params.as_slice().iter().map(command_param_to_plugin_param).collect(),
 			workspace_root: self.workbench.workspace_root.display().to_string(),
 		}
 	}
@@ -72,17 +73,26 @@ impl RimState {
 	}
 }
 
+fn command_param_to_plugin_param(param: &crate::command::ResolvedParam) -> PluginResolvedParam {
+	PluginResolvedParam {
+		name:  param.name.clone(),
+		kind:  match param.kind {
+			CommandArgKind::Text => PluginCommandParamKind::Text,
+			CommandArgKind::File => PluginCommandParamKind::File,
+		},
+		value: match &param.value {
+			CommandValue::Text(value) | CommandValue::File(value) => value.clone(),
+		},
+	}
+}
+
 fn plugin_param_to_command_param(param: &rim_ports::PluginCommandParamSpec) -> CommandParamSpec {
 	CommandParamSpec {
 		name:     param.name.clone(),
 		kind:     match param.kind {
-			PluginCommandParamKind::String => CommandArgKind::String,
+			PluginCommandParamKind::Text => CommandArgKind::Text,
 			PluginCommandParamKind::File => CommandArgKind::File,
 		},
 		optional: param.optional,
-		picker:   match param.kind {
-			PluginCommandParamKind::String => None,
-			PluginCommandParamKind::File => Some(PickerKind::File),
-		},
 	}
 }
