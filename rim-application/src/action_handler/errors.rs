@@ -1,6 +1,5 @@
+use rim_ports::{FileWatcherError, StorageIoError};
 use thiserror::Error;
-
-use crate::ports::{FileWatcherError, StorageIoError};
 
 #[derive(Debug, Error)]
 pub(super) enum ActionHandlerError {

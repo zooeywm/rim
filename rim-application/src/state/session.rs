@@ -22,6 +22,4 @@ impl RimState {
 		self.workbench.status_bar.message = "session restored".to_string();
 		true
 	}
-
-	pub fn has_restorable_workspace_session(&self) -> bool { !self.tabs.is_empty() }
 }

@@ -12,26 +12,8 @@ permissions:
   contents: read
 
 jobs:
-  rustfmt-check:
-    name: Rustfmt Check
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install nightly Rust toolchain
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rustfmt
-
-      - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Check formatting
-        run: cargo +nightly fmt --all --check
-
-  clippy-build-linux:
-    name: Clippy and build Linux release
+  validate:
+    name: Validate
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -42,11 +24,49 @@ jobs:
         with:
           components: clippy
 
+      - name: Install nightly rustfmt
+        shell: bash
+        run: rustup toolchain install nightly --profile minimal --component rustfmt
+
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Install Taplo
+        uses: taiki-e/install-action@v2
+        with:
+          tool: taplo-cli
+
+      - name: Check Rust formatting
+        shell: bash
+        run: rustfmt +nightly --check --edition 2024 $(git ls-files '*.rs')
+
+      - name: Check workspace
+        run: cargo check -q
+
+      - name: Check test targets compile
+        run: cargo test --workspace --no-run
+
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Check TOML formatting
+        shell: bash
+        run: taplo fmt --check $(git ls-files '*.toml')
+
+  build-release-linux:
+    name: Build Linux Release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: validate
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
 
       - name: Build release binary
         run: cargo build --release -p rim-app
@@ -58,23 +78,20 @@ jobs:
           path: target/release/rim
           if-no-files-found: error
 
-  clippy-build-windows:
-    name: Clippy and build Windows release
+  build-release-windows:
+    name: Build Windows Release
     runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: validate
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
-
-      - name: Run clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Build release binary
         run: cargo build --release -p rim-app
@@ -91,8 +108,8 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     needs:
-      - clippy-build-linux
-      - clippy-build-windows
+      - build-release-linux
+      - build-release-windows
     permissions:
       contents: write
     steps:

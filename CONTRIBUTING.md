@@ -39,9 +39,12 @@ If a change needs both pure logic and side effects, split it. Put the pure trans
 Required verification:
 
 ```bash
+rustfmt +nightly --check --edition 2024 $(git ls-files '*.rs')
 rustfmt +nightly --edition 2024 $(git ls-files '*.rs')
 cargo check -q
 cargo test --workspace --no-run
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+taplo fmt --check $(git ls-files '*.toml')
 ```
 
 ## Documentation Expectations

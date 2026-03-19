@@ -1,7 +1,9 @@
 use std::{cell::RefCell, ops::ControlFlow, path::{Path, PathBuf}};
 
+use rim_ports::{FilePicker, FilePickerError, FileWatcher, FileWatcherError, StorageIo, StorageIoError};
+
 use super::super::mode_flow::{SequenceMatch, resolve_normal_sequence_with_registry};
-use crate::{action::{AppAction, KeyEvent}, command::CommandRegistry, ports::{FilePicker, FilePickerError, FileWatcher, FileWatcherError, StorageIo, StorageIoError, SwapEditOp}, state::{BufferId, NormalSequenceKey, PersistedBufferHistory, RimState, WorkspaceSessionSnapshot}};
+use crate::{action::{AppAction, KeyEvent}, command::CommandRegistry, ports::SwapEditOp, state::{BufferId, NormalSequenceKey, PersistedBufferHistory, RimState, WorkspaceSessionSnapshot}};
 
 pub(super) struct TestPorts;
 
