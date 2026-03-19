@@ -16,7 +16,13 @@ impl FileWatcher for TestPorts {
 }
 
 impl FilePicker for TestPorts {
-	fn pick_open_path(&self) -> Result<Option<PathBuf>, FilePickerError> { Ok(None) }
+	fn pick_open_path(
+		&self,
+		_command: &[String],
+		_chooser_file_arg_index: usize,
+	) -> Result<Option<PathBuf>, FilePickerError> {
+		Ok(None)
+	}
 }
 
 impl PluginRuntime for TestPorts {
@@ -151,7 +157,11 @@ impl FileWatcher for RecordingPorts {
 }
 
 impl FilePicker for RecordingPorts {
-	fn pick_open_path(&self) -> Result<Option<PathBuf>, FilePickerError> {
+	fn pick_open_path(
+		&self,
+		_command: &[String],
+		_chooser_file_arg_index: usize,
+	) -> Result<Option<PathBuf>, FilePickerError> {
 		Ok(self.picked_path.borrow().clone())
 	}
 }
@@ -290,7 +300,13 @@ impl FileWatcher for SwapDecisionPorts {
 }
 
 impl FilePicker for SwapDecisionPorts {
-	fn pick_open_path(&self) -> Result<Option<PathBuf>, FilePickerError> { Ok(None) }
+	fn pick_open_path(
+		&self,
+		_command: &[String],
+		_chooser_file_arg_index: usize,
+	) -> Result<Option<PathBuf>, FilePickerError> {
+		Ok(None)
+	}
 }
 
 impl PluginRuntime for SwapDecisionPorts {
@@ -321,7 +337,11 @@ impl FileWatcher for FilePickerPorts {
 }
 
 impl FilePicker for FilePickerPorts {
-	fn pick_open_path(&self) -> Result<Option<PathBuf>, FilePickerError> {
+	fn pick_open_path(
+		&self,
+		_command: &[String],
+		_chooser_file_arg_index: usize,
+	) -> Result<Option<PathBuf>, FilePickerError> {
 		Ok(self.picked_path.borrow().clone())
 	}
 }

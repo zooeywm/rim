@@ -41,7 +41,11 @@ pub trait FileWatcher {
 /// Host capability for showing a native file picker and returning one selected
 /// path.
 pub trait FilePicker {
-	fn pick_open_path(&self) -> Result<Option<PathBuf>, FilePickerError>;
+	fn pick_open_path(
+		&self,
+		command: &[String],
+		chooser_file_arg_index: usize,
+	) -> Result<Option<PathBuf>, FilePickerError>;
 }
 
 /// Outbound port for async file load/save plus swap/undo lifecycle callbacks.

@@ -601,7 +601,10 @@ fn plugin_pick_command_should_open_selected_file() {
 		AppAction::Plugin(PluginRuntimeAction::CommandCompleted {
 			command_id: "plugin.demo.pick".to_string(),
 			result:     Ok(PluginCommandResponse {
-				effects: vec![PluginEffect::RequestAction(RequestedPluginAction::PickFile)],
+				effects: vec![PluginEffect::RequestAction(RequestedPluginAction::PickFile {
+					command:                vec!["demo-picker".to_string(), String::new()],
+					chooser_file_arg_index: 1,
+				})],
 			}),
 		}),
 	);
@@ -632,7 +635,10 @@ fn plugin_pick_command_should_report_cancelled_when_no_file_is_selected() {
 		AppAction::Plugin(PluginRuntimeAction::CommandCompleted {
 			command_id: "plugin.demo.pick".to_string(),
 			result:     Ok(PluginCommandResponse {
-				effects: vec![PluginEffect::RequestAction(RequestedPluginAction::PickFile)],
+				effects: vec![PluginEffect::RequestAction(RequestedPluginAction::PickFile {
+					command:                vec!["demo-picker".to_string(), String::new()],
+					chooser_file_arg_index: 1,
+				})],
 			}),
 		}),
 	);

@@ -494,7 +494,10 @@ fn plugin_panel_from_wit(panel: wit::PluginPanel) -> PluginPanel {
 fn plugin_action_from_wit(action: wit::PluginAction) -> PluginAction {
 	match action {
 		wit::PluginAction::OpenFile(payload) => PluginAction::OpenFile { path: payload.path },
-		wit::PluginAction::PickFile => PluginAction::PickFile,
+		wit::PluginAction::PickFile(action) => PluginAction::PickFile {
+			command:                action.command,
+			chooser_file_arg_index: action.chooser_file_arg_index,
+		},
 		wit::PluginAction::InsertText(payload) => PluginAction::InsertText { text: payload.text },
 		wit::PluginAction::RunCommand(payload) => {
 			PluginAction::RunCommand { command_id: payload.command_id, argument: payload.argument }
@@ -575,10 +578,21 @@ mod tests {
 
 		let response = invoke_command(&plugins, &request).expect("plugin invocation should succeed");
 		assert!(
-			response
-				.effects
-				.iter()
-				.any(|effect| { matches!(effect, PluginEffect::RequestAction(PluginAction::PickFile)) }),
+			response.effects.iter().any(|effect| {
+				matches!(
+					effect,
+					PluginEffect::RequestAction(PluginAction::PickFile {
+						command,
+						chooser_file_arg_index,
+					})
+						if command
+							== &vec![
+								"yazi".to_string(),
+								"--chooser-file".to_string(),
+								String::new(),
+							] && *chooser_file_arg_index == 2
+				)
+			}),
 			"yazi plugin should request the host file picker"
 		);
 	}

@@ -153,20 +153,25 @@ where
 			state,
 			AppAction::File(FileAction::OpenRequested { path: PathBuf::from(path) }),
 		),
-		RequestedPluginAction::PickFile => match ports.pick_open_path() {
-			Ok(Some(path)) => {
-				RimState::dispatch_internal(ports, state, AppAction::File(FileAction::OpenRequested { path }))
+		RequestedPluginAction::PickFile { command, chooser_file_arg_index } => {
+			match ports.pick_open_path(command.as_slice(), chooser_file_arg_index as usize) {
+				Ok(Some(path)) => {
+					RimState::dispatch_internal(ports, state, AppAction::File(FileAction::OpenRequested { path }))
+				}
+				Ok(None) => {
+					state.workbench.status_bar.message = "open cancelled".to_string();
+					ControlFlow::Continue(())
+				}
+				Err(err) => {
+					error!(
+						"plugin file picker failed: command={:?} chooser_file_arg_index={} error={}",
+						command, chooser_file_arg_index, err
+					);
+					state.workbench.status_bar.message = format!("open failed: {}", err);
+					ControlFlow::Continue(())
+				}
 			}
-			Ok(None) => {
-				state.workbench.status_bar.message = "open cancelled".to_string();
-				ControlFlow::Continue(())
-			}
-			Err(err) => {
-				error!("plugin file picker failed: {}", err);
-				state.workbench.status_bar.message = format!("open failed: {}", err);
-				ControlFlow::Continue(())
-			}
-		},
+		}
 		RequestedPluginAction::InsertText { text } => {
 			state.push_notification(
 				NotificationLevel::Warn,

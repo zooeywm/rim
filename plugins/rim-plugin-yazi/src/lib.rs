@@ -24,7 +24,12 @@ impl Plugin for YaziPlugin {
 }
 
 fn yazi_command() -> PluginCommandResponse {
-	PluginCommandResponse { effects: vec![PluginEffect::RequestAction(PluginAction::PickFile)] }
+	PluginCommandResponse {
+		effects: vec![PluginEffect::RequestAction(PluginAction::PickFile {
+			command:                vec!["yazi".to_string(), "--chooser-file".to_string(), String::new()],
+			chooser_file_arg_index: 2,
+		})],
+	}
 }
 
 export_plugin!(YaziPlugin);

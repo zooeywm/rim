@@ -240,15 +240,21 @@ pub fn detect_workspace_root(start_dir: &Path) -> PathBuf {
 }
 
 impl FilePicker for AppPorts<'_> {
-	fn pick_open_path(&self) -> Result<Option<PathBuf>, FilePickerError> {
+	fn pick_open_path(
+		&self,
+		command: &[String],
+		chooser_file_arg_index: usize,
+	) -> Result<Option<PathBuf>, FilePickerError> {
 		let chooser_file = std::env::temp_dir().join(format!(
-			"rim-yazi-chooser-{}-{}.txt",
+			"rim-file-picker-chooser-{}-{}.txt",
 			std::process::id(),
 			std::time::SystemTime::now()
 				.duration_since(std::time::UNIX_EPOCH)
 				.map(|duration| duration.as_nanos())
 				.unwrap_or_default()
 		));
+		let (program, args) =
+			materialize_picker_command(command, chooser_file.as_path(), chooser_file_arg_index)?;
 		let mut terminal_session = self.terminal_session.borrow_mut();
 		let Some(terminal_session) = terminal_session.as_mut() else {
 			return Err(FilePickerError::Unavailable { message: "terminal session is not active" });
@@ -259,7 +265,7 @@ impl FilePicker for AppPorts<'_> {
 			return Err(FilePickerError::Failed { message: format!("suspend terminal failed: {}", err) });
 		}
 
-		let command_result = Command::new("yazi").arg("--chooser-file").arg(&chooser_file).status();
+		let command_result = Command::new(&program).args(&args).status();
 		let resume_result = terminal_session.resume();
 		self.input_pump.borrow_mut().start();
 
@@ -268,13 +274,14 @@ impl FilePicker for AppPorts<'_> {
 			return Err(FilePickerError::Failed { message: format!("resume terminal failed: {}", err) });
 		}
 
-		let status = command_result
-			.map_err(|err| FilePickerError::Failed { message: format!("spawn yazi failed: {}", err) })?;
+		let status = command_result.map_err(|err| FilePickerError::Failed {
+			message: format!("spawn external file picker failed: {}", err),
+		})?;
 		if !status.success() {
 			let _ = fs::remove_file(&chooser_file);
 			let message = match status.code() {
-				Some(code) => format!("yazi exited with status {}", code),
-				None => "yazi terminated by signal".to_string(),
+				Some(code) => format!("external file picker exited with status {}", code),
+				None => "external file picker terminated by signal".to_string(),
 			};
 			return Err(FilePickerError::Failed { message });
 		}
@@ -290,6 +297,30 @@ impl FilePicker for AppPorts<'_> {
 		let _ = fs::remove_file(&chooser_file);
 		Ok(selected_path)
 	}
+}
+
+fn materialize_picker_command(
+	command: &[String],
+	chooser_file: &Path,
+	chooser_file_arg_index: usize,
+) -> Result<(String, Vec<String>), FilePickerError> {
+	let Some((program, args)) = command.split_first() else {
+		return Err(FilePickerError::Unavailable { message: "file picker command is empty" });
+	};
+	if chooser_file_arg_index >= command.len() {
+		return Err(FilePickerError::Unavailable {
+			message: "file picker chooser_file_arg_index is out of range",
+		});
+	}
+	if chooser_file_arg_index == 0 {
+		return Err(FilePickerError::Unavailable {
+			message: "file picker chooser_file_arg_index must target an argument slot",
+		});
+	}
+	let chooser_file = chooser_file.display().to_string();
+	let mut args = args.to_vec();
+	args[chooser_file_arg_index - 1] = chooser_file;
+	Ok((program.clone(), args))
 }
 
 #[cfg(test)]

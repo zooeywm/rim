@@ -11,7 +11,7 @@ pub mod bindings {
 }
 
 mod wit_types {
-	pub use super::bindings::exports::rim::plugin::command_provider::{CommandUnavailableError, ExecutionFailedError, Guest, InsertTextAction, InvalidRequestError, OpenFileAction, PluginAction as WitPluginAction, PluginCapability as WitPluginCapability, PluginCommandError as WitPluginCommandError, PluginCommandMetadata as WitPluginCommandMetadata, PluginCommandParamKind as WitPluginCommandParamKind, PluginCommandParamSpec as WitPluginCommandParamSpec, PluginCommandRequest as WitPluginCommandRequest, PluginCommandResponse as WitPluginCommandResponse, PluginDescriptor as WitPluginDescriptor, PluginEffect as WitPluginEffect, PluginMetadata as WitPluginMetadata, PluginNotification as WitPluginNotification, PluginNotificationLevel as WitPluginNotificationLevel, PluginPanel as WitPluginPanel, PluginResolvedParam as WitPluginResolvedParam, RunCommandAction};
+	pub use super::bindings::exports::rim::plugin::command_provider::{CommandUnavailableError, ExecutionFailedError, Guest, InsertTextAction, InvalidRequestError, OpenFileAction, PickFileAction, PluginAction as WitPluginAction, PluginCapability as WitPluginCapability, PluginCommandError as WitPluginCommandError, PluginCommandMetadata as WitPluginCommandMetadata, PluginCommandParamKind as WitPluginCommandParamKind, PluginCommandParamSpec as WitPluginCommandParamSpec, PluginCommandRequest as WitPluginCommandRequest, PluginCommandResponse as WitPluginCommandResponse, PluginDescriptor as WitPluginDescriptor, PluginEffect as WitPluginEffect, PluginMetadata as WitPluginMetadata, PluginNotification as WitPluginNotification, PluginNotificationLevel as WitPluginNotificationLevel, PluginPanel as WitPluginPanel, PluginResolvedParam as WitPluginResolvedParam, RunCommandAction};
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -126,7 +126,7 @@ pub struct PluginPanel {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginAction {
 	OpenFile { path: String },
-	PickFile,
+	PickFile { command: Vec<String>, chooser_file_arg_index: u32 },
 	InsertText { text: String },
 	RunCommand { command_id: String, argument: Option<String> },
 }
@@ -358,7 +358,9 @@ fn into_wit_action(action: PluginAction) -> wit_types::WitPluginAction {
 		PluginAction::OpenFile { path } => {
 			wit_types::WitPluginAction::OpenFile(wit_types::OpenFileAction { path })
 		}
-		PluginAction::PickFile => wit_types::WitPluginAction::PickFile,
+		PluginAction::PickFile { command, chooser_file_arg_index } => {
+			wit_types::WitPluginAction::PickFile(wit_types::PickFileAction { command, chooser_file_arg_index })
+		}
 		PluginAction::InsertText { text } => {
 			wit_types::WitPluginAction::InsertText(wit_types::InsertTextAction { text })
 		}

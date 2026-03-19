@@ -83,7 +83,7 @@ pub struct PluginPanel {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PluginAction {
 	OpenFile { path: String },
-	PickFile,
+	PickFile { command: Vec<String>, chooser_file_arg_index: u32 },
 	InsertText { text: String },
 	RunCommand { command_id: String, argument: Option<String> },
 }

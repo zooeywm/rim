@@ -128,7 +128,10 @@ fn command_completed_should_apply_pick_file_requested_action() {
 		AppAction::Plugin(PluginRuntimeAction::CommandCompleted {
 			command_id: "plugin.demo.pick".to_string(),
 			result:     Ok(PluginCommandResponse {
-				effects: vec![PluginEffect::RequestAction(RequestedPluginAction::PickFile)],
+				effects: vec![PluginEffect::RequestAction(RequestedPluginAction::PickFile {
+					command:                vec!["demo-picker".to_string(), String::new()],
+					chooser_file_arg_index: 1,
+				})],
 			}),
 		}),
 	);

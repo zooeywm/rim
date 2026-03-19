@@ -64,6 +64,11 @@ interface command-provider {
         path: string,
     }
 
+    record pick-file-action {
+        command: list<string>,
+        chooser-file-arg-index: u32,
+    }
+
     record insert-text-action {
         text: string,
     }
@@ -75,7 +80,7 @@ interface command-provider {
 
     variant plugin-action {
         open-file(open-file-action),
-        pick-file,
+        pick-file(pick-file-action),
         insert-text(insert-text-action),
         run-command(run-command-action),
     }
