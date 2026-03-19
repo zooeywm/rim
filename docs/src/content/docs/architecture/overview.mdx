@@ -1,0 +1,78 @@
+---
+title: Overview
+description: The top-level architecture of the rim workspace.
+---
+
+# Architecture Overview
+
+`rim` is split into layers so editor rules remain deterministic and runtime behavior stays replaceable.
+
+## Crate Map
+
+```mermaid
+flowchart LR
+    App["rim-app"] --> Application["rim-application"]
+    Application --> Domain["rim-domain"]
+    Application --> Ports["rim-ports"]
+    InfraInput["rim-infra-input"] --> Application
+    InfraUI["rim-infra-ui"] --> Application
+    InfraStorage["rim-infra-storage"] --> Application
+    InfraStorage --> Domain
+    InfraStorage --> Ports
+    InfraWatcher["rim-infra-file-watcher"] --> Application
+    InfraWatcher --> Domain
+    InfraWatcher --> Ports
+    Kernel["rim-kernel"] --> Application
+```
+
+## What Each Layer Owns
+
+- `rim-domain`: editor state, editing rules, session reconstruction, pure helpers
+- `rim-application`: actions, use cases, workbench state, config application, persistence orchestration
+- `rim-ports`: trait contracts for external capabilities
+- `rim-infra-*`: concrete adapters
+- `rim-app`: composition root and runtime shell
+- `rim-kernel`: compatibility facade only
+
+## Why The Split Matters
+
+This repository has two very different kinds of logic:
+
+- logic that must be true for every editor state transition
+- logic that coordinates terminals, filesystems, workers, and UI flows
+
+Mixing them makes testing and maintenance harder. The current architecture keeps those concerns separate enough to reason about them independently.
+
+## Data Flow At Runtime
+
+```mermaid
+sequenceDiagram
+    participant Input as Input adapter
+    participant App as rim-app
+    participant Application as rim-application
+    participant Domain as rim-domain
+    participant Storage as Storage / Watcher adapters
+    participant UI as UI adapter
+
+    Input->>App: AppAction
+    App->>Application: apply_action(...)
+    Application->>Domain: pure transition
+    Application->>Storage: enqueue side effect via port
+    Storage-->>App: callback AppAction
+    App->>Application: apply_action(...)
+    App->>UI: render current state
+```
+
+## Placement Rule
+
+When adding code, ask one question first: does this code still make sense without a terminal, filesystem, watcher, or config file?
+
+- If yes, it probably belongs in `rim-domain`.
+- If no, but it still belongs to editor use-case orchestration, it probably belongs in `rim-application`.
+- If it talks to the outside world directly, it belongs in an adapter or `rim-app`.
+
+## Anti-Patterns
+
+- Adding overlays or status-bar fields to `EditorState`
+- Letting adapters reach into domain internals instead of going through application flows
+- Treating `rim-kernel` as a normal crate

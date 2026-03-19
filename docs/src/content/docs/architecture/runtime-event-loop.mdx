@@ -1,0 +1,45 @@
+---
+title: Runtime Event Loop
+description: How rim-app wires services, actions, and rendering.
+---
+
+# Runtime Event Loop
+
+`rim-app` is the runtime shell. It wires adapters together and drives the main action loop.
+
+## Main Loop
+
+```mermaid
+flowchart TD
+    Start["App::new"] --> Init["initialize config + construct RimState"]
+    Init --> Services["start storage, watcher, input services"]
+    Services --> Startup["open startup files or load workspace session"]
+    Startup --> Terminal["enter terminal session"]
+    Terminal --> Render["render current state"]
+    Render --> Wait["recv next AppAction"]
+    Wait --> Dispatch["process_action"]
+    Dispatch --> Sync["sync cursor style"]
+    Sync --> Render
+```
+
+## Runtime Responsibilities
+
+- create the event bus
+- initialize services
+- enter and resume terminal mode
+- dispatch actions into `rim-application`
+- mark layout dirty when required
+- host the file picker integration
+
+## Why This Stays In `rim-app`
+
+These concerns are runtime- and process-specific. They are not editor rules and are not use-case definitions by themselves.
+
+## What Should Not Drift Back Into `rim-app`
+
+- config parsing policy
+- workbench state mutation logic
+- editor state transitions
+- persistence orchestration rules
+
+If a block in `rim-app` becomes testable without terminal lifecycle state, it is probably in the wrong crate.

@@ -1,0 +1,41 @@
+---
+title: Local Development
+description: Day-to-day workflow for contributing to the rim workspace.
+---
+
+# Local Development
+
+## Core Commands
+
+```bash
+rustfmt +nightly --edition 2024 $(git ls-files '*.rs')
+cargo check -q
+cargo test --workspace --no-run
+```
+
+Docs:
+
+```bash
+cd docs
+pnpm install
+pnpm dev
+```
+
+## Recommended Workflow
+
+1. Identify the owning layer first.
+2. Make the smallest compile-safe change that moves ownership in the right direction.
+3. Update docs in the same change when boundaries or extension points move.
+4. Verify the whole workspace.
+
+## Where To Look
+
+- architectural boundary questions: `ARCHITECTURE.md`
+- contributor rules: `CONTRIBUTING.md`
+- accepted architecture decision: `ADR/0001-layered-hexagonal-architecture.md`
+
+## Anti-Patterns
+
+- patching the facade crate instead of the owning crate
+- writing docs after the architecture has already drifted
+- changing persistence formats as a side effect of refactoring

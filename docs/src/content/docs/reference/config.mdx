@@ -1,0 +1,60 @@
+---
+title: Config
+description: Active config files, load order, and ownership boundaries.
+---
+
+# Config
+
+Configuration is owned by `rim-application`, not by `rim-app` and not by the domain.
+
+## Files
+
+The active config files are:
+
+- `keymaps.toml`
+- `commands.toml`
+- `editor.toml`
+
+They live under `rim_paths::user_config_root()`.
+
+On Unix-like systems that is typically:
+
+- `$XDG_CONFIG_HOME/rim`
+- or `~/.config/rim`
+
+## Load Flow
+
+```mermaid
+flowchart TD
+    Start["App startup or reload"] --> Init["initialize_config_files()"]
+    Init --> Reset["reset_config_state_to_defaults()"]
+    Reset --> Editor["load editor.toml"]
+    Editor --> Keymaps["load keymaps.toml"]
+    Keymaps --> Commands["load commands.toml"]
+    Commands --> Apply["apply to WorkbenchState / CommandRegistry"]
+```
+
+## Ownership
+
+- file paths and parsing policy: `rim-application::config`
+- resulting command registry and workbench settings: `WorkbenchState`
+- editor core: unaffected except through later actions
+
+## Current Editor Settings
+
+`editor.toml` currently controls:
+
+- `leader_key`
+- `cursor_scroll_threshold`
+- `key_hints_width`
+- `key_hints_max_height`
+
+## Backward Compatibility
+
+Legacy `config.toml` migration is still supported by the current config initialization path. Refactors should preserve that behavior unless removal is deliberate and documented.
+
+## Anti-Patterns
+
+- putting config-derived registry state into `rim-domain`
+- having adapters parse config on their own
+- duplicating config path logic outside `rim-application`

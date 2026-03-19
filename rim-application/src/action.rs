@@ -2,7 +2,7 @@ use std::{ops::{BitOr, BitOrAssign}, path::PathBuf};
 
 use crate::state::{BufferId, PersistedBufferHistory, WorkspaceSessionSnapshot};
 
-/// Facility-agnostic key code used by the kernel.
+/// Facility-agnostic key code used by the application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyCode {
 	Backspace,
@@ -40,7 +40,7 @@ impl BitOrAssign for KeyModifiers {
 	fn bitor_assign(&mut self, rhs: Self) { self.0 |= rhs.0; }
 }
 
-/// Canonical keyboard event flowing into the kernel.
+/// Canonical keyboard event flowing into the application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct KeyEvent {
 	pub code:      KeyCode,

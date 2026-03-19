@@ -1,0 +1,46 @@
+---
+title: Testing Strategy
+description: How the workspace is verified and where tests should live.
+---
+
+# Testing Strategy
+
+## Test By Layer
+
+- `rim-domain`: pure state transition tests
+- `rim-application`: use-case and orchestration tests with test ports
+- `rim-infra-*`: adapter and persistence roundtrip tests
+- `rim-app`: keep logic here thin enough that heavy testing is rarely required
+
+## Current Baseline
+
+The repository uses workspace compilation of tests as a broad safety net:
+
+```bash
+cargo test --workspace --no-run
+```
+
+That is useful, but it is not enough on its own. New behavior should still be covered at the owning layer.
+
+## Good Test Placement
+
+- cursor movement bug: `rim-domain`
+- save/reload flow bug: `rim-application`
+- swap/session format bug: `rim-infra-storage`
+- terminal resize/render issue: `rim-infra-ui`
+
+## Persistence Compatibility
+
+Refactors must preserve:
+
+- workspace session snapshots
+- undo history files
+- swap behavior
+
+Add or update roundtrip tests whenever persistence-adjacent code changes.
+
+## Anti-Patterns
+
+- only testing through the runtime loop
+- putting pure domain tests behind storage or terminal setup
+- changing serialized formats without explicit justification

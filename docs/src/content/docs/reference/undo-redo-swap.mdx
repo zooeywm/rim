@@ -1,0 +1,53 @@
+---
+title: Undo Redo Swap
+description: Persistence and recovery behavior for undo history and swap state.
+---
+
+# Undo Redo Swap
+
+Undo/redo and swap are related but separate concerns.
+
+## Ownership Split
+
+- undo/redo state transitions: `rim-domain`
+- swap and history orchestration: `rim-application`
+- on-disk persistence and recovery files: `rim-infra-storage`
+
+## Storage Locations
+
+Under `rim_paths::user_state_root()`:
+
+- `undo/*.undo.log`
+- `undo/*.undo.meta`
+- `swp/*.swp`
+- `session/last-session.json`
+
+File names are derived from normalized source paths.
+
+## Runtime Flow
+
+```mermaid
+flowchart TD
+    Edit["editor text change"] --> Domain["domain updates buffer + history"]
+    Domain --> Application["application observes before/after"]
+    Application --> Swap["enqueue swap edit ops"]
+    Application --> History["enqueue undo history save when needed"]
+    Swap --> Storage["rim-infra-storage"]
+    History --> Storage
+```
+
+## Recovery Semantics
+
+- swap conflict detection is adapter-backed but application-driven
+- user-visible recovery decisions remain in the application layer
+- recovered text is restored before persisted undo history is reloaded
+
+## Compatibility Constraint
+
+Refactors must preserve current undo, redo, and swap formats unless the change is explicit, documented, and covered by migration logic or a compatibility story.
+
+## Anti-Patterns
+
+- storing swap semantics inside the domain
+- making recovery policy a storage concern
+- dropping undo stacks during architecture-only refactors

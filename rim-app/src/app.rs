@@ -11,7 +11,7 @@ use tracing::trace;
 
 #[derive(derive_more::AsRef, derive_more::AsMut)]
 pub struct App {
-	// Kernel state is mutable because action dispatch mutates domain state.
+	// Runtime state is mutable because action dispatch mutates application and domain state.
 	#[as_mut]
 	state:              RimState,
 	// Concrete infrastructure states are kept in the single app container.
@@ -22,7 +22,7 @@ pub struct App {
 	terminal_session:   RefCell<Option<TerminalSession>>,
 	input_pump_service: RefCell<InputPumpService>,
 	event_tx:           flume::Sender<AppAction>,
-	// Event bus is the glue between runtime producers and kernel consumers.
+	// Event bus is the glue between runtime producers and application consumers.
 	event_rx:           flume::Receiver<AppAction>,
 }
 
@@ -46,7 +46,7 @@ impl<'a> AppPorts<'a> {
 
 impl App {
 	pub fn new(workspace_root: PathBuf) -> Result<Self> {
-		// One bounded queue coordinates input, IO callbacks, and kernel actions.
+		// One bounded queue coordinates input, IO callbacks, and application actions.
 		let (event_tx, event_rx) = flume::bounded(1024);
 		application_config::initialize_config_files()?;
 		let mut state = RimState::new();
@@ -99,8 +99,8 @@ impl App {
 	}
 
 	pub fn open_startup_files(&mut self, file_paths: Vec<PathBuf>) {
-		// Startup file opening is expressed as regular actions to reuse the same kernel
-		// flow.
+		// Startup file opening is expressed as regular actions to reuse the same
+		// application flow.
 		if file_paths.is_empty() {
 			let ports =
 				AppPorts::new(&self.storage_io, &self.file_watcher, &self.terminal_session, &self.input_pump_service);
@@ -116,7 +116,7 @@ impl App {
 	}
 
 	pub fn run(mut self, file_paths: Vec<PathBuf>) -> Result<()> {
-		// Start external workers first, then seed startup actions into the kernel.
+		// Start external workers first, then seed startup actions into the application.
 		self.start_services();
 		self.open_startup_files(file_paths);
 
@@ -136,7 +136,7 @@ impl App {
 		let mut renderer = Renderer::new();
 
 		loop {
-			// Render from current kernel state snapshot.
+			// Render from the current state snapshot.
 			{
 				let mut terminal_session = self.terminal_session.borrow_mut();
 				terminal_session
@@ -147,8 +147,8 @@ impl App {
 			}
 			trace!("redraw");
 
-			// Pull one action from the event bus and dispatch it through the kernel
-			// handler.
+			// Pull one action from the event bus and dispatch it through the
+			// application handler.
 			let action = self.event_rx.recv().context("event bus disconnected while waiting for next action")?;
 			if Self::action_affects_layout(&action) {
 				renderer.mark_layout_dirty();
@@ -171,7 +171,7 @@ impl App {
 		if matches!(action, AppAction::System(SystemAction::ReloadConfig)) {
 			return self.reload_all_configs();
 		}
-		// All domain transitions must go through one handler entrypoint.
+		// All state transitions must go through one handler entrypoint.
 		let state = &mut self.state;
 		let ports =
 			AppPorts::new(&self.storage_io, &self.file_watcher, &self.terminal_session, &self.input_pump_service);
