@@ -1649,16 +1649,10 @@ dependencies = [
  "crossterm",
  "ratatui",
  "rim-application",
+ "rim-domain",
  "ropey",
  "thiserror 2.0.18",
  "unicode-width",
-]
-
-[[package]]
-name = "rim-kernel"
-version = "0.0.3"
-dependencies = [
- "rim-application",
 ]
 
 [[package]]

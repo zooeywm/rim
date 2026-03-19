@@ -1,8 +1,8 @@
+use rim_domain::display_geometry::{char_display_width as geom_char_display_width, display_width_of_char_prefix_with_virtual as geom_display_width_of_char_prefix_with_virtual, wrapped_row_index_for_cursor as geom_wrapped_row_index_for_cursor, wrapped_total_rows_for_rope as geom_wrapped_total_rows_for_rope};
 use ropey::Rope;
 use tracing::{error, trace};
 
 use super::{CursorState, FocusDirection, RimState, SplitAxis, WindowId, WindowState};
-use crate::display_geometry::{char_display_width as geom_char_display_width, display_width_of_char_prefix_with_virtual as geom_display_width_of_char_prefix_with_virtual, wrapped_row_index_for_cursor as geom_wrapped_row_index_for_cursor, wrapped_total_rows_for_rope as geom_wrapped_total_rows_for_rope};
 
 impl RimState {
 	pub fn focus_window(&mut self, direction: FocusDirection) { self.editor.focus_window(direction); }

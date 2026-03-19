@@ -1,5 +1,6 @@
 use ratatui::{buffer::{Buffer, Cell}, layout::Rect, style::{Color, Style}, widgets::{Paragraph, Widget, Wrap}};
-use rim_application::{display_geometry::{char_display_width as geom_char_display_width, display_width_of_char_prefix as geom_display_width_of_char_prefix, display_width_of_char_prefix_with_virtual as geom_display_width_of_char_prefix_with_virtual, wrap_line_with_display_span as geom_wrap_line_with_display_span, wrapped_row_index_for_row_display_col as geom_wrapped_row_index_for_row_display_col}, state::{CursorState, RimState}};
+use rim_application::state::{CursorState, RimState};
+use rim_domain::display_geometry::{char_display_width as geom_char_display_width, display_width_of_char_prefix as geom_display_width_of_char_prefix, display_width_of_char_prefix_with_virtual as geom_display_width_of_char_prefix_with_virtual, wrap_line_with_display_span as geom_wrap_line_with_display_span, wrapped_row_index_for_row_display_col as geom_wrapped_row_index_for_row_display_col};
 use ropey::Rope;
 
 pub(super) struct WindowAreaWidget {

@@ -9,7 +9,6 @@
 - `rim-domain`: pure editor model and state transitions
 - `rim-ports`: outbound trait contracts only
 - `rim-infra-*`: adapters for UI, input, storage, and file watching
-- `rim-kernel`: temporary facade crate that only re-exports `rim-application`
 
 ```mermaid
 flowchart LR
@@ -17,6 +16,7 @@ flowchart LR
     Application --> Domain["rim-domain"]
     Application --> Ports["rim-ports"]
     InfraUI["rim-infra-ui"] --> Application
+    InfraUI --> Domain
     InfraInput["rim-infra-input"] --> Application
     InfraStorage["rim-infra-storage"] --> Application
     InfraStorage --> Domain
@@ -24,7 +24,6 @@ flowchart LR
     InfraWatcher["rim-infra-file-watcher"] --> Application
     InfraWatcher --> Domain
     InfraWatcher --> Ports
-    Kernel["rim-kernel (facade only)"] --> Application
 ```
 
 ## Responsibilities
@@ -118,7 +117,6 @@ sequenceDiagram
 - `rim-application` may depend on `rim-domain`, `rim-ports`, and shared utility crates.
 - `rim-infra-*` may depend on `rim-application`, `rim-domain`, and `rim-ports`.
 - `rim-app` may depend on every concrete crate because it is the composition root.
-- `rim-kernel` must remain a facade only. New code must not be added there.
 
 ## Placement Rules
 
@@ -135,9 +133,4 @@ Put new code in the highest layer that can own it correctly:
 - Adding workbench fields to `EditorState`
 - Returning terminal-specific data from `rim-domain`
 - Calling infra crates directly from `rim-domain`
-- Reintroducing real logic into `rim-kernel`
 - Putting config parsing in `rim-app` when it is testable application behavior
-
-## Temporary Compatibility
-
-`rim-kernel` exists only to avoid a hard break for downstream imports during migration. It has no ownership and should be deleted once no external compatibility need remains.

@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 
 use ratatui::{buffer::Buffer, layout::{Constraint, Layout, Rect}, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap}};
-use rim_application::{preview::preview_rows, state::{RimState, WorkspaceFileMatch, WorkspaceFilePickerState, compute_workspace_file_picker_body_layout}};
+use rim_application::state::{RimState, WorkspaceFileMatch, WorkspaceFilePickerState, compute_workspace_file_picker_body_layout};
+use rim_domain::preview::preview_rows;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub(super) struct WorkspaceFilePickerWidget {

@@ -5,10 +5,10 @@ edition.workspace = true
 authors.workspace = true
 
 [dependencies]
-flume.workspace      = true
-notify.workspace     = true
-tracing.workspace    = true
-dep-inj.workspace    = true
+flume.workspace           = true
+notify.workspace          = true
+tracing.workspace         = true
+dep-inj.workspace         = true
 rim-application.workspace = true
 rim-domain.workspace      = true
 rim-ports.workspace       = true

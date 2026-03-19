@@ -1,7 +1,8 @@
+use rim_domain::display_geometry::{char_display_width as geom_char_display_width, display_col_of_cursor_slot as geom_display_col_of_cursor_slot, wrapped_row_index_for_cursor as geom_wrapped_row_index_for_cursor, wrapped_total_rows_for_rope as geom_wrapped_total_rows_for_rope};
 use ropey::Rope;
 
 use super::RimState;
-use crate::{display_geometry::{char_display_width as geom_char_display_width, display_col_of_cursor_slot as geom_display_col_of_cursor_slot, wrapped_row_index_for_cursor as geom_wrapped_row_index_for_cursor, wrapped_total_rows_for_rope as geom_wrapped_total_rows_for_rope}, state::{CursorState, WindowId, rope_line_count, rope_line_without_newline}};
+use crate::state::{CursorState, WindowId, rope_line_count, rope_line_without_newline};
 
 impl RimState {
 	pub fn move_cursor_up(&mut self) {

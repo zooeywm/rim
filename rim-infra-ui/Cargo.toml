@@ -5,9 +5,10 @@ edition.workspace = true
 authors.workspace = true
 
 [dependencies]
-crossterm.workspace     = true
-ropey.workspace         = true
-ratatui.workspace       = true
-thiserror.workspace     = true
-unicode-width.workspace = true
+crossterm.workspace       = true
+ropey.workspace           = true
+ratatui.workspace         = true
+thiserror.workspace       = true
+unicode-width.workspace   = true
 rim-application.workspace = true
+rim-domain.workspace      = true

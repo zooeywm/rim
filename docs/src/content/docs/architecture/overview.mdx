@@ -16,13 +16,13 @@ flowchart LR
     Application --> Ports["rim-ports"]
     InfraInput["rim-infra-input"] --> Application
     InfraUI["rim-infra-ui"] --> Application
+    InfraUI --> Domain
     InfraStorage["rim-infra-storage"] --> Application
     InfraStorage --> Domain
     InfraStorage --> Ports
     InfraWatcher["rim-infra-file-watcher"] --> Application
     InfraWatcher --> Domain
     InfraWatcher --> Ports
-    Kernel["rim-kernel"] --> Application
 ```
 
 ## What Each Layer Owns
@@ -32,7 +32,6 @@ flowchart LR
 - `rim-ports`: trait contracts for external capabilities
 - `rim-infra-*`: concrete adapters
 - `rim-app`: composition root and runtime shell
-- `rim-kernel`: compatibility facade only
 
 ## Why The Split Matters
 
@@ -75,4 +74,3 @@ When adding code, ask one question first: does this code still make sense withou
 
 - Adding overlays or status-bar fields to `EditorState`
 - Letting adapters reach into domain internals instead of going through application flows
-- Treating `rim-kernel` as a normal crate

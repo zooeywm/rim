@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 
 use ratatui::{buffer::Buffer, layout::{Alignment, Constraint, Layout, Rect}, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap}};
-use rim_application::{command::{CommandPaletteFileMatch, CommandPaletteItem, CommandPaletteMatch}, preview::preview_rows, state::{CommandPaletteState, RimState}};
+use rim_application::{command::{CommandPaletteFileMatch, CommandPaletteItem, CommandPaletteMatch}, state::{CommandPaletteState, RimState}};
+use rim_domain::preview::preview_rows;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const COMMAND_INPUT_MAX_ROWS: usize = 4;

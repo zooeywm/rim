@@ -20,7 +20,6 @@ graph LR
     Infra --> Application
     Infra --> Domain
     Infra --> Ports
-    Kernel["rim-kernel"] --> Application
 ```
 
 ## Disallowed Directions
@@ -29,7 +28,6 @@ graph LR
 - `rim-domain -> rim-infra-*`
 - `rim-domain -> rim-app`
 - `rim-ports -> rim-domain` or any other workspace crate
-- new real logic in `rim-kernel`
 
 ## Practical Rule Of Thumb
 
@@ -41,6 +39,5 @@ When reviewing a dependency change, ask:
 
 1. Does this point inward toward more stable policy?
 2. Does this move workbench state into the domain?
-3. Is this only preserving compatibility through `rim-kernel`, or is it adding new ownership there?
 
-If the answer to the second or third question is yes, the change is wrong.
+If the answer to the second question is yes, the change is wrong.

@@ -1,10 +1,11 @@
 use std::{collections::{HashMap, HashSet, VecDeque}, fmt, ops::{Deref, DerefMut}, path::{Path, PathBuf}, time::{Duration, Instant, SystemTime}};
 
 use frizbee::{Config as FrizbeeConfig, match_list_indices};
+use rim_domain::preview::preview_max_scroll_with_mode;
 pub use rim_domain::{editor::{EditorOperationError, EditorState}, model::{BufferEditSnapshot, BufferHistoryEntry, BufferId, BufferState, BufferSwitchDirection, CursorState, EditorMode, FocusDirection, PendingBlockInsert, PendingInsertUndoGroup, PersistedBufferHistory, RopeTextDiff, SplitAxis, TabId, TabState, WindowBufferViewState, WindowId, WindowState, WorkspaceBufferHistorySnapshot, WorkspaceBufferSnapshot, WorkspaceSessionSnapshot, WorkspaceTabSnapshot, WorkspaceWindowBufferViewSnapshot, WorkspaceWindowSnapshot}};
 use time::{OffsetDateTime, format_description::FormatItem, macros::format_description};
 
-use crate::{command::{BuiltinCommand, CommandArgKind, CommandCommand, CommandConfigError, CommandConfigFile, CommandPaletteFileMatch, CommandPaletteItem, CommandPaletteMatch, CommandRegistry, PluginCommandRegistration}, preview::preview_max_scroll_with_mode};
+use crate::command::{BuiltinCommand, CommandArgKind, CommandCommand, CommandConfigError, CommandConfigFile, CommandPaletteFileMatch, CommandPaletteItem, CommandPaletteMatch, CommandRegistry, PluginCommandRegistration};
 
 mod buffer;
 mod edit;

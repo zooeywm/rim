@@ -5,7 +5,6 @@ members = [
   "rim-application",
   "rim-domain",
   "rim-paths",
-  "rim-kernel",
   "rim-infra-storage",
   "rim-infra-file-watcher",
   "rim-infra-input",
@@ -50,5 +49,4 @@ rim-infra-storage      = { path = "rim-infra-storage" }
 rim-infra-file-watcher = { path = "rim-infra-file-watcher" }
 rim-infra-input        = { path = "rim-infra-input" }
 rim-infra-ui           = { path = "rim-infra-ui" }
-rim-kernel             = { path = "rim-kernel" }
 rim-paths              = { path = "rim-paths" }

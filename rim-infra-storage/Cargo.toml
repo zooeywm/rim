@@ -5,16 +5,16 @@ edition.workspace = true
 authors.workspace = true
 
 [dependencies]
-anyhow.workspace     = true
-base64.workspace     = true
-compio.workspace     = true
-flume.workspace      = true
-ropey.workspace      = true
-serde.workspace      = true
-serde_json.workspace = true
-tracing.workspace    = true
-dep-inj.workspace    = true
+anyhow.workspace          = true
+base64.workspace          = true
+compio.workspace          = true
+flume.workspace           = true
+ropey.workspace           = true
+serde.workspace           = true
+serde_json.workspace      = true
+tracing.workspace         = true
+dep-inj.workspace         = true
 rim-application.workspace = true
 rim-domain.workspace      = true
 rim-ports.workspace       = true
-rim-paths.workspace  = true
+rim-paths.workspace       = true

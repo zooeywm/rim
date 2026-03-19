@@ -34,7 +34,7 @@ All notable changes to this project will be documented in this file.
 
 - Derive typed builtin command metadata and run directives
 
-- Unify wrap/tab display geometry across kernel and UI
+- Unify wrap/tab display geometry across editor and UI
 
 
 ### Tests

@@ -1,8 +1,0 @@
-[package]
-name              = "rim-kernel"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-
-[dependencies]
-rim-application.workspace = true

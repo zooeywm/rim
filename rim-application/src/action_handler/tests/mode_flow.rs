@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
+use rim_domain::display_geometry::display_width_of_char_prefix_with_virtual as geom_display_width_of_char_prefix_with_virtual;
+
 use super::{super::mode_flow::SequenceMatch, support::{FilePickerPorts, RecordingPorts, dispatch_test_action, map_normal_key, resolve_keys}};
-use crate::{action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction}, command::{BuiltinCommand, CommandAliasConfig, CommandAliasSection, CommandConfigFile, CommandKeymapSection, CommandTarget, KeyBindingOn, KeymapBindingConfig, ViewCommand}, display_geometry::display_width_of_char_prefix_with_virtual as geom_display_width_of_char_prefix_with_virtual, state::{FloatingWindowPlacement, NormalSequenceKey, RimState, WorkspaceFileEntry}};
+use crate::{action::{AppAction, BufferAction, EditorAction, KeyCode, KeyEvent, KeyModifiers, LayoutAction, TabAction}, command::{BuiltinCommand, CommandAliasConfig, CommandAliasSection, CommandConfigFile, CommandKeymapSection, CommandTarget, KeyBindingOn, KeymapBindingConfig, ViewCommand}, state::{FloatingWindowPlacement, NormalSequenceKey, RimState, WorkspaceFileEntry}};
 
 #[test]
 fn to_normal_key_should_map_leader_char_to_leader_token() {

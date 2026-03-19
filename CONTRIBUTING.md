@@ -6,7 +6,6 @@
 - Keep `rim-domain` pure.
 - Keep `rim-application` orchestration-focused.
 - Keep `rim-app` thin.
-- Do not add new ownership to `rim-kernel`.
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md) before non-trivial changes.
 
@@ -66,7 +65,6 @@ Relevant docs:
 - Mixing status-bar or overlay behavior into `rim-domain`
 - Parsing config inside infra crates
 - Having adapters mutate domain state directly
-- Re-exporting new APIs from `rim-kernel` instead of importing the real crate
 - Leaving non-compiled migration files in the tree after ownership has moved
 
 ## Pull Request Standard
